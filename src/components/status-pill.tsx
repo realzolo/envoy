@@ -29,7 +29,7 @@ export function StatusPill({ status }: { status: DeliveryStatus }) {
     <span
       className={`inline-flex h-6 items-center gap-1.5 rounded-full border px-2 text-xs font-medium ${statusStyles[status]}`}
     >
-      <span className="size-1.5 rounded-full bg-current" aria-hidden="true" />
+      <span className="size-1.5 rounded-full bg-current" aria-hidden="true"/>
       {statusLabels[status]}
     </span>
   );

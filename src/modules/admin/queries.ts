@@ -3,36 +3,218 @@ import { providerDescriptors } from "@/modules/providers/registry";
 import { query } from "@/server/database";
 import { renderTemplate } from "@/server/template-renderer";
 
-function relative(date:Date){const seconds=Math.max(0,Math.floor((Date.now()-date.getTime())/1000));if(seconds<60)return`${seconds}s ago`;if(seconds<3600)return`${Math.floor(seconds/60)}m ago`;if(seconds<86400)return`${Math.floor(seconds/3600)}h ago`;return`${Math.floor(seconds/86400)}d ago`}
-function formatted(date:Date){return new Intl.DateTimeFormat("en-GB",{dateStyle:"medium",timeStyle:"medium",timeZone:"UTC"}).format(date)}
-type EmailRow={delivery_id:string;recipient_email:string;recipient_name:string|null;lifecycle_status:string;compliance_status:string;accepted_at:Date;reference_id:string|null;variables:Record<string,unknown>;subject_template:string;template_key:string;product_name:string;from_name:string;from_local_part:string;domain:string;external_message_id:string|null};
-const emailSelect=`SELECT d.id AS delivery_id,d.recipient_email,d.recipient_name,d.lifecycle_status,d.compliance_status,d.engagement_status,d.message_id,d.current_attempt_id,m.accepted_at,m.reference_id,m.variables,tv.subject_template,t.key AS template_key,p.name AS product_name,sp.from_name,sp.from_local_part,sd.domain,da.external_message_id FROM deliveries d JOIN messages m ON m.id=d.message_id JOIN products p ON p.id=m.product_id JOIN templates t ON t.id=m.template_id JOIN template_versions tv ON tv.id=m.template_version_id JOIN sender_profiles sp ON sp.id=m.sender_profile_id JOIN sending_domains sd ON sd.id=sp.sending_domain_id LEFT JOIN delivery_attempts da ON da.id=d.current_attempt_id`;
-function mapEmail(row:EmailRow):EmailRecord{const subject=renderTemplate({subjectTemplate:row.subject_template,htmlTemplate:"",textTemplate:""},row.variables).subject;return{id:row.delivery_id,recipient:row.recipient_email,recipientName:row.recipient_name??undefined,subject,template:row.template_key,product:row.product_name,from:`${row.from_name} <${row.from_local_part}@${row.domain}>`,status:(row.compliance_status==="suppressed"?"suppressed":row.lifecycle_status) as DeliveryStatus,createdAt:formatted(row.accepted_at),relativeTime:relative(row.accepted_at),providerId:row.external_message_id??undefined,referenceId:row.reference_id??undefined}}
-export async function listEmails(limit=200){return(await query<EmailRow>(`${emailSelect} ORDER BY m.accepted_at DESC LIMIT $1`,[limit])).rows.map(mapEmail)}
-export async function getDeliveryDetail(id:string){const row=(await query<EmailRow&{message_id:string;engagement_status:string;current_attempt_id:string|null}>(`${emailSelect} WHERE d.id=$1`,[id])).rows[0];if(!row)return null;const attempts=(await query(`SELECT da.id,da.attempt_number,da.status,da.outcome_determinate,da.external_message_id,da.error_category,da.error_code,da.error_message,da.routing_snapshot,da.started_at,da.finished_at,pa.name AS provider_account,pa.type AS provider_type FROM delivery_attempts da JOIN provider_accounts pa ON pa.id=da.provider_account_id WHERE da.delivery_id=$1 ORDER BY da.attempt_number DESC`,[id])).rows;const events=(await query(`SELECT id,event_type,occurred_at,canonical_payload FROM delivery_events WHERE delivery_id=$1 ORDER BY occurred_at DESC`,[id])).rows;return{...mapEmail(row),messageId:row.message_id,lifecycle:row.lifecycle_status,engagement:row.engagement_status,compliance:row.compliance_status,currentAttemptId:row.current_attempt_id,attempts,events}}
+function relative(date: Date) {
+  const seconds = Math.max(0, Math.floor((Date.now() - date.getTime()) / 1000));
+  if (seconds < 60) return `${seconds}s ago`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+  return `${Math.floor(seconds / 86400)}d ago`
+}
 
-export async function listTemplates():Promise<Array<TemplateRecord&{productId:string;html:string;text:string;sampleData:Record<string,unknown>;schema:Record<string,string>;status:string;category:string}>>{const rows=(await query<{id:string;product_id:string;key:string;name:string;description:string;category:string;product:string;version:number;status:string;subject_template:string;html_template:string;text_template:string;variables_schema:Record<string,string>;sample_data:Record<string,unknown>;updated_at:Date}>(`SELECT t.id,t.product_id,t.key,t.name,t.description,t.category,p.name AS product,tv.version,tv.status,tv.subject_template,tv.html_template,tv.text_template,tv.variables_schema,tv.sample_data,t.updated_at FROM templates t JOIN products p ON p.id=t.product_id JOIN LATERAL(SELECT * FROM template_versions WHERE template_id=t.id ORDER BY (status='published') DESC,version DESC LIMIT 1)tv ON true ORDER BY t.updated_at DESC`)).rows;const accents=["blue","green","violet","amber"] as const;return rows.map((row,index)=>({id:row.id,productId:row.product_id,key:row.key,name:row.name,description:row.description,category:row.category,subject:row.subject_template,product:row.product,version:row.version,status:row.status,updatedAt:relative(row.updated_at),accent:accents[index%accents.length],variables:Object.keys(row.variables_schema),html:row.html_template,text:row.text_template,sampleData:row.sample_data,schema:row.variables_schema}))}
-export async function getTemplate(id:string){return(await listTemplates()).find(item=>item.id===id)??null}
+function formatted(date: Date) {
+  return new Intl.DateTimeFormat("en-GB", { dateStyle: "medium", timeStyle: "medium", timeZone: "UTC" }).format(date)
+}
 
-export async function dashboardData(){const [counts,recent,trend,outbox,deadLetters,unknown]=await Promise.all([query<{accepted:string;delivered:string;bounced:string;total:string}>(`SELECT count(DISTINCT m.id)FILTER(WHERE m.accepted_at>=now()-interval '7 days') AS accepted,count(*)FILTER(WHERE d.lifecycle_status='delivered' AND m.accepted_at>=now()-interval '7 days') AS delivered,count(*)FILTER(WHERE d.lifecycle_status='bounced' AND m.accepted_at>=now()-interval '7 days') AS bounced,count(*)FILTER(WHERE m.accepted_at>=now()-interval '7 days') AS total FROM messages m LEFT JOIN deliveries d ON d.message_id=m.id`),listEmails(5),query<{day:Date;sent:string;delivered:string}>(`WITH days AS (SELECT generate_series(current_date - interval '6 days', current_date, interval '1 day')::date AS day) SELECT days.day,count(d.id) FILTER (WHERE d.accepted_at::date=days.day) AS sent,count(d.id) FILTER (WHERE d.delivered_at::date=days.day) AS delivered FROM days LEFT JOIN deliveries d ON d.queued_at>=current_date - interval '6 days' GROUP BY days.day ORDER BY days.day`),query<{count:string}>("SELECT count(*) FROM outbox_events WHERE status='pending'"),query<{count:string}>("SELECT count(*) FROM callback_deliveries WHERE status='dead_letter'"),query<{count:string}>("SELECT count(*) FROM deliveries WHERE lifecycle_status='unknown'")]);const c=counts.rows[0]??{accepted:"0",delivered:"0",bounced:"0",total:"0"};const total=Number(c.total);return{stats:{accepted:Number(c.accepted),delivered:Number(c.delivered),bounced:Number(c.bounced),deliveryRate:total?Number(c.delivered)/total*100:0,bounceRate:total?Number(c.bounced)/total*100:0},recent,trend:trend.rows.map(row=>({label:new Intl.DateTimeFormat("en",{month:"short",day:"numeric"}).format(row.day),sent:Number(row.sent),delivered:Number(row.delivered)})),health:{outbox:Number(outbox.rows[0]?.count??0),deadLetters:Number(deadLetters.rows[0]?.count??0),unknown:Number(unknown.rows[0]?.count??0)}}}
+type EmailRow = {
+  delivery_id: string;
+  recipient_email: string;
+  recipient_name: string | null;
+  lifecycle_status: string;
+  compliance_status: string;
+  accepted_at: Date;
+  reference_id: string | null;
+  variables: Record<string, unknown>;
+  subject_template: string;
+  template_key: string;
+  product_name: string;
+  from_name: string;
+  from_local_part: string;
+  domain: string;
+  external_message_id: string | null
+};
+const emailSelect = `SELECT d.id AS delivery_id,d.recipient_email,d.recipient_name,d.lifecycle_status,d.compliance_status,d.engagement_status,d.message_id,d.current_attempt_id,m.accepted_at,m.reference_id,m.variables,tv.subject_template,t.key AS template_key,p.name AS product_name,sp.from_name,sp.from_local_part,sd.domain,da.external_message_id FROM deliveries d JOIN messages m ON m.id=d.message_id JOIN products p ON p.id=m.product_id JOIN templates t ON t.id=m.template_id JOIN template_versions tv ON tv.id=m.template_version_id JOIN sender_profiles sp ON sp.id=m.sender_profile_id JOIN sending_domains sd ON sd.id=sp.sending_domain_id LEFT JOIN delivery_attempts da ON da.id=d.current_attempt_id`;
 
-export async function adminData(){const [products,services,templates,providers,domains,senders,policies,credentials,webhooks,callbacks,rawEvents,canonicalEvents,suppressions,inbound,inboundRoutes,audit,revisions,settings]=await Promise.all([
-  query("SELECT id,name,slug,status FROM products ORDER BY name"),
-  query("SELECT s.id,s.name,s.status,p.name AS product,p.id AS product_id FROM services s JOIN products p ON p.id=s.product_id ORDER BY p.name,s.name"),
-  query("SELECT id,key,name,product_id FROM templates ORDER BY key"),
-  query("SELECT id,type,name,status,region,public_config,config_revision,coalesce(health->>'status','unknown') AS health,quota,created_at FROM provider_accounts ORDER BY name"),
-  query(`SELECT sd.id,sd.domain,sd.region,sd.inbound_enabled,sd.status,json_agg(json_build_object('id',pi.id,'accountId',pa.id,'account',pa.name,'type',pa.type,'status',pi.status,'externalId',pi.external_identity_id,'dnsRecords',pi.dns_records,'lastCheckedAt',pi.last_checked_at) ORDER BY pa.name)FILTER(WHERE pi.id IS NOT NULL) AS identities FROM sending_domains sd LEFT JOIN provider_identities pi ON pi.sending_domain_id=sd.id LEFT JOIN provider_accounts pa ON pa.id=pi.provider_account_id GROUP BY sd.id ORDER BY sd.domain`),
-  query(`SELECT sp.id,sp.name,sp.from_name,sp.from_local_part,sp.reply_to,sp.message_category,sp.status,p.name AS product,p.id AS product_id,sd.domain,sd.id AS domain_id FROM sender_profiles sp JOIN products p ON p.id=sp.product_id JOIN sending_domains sd ON sd.id=sp.sending_domain_id ORDER BY p.name,sp.name`),
-  query(`SELECT rp.id,rp.name,rp.priority,rp.status,p.name AS product,s.name AS service,t.key AS template,rp.message_category,rp.destination_region,json_agg(json_build_object('id',rt.id,'accountId',pa.id,'account',pa.name,'type',pa.type,'identityId',pi.id,'domain',sd.domain,'priority',rt.priority,'weight',rt.weight,'rateLimit',rt.rate_limit_per_minute,'status',rt.status,'circuitOpenUntil',rt.circuit_open_until)ORDER BY rt.priority)FILTER(WHERE rt.id IS NOT NULL) AS targets FROM routing_policies rp LEFT JOIN products p ON p.id=rp.product_id LEFT JOIN services s ON s.id=rp.service_id LEFT JOIN templates t ON t.id=rp.template_id LEFT JOIN routing_targets rt ON rt.policy_id=rp.id LEFT JOIN provider_accounts pa ON pa.id=rt.provider_account_id LEFT JOIN provider_identities pi ON pi.id=rt.provider_identity_id LEFT JOIN sending_domains sd ON sd.id=pi.sending_domain_id GROUP BY rp.id,p.name,s.name,t.key ORDER BY rp.priority,rp.name`),
-  query(`SELECT c.id,c.key_prefix,c.status,c.valid_from,c.valid_to,c.last_used_at,s.name AS service,s.id AS service_id,p.name AS product FROM service_credentials c JOIN services s ON s.id=c.service_id JOIN products p ON p.id=s.product_id ORDER BY c.created_at DESC`),
-  query(`SELECT e.id,e.opaque_token,e.status,e.expected_topic_arn,e.ip_allowlist,e.created_at,pa.name AS account,pa.type FROM provider_webhook_endpoints e JOIN provider_accounts pa ON pa.id=e.provider_account_id ORDER BY e.created_at DESC`),
-  query(`SELECT e.id,e.name,e.url,e.status,e.subscribed_events,s.name AS service,p.name AS product,count(d.id)FILTER(WHERE d.status='dead_letter') AS dead_letters FROM callback_endpoints e JOIN services s ON s.id=e.service_id JOIN products p ON p.id=s.product_id LEFT JOIN callback_deliveries d ON d.endpoint_id=e.id GROUP BY e.id,s.name,p.name ORDER BY e.created_at DESC`),
-  query(`SELECT r.id,r.native_type,r.provider_event_id,r.signature_valid,r.replay_valid,r.received_at,r.processed_at,r.processing_error,pa.name AS account,pa.type FROM raw_provider_events r JOIN provider_accounts pa ON pa.id=r.provider_account_id ORDER BY r.received_at DESC LIMIT 200`),
-  query(`SELECT de.id,de.event_type,de.occurred_at,de.canonical_payload,d.recipient_email FROM delivery_events de JOIN deliveries d ON d.id=de.delivery_id ORDER BY de.occurred_at DESC LIMIT 200`),
-  query(`SELECT s.id,s.scope_type,s.email_normalized,s.reason,s.source,s.bounce_count,s.expires_at,s.created_at,p.name AS product FROM suppressions s LEFT JOIN products p ON p.id=s.product_id WHERE s.active=true ORDER BY s.created_at DESC`),
-  query(`SELECT i.id,i.from_email,i.to_emails,i.subject,i.status,i.received_at,p.name AS product,count(a.id) AS attachment_count FROM inbound_messages i LEFT JOIN products p ON p.id=i.product_id LEFT JOIN inbound_attachments a ON a.inbound_message_id=i.id GROUP BY i.id,p.name ORDER BY i.received_at DESC LIMIT 200`),
-  query(`SELECT r.id,r.local_part_pattern,r.status,sd.domain,p.name AS product,s.name AS service,e.opaque_token,pa.type AS provider_type,ce.name AS callback FROM inbound_routes r JOIN sending_domains sd ON sd.id=r.sending_domain_id JOIN products p ON p.id=r.product_id LEFT JOIN services s ON s.id=r.service_id JOIN provider_webhook_endpoints e ON e.id=r.provider_webhook_endpoint_id JOIN provider_accounts pa ON pa.id=e.provider_account_id LEFT JOIN callback_endpoints ce ON ce.id=r.callback_endpoint_id ORDER BY r.created_at DESC`),
-  query("SELECT id,actor,action,resource_type,resource_id,details,created_at FROM audit_logs ORDER BY created_at DESC LIMIT 300"),
-  query("SELECT id,resource_type,resource_id,revision,config,actor,created_at FROM config_revisions ORDER BY created_at DESC LIMIT 200"),
-  query<{key:string;value:unknown}>("SELECT key,value FROM workspace_settings ORDER BY key"),
-]);return{products:products.rows,services:services.rows,templates:templates.rows,providers:providers.rows,domains:domains.rows,senders:senders.rows,policies:policies.rows,credentials:credentials.rows,webhooks:webhooks.rows,callbacks:callbacks.rows,rawEvents:rawEvents.rows,canonicalEvents:canonicalEvents.rows,suppressions:suppressions.rows,inbound:inbound.rows,inboundRoutes:inboundRoutes.rows,audit:audit.rows,revisions:revisions.rows,settings:Object.fromEntries(settings.rows.map(row=>[row.key,row.value])),descriptors:providerDescriptors()}}
+function mapEmail(row: EmailRow): EmailRecord {
+  const subject = renderTemplate({
+    subjectTemplate: row.subject_template,
+    htmlTemplate: "",
+    textTemplate: ""
+  }, row.variables).subject;
+  return {
+    id: row.delivery_id,
+    recipient: row.recipient_email,
+    recipientName: row.recipient_name ?? undefined,
+    subject,
+    template: row.template_key,
+    product: row.product_name,
+    from: `${row.from_name} <${row.from_local_part}@${row.domain}>`,
+    status: (row.compliance_status === "suppressed" ? "suppressed" : row.lifecycle_status) as DeliveryStatus,
+    createdAt: formatted(row.accepted_at),
+    relativeTime: relative(row.accepted_at),
+    providerId: row.external_message_id ?? undefined,
+    referenceId: row.reference_id ?? undefined
+  }
+}
+
+export async function listEmails(limit = 200) {
+  return (await query<EmailRow>(`${emailSelect} ORDER BY m.accepted_at DESC LIMIT $1`, [limit])).rows.map(mapEmail)
+}
+
+export async function getDeliveryDetail(id: string) {
+  const row = (await query<EmailRow & {
+    message_id: string;
+    engagement_status: string;
+    current_attempt_id: string | null
+  }>(`${emailSelect} WHERE d.id=$1`, [id])).rows[0];
+  if (!row) return null;
+  const attempts = (await query(`SELECT da.id,da.attempt_number,da.status,da.outcome_determinate,da.external_message_id,da.error_category,da.error_code,da.error_message,da.routing_snapshot,da.started_at,da.finished_at,pa.name AS provider_account,pa.type AS provider_type FROM delivery_attempts da JOIN provider_accounts pa ON pa.id=da.provider_account_id WHERE da.delivery_id=$1 ORDER BY da.attempt_number DESC`, [id])).rows;
+  const events = (await query(`SELECT id,event_type,occurred_at,canonical_payload FROM delivery_events WHERE delivery_id=$1 ORDER BY occurred_at DESC`, [id])).rows;
+  return {
+    ...mapEmail(row),
+    messageId: row.message_id,
+    lifecycle: row.lifecycle_status,
+    engagement: row.engagement_status,
+    compliance: row.compliance_status,
+    currentAttemptId: row.current_attempt_id,
+    attempts,
+    events
+  }
+}
+
+export async function listTemplates(): Promise<Array<TemplateRecord & {
+  productId: string;
+  html: string;
+  text: string;
+  sampleData: Record<string, unknown>;
+  schema: Record<string, string>;
+  status: string;
+  category: string
+}>> {
+  const rows = (await query<{
+    id: string;
+    product_id: string;
+    key: string;
+    name: string;
+    description: string;
+    category: string;
+    product: string;
+    version: number;
+    status: string;
+    subject_template: string;
+    html_template: string;
+    text_template: string;
+    variables_schema: Record<string, string>;
+    sample_data: Record<string, unknown>;
+    updated_at: Date
+  }>(`SELECT t.id,t.product_id,t.key,t.name,t.description,t.category,p.name AS product,tv.version,tv.status,tv.subject_template,tv.html_template,tv.text_template,tv.variables_schema,tv.sample_data,t.updated_at FROM templates t JOIN products p ON p.id=t.product_id JOIN LATERAL(SELECT * FROM template_versions WHERE template_id=t.id ORDER BY (status='published') DESC,version DESC LIMIT 1)tv ON true ORDER BY t.updated_at DESC`)).rows;
+  const accents = ["blue", "green", "violet", "amber"] as const;
+  return rows.map((row, index) => ({
+    id: row.id,
+    productId: row.product_id,
+    key: row.key,
+    name: row.name,
+    description: row.description,
+    category: row.category,
+    subject: row.subject_template,
+    product: row.product,
+    version: row.version,
+    status: row.status,
+    updatedAt: relative(row.updated_at),
+    accent: accents[index % accents.length],
+    variables: Object.keys(row.variables_schema),
+    html: row.html_template,
+    text: row.text_template,
+    sampleData: row.sample_data,
+    schema: row.variables_schema
+  }))
+}
+
+export async function getTemplate(id: string) {
+  return (await listTemplates()).find(item => item.id === id) ?? null
+}
+
+export async function dashboardData() {
+  const [counts, recent, trend, outbox, deadLetters, unknown] = await Promise.all([query<{
+    accepted: string;
+    delivered: string;
+    bounced: string;
+    total: string
+  }>(`SELECT count(DISTINCT m.id)FILTER(WHERE m.accepted_at>=now()-interval '7 days') AS accepted,count(*)FILTER(WHERE d.lifecycle_status='delivered' AND m.accepted_at>=now()-interval '7 days') AS delivered,count(*)FILTER(WHERE d.lifecycle_status='bounced' AND m.accepted_at>=now()-interval '7 days') AS bounced,count(*)FILTER(WHERE m.accepted_at>=now()-interval '7 days') AS total FROM messages m LEFT JOIN deliveries d ON d.message_id=m.id`), listEmails(5), query<{
+    day: Date;
+    sent: string;
+    delivered: string
+  }>(`WITH days AS (SELECT generate_series(current_date - interval '6 days', current_date, interval '1 day')::date AS day) SELECT days.day,count(d.id) FILTER (WHERE d.accepted_at::date=days.day) AS sent,count(d.id) FILTER (WHERE d.delivered_at::date=days.day) AS delivered FROM days LEFT JOIN deliveries d ON d.queued_at>=current_date - interval '6 days' GROUP BY days.day ORDER BY days.day`), query<{
+    count: string
+  }>("SELECT count(*) FROM outbox_events WHERE status='pending'"), query<{
+    count: string
+  }>("SELECT count(*) FROM callback_deliveries WHERE status='dead_letter'"), query<{
+    count: string
+  }>("SELECT count(*) FROM deliveries WHERE lifecycle_status='unknown'")]);
+  const c = counts.rows[0] ?? { accepted: "0", delivered: "0", bounced: "0", total: "0" };
+  const total = Number(c.total);
+  return {
+    stats: {
+      accepted: Number(c.accepted),
+      delivered: Number(c.delivered),
+      bounced: Number(c.bounced),
+      deliveryRate: total ? Number(c.delivered) / total * 100 : 0,
+      bounceRate: total ? Number(c.bounced) / total * 100 : 0
+    },
+    recent,
+    trend: trend.rows.map(row => ({
+      label: new Intl.DateTimeFormat("en", {
+        month: "short",
+        day: "numeric"
+      }).format(row.day), sent: Number(row.sent), delivered: Number(row.delivered)
+    })),
+    health: {
+      outbox: Number(outbox.rows[0]?.count ?? 0),
+      deadLetters: Number(deadLetters.rows[0]?.count ?? 0),
+      unknown: Number(unknown.rows[0]?.count ?? 0)
+    }
+  }
+}
+
+export async function adminData() {
+  const [products, services, templates, providers, domains, senders, policies, credentials, webhooks, callbacks, rawEvents, canonicalEvents, suppressions, inbound, inboundRoutes, audit, revisions, settings] = await Promise.all([
+    query("SELECT id,name,slug,status FROM products ORDER BY name"),
+    query("SELECT s.id,s.name,s.status,p.name AS product,p.id AS product_id FROM services s JOIN products p ON p.id=s.product_id ORDER BY p.name,s.name"),
+    query("SELECT id,key,name,product_id FROM templates ORDER BY key"),
+    query("SELECT id,type,name,status,region,public_config,config_revision,coalesce(health->>'status','unknown') AS health,quota,created_at FROM provider_accounts ORDER BY name"),
+    query(`SELECT sd.id,sd.domain,sd.region,sd.inbound_enabled,sd.status,json_agg(json_build_object('id',pi.id,'accountId',pa.id,'account',pa.name,'type',pa.type,'status',pi.status,'externalId',pi.external_identity_id,'dnsRecords',pi.dns_records,'lastCheckedAt',pi.last_checked_at) ORDER BY pa.name)FILTER(WHERE pi.id IS NOT NULL) AS identities FROM sending_domains sd LEFT JOIN provider_identities pi ON pi.sending_domain_id=sd.id LEFT JOIN provider_accounts pa ON pa.id=pi.provider_account_id GROUP BY sd.id ORDER BY sd.domain`),
+    query(`SELECT sp.id,sp.name,sp.from_name,sp.from_local_part,sp.reply_to,sp.message_category,sp.status,p.name AS product,p.id AS product_id,sd.domain,sd.id AS domain_id FROM sender_profiles sp JOIN products p ON p.id=sp.product_id JOIN sending_domains sd ON sd.id=sp.sending_domain_id ORDER BY p.name,sp.name`),
+    query(`SELECT rp.id,rp.name,rp.priority,rp.status,p.name AS product,s.name AS service,t.key AS template,rp.message_category,rp.destination_region,json_agg(json_build_object('id',rt.id,'accountId',pa.id,'account',pa.name,'type',pa.type,'identityId',pi.id,'domain',sd.domain,'priority',rt.priority,'weight',rt.weight,'rateLimit',rt.rate_limit_per_minute,'status',rt.status,'circuitOpenUntil',rt.circuit_open_until)ORDER BY rt.priority)FILTER(WHERE rt.id IS NOT NULL) AS targets FROM routing_policies rp LEFT JOIN products p ON p.id=rp.product_id LEFT JOIN services s ON s.id=rp.service_id LEFT JOIN templates t ON t.id=rp.template_id LEFT JOIN routing_targets rt ON rt.policy_id=rp.id LEFT JOIN provider_accounts pa ON pa.id=rt.provider_account_id LEFT JOIN provider_identities pi ON pi.id=rt.provider_identity_id LEFT JOIN sending_domains sd ON sd.id=pi.sending_domain_id GROUP BY rp.id,p.name,s.name,t.key ORDER BY rp.priority,rp.name`),
+    query(`SELECT c.id,c.key_prefix,c.status,c.valid_from,c.valid_to,c.last_used_at,s.name AS service,s.id AS service_id,p.name AS product FROM service_credentials c JOIN services s ON s.id=c.service_id JOIN products p ON p.id=s.product_id ORDER BY c.created_at DESC`),
+    query(`SELECT e.id,e.opaque_token,e.status,e.expected_topic_arn,e.ip_allowlist,e.created_at,pa.name AS account,pa.type FROM provider_webhook_endpoints e JOIN provider_accounts pa ON pa.id=e.provider_account_id ORDER BY e.created_at DESC`),
+    query(`SELECT e.id,e.name,e.url,e.status,e.subscribed_events,s.name AS service,p.name AS product,count(d.id)FILTER(WHERE d.status='dead_letter') AS dead_letters FROM callback_endpoints e JOIN services s ON s.id=e.service_id JOIN products p ON p.id=s.product_id LEFT JOIN callback_deliveries d ON d.endpoint_id=e.id GROUP BY e.id,s.name,p.name ORDER BY e.created_at DESC`),
+    query(`SELECT r.id,r.native_type,r.provider_event_id,r.signature_valid,r.replay_valid,r.received_at,r.processed_at,r.processing_error,pa.name AS account,pa.type FROM raw_provider_events r JOIN provider_accounts pa ON pa.id=r.provider_account_id ORDER BY r.received_at DESC LIMIT 200`),
+    query(`SELECT de.id,de.event_type,de.occurred_at,de.canonical_payload,d.recipient_email FROM delivery_events de JOIN deliveries d ON d.id=de.delivery_id ORDER BY de.occurred_at DESC LIMIT 200`),
+    query(`SELECT s.id,s.scope_type,s.email_normalized,s.reason,s.source,s.bounce_count,s.expires_at,s.created_at,p.name AS product FROM suppressions s LEFT JOIN products p ON p.id=s.product_id WHERE s.active=true ORDER BY s.created_at DESC`),
+    query(`SELECT i.id,i.from_email,i.to_emails,i.subject,i.status,i.received_at,p.name AS product,count(a.id) AS attachment_count FROM inbound_messages i LEFT JOIN products p ON p.id=i.product_id LEFT JOIN inbound_attachments a ON a.inbound_message_id=i.id GROUP BY i.id,p.name ORDER BY i.received_at DESC LIMIT 200`),
+    query(`SELECT r.id,r.local_part_pattern,r.status,sd.domain,p.name AS product,s.name AS service,e.opaque_token,pa.type AS provider_type,ce.name AS callback FROM inbound_routes r JOIN sending_domains sd ON sd.id=r.sending_domain_id JOIN products p ON p.id=r.product_id LEFT JOIN services s ON s.id=r.service_id JOIN provider_webhook_endpoints e ON e.id=r.provider_webhook_endpoint_id JOIN provider_accounts pa ON pa.id=e.provider_account_id LEFT JOIN callback_endpoints ce ON ce.id=r.callback_endpoint_id ORDER BY r.created_at DESC`),
+    query("SELECT id,actor,action,resource_type,resource_id,details,created_at FROM audit_logs ORDER BY created_at DESC LIMIT 300"),
+    query("SELECT id,resource_type,resource_id,revision,config,actor,created_at FROM config_revisions ORDER BY created_at DESC LIMIT 200"),
+    query<{ key: string; value: unknown }>("SELECT key,value FROM workspace_settings ORDER BY key"),
+  ]);
+  return {
+    products: products.rows,
+    services: services.rows,
+    templates: templates.rows,
+    providers: providers.rows,
+    domains: domains.rows,
+    senders: senders.rows,
+    policies: policies.rows,
+    credentials: credentials.rows,
+    webhooks: webhooks.rows,
+    callbacks: callbacks.rows,
+    rawEvents: rawEvents.rows,
+    canonicalEvents: canonicalEvents.rows,
+    suppressions: suppressions.rows,
+    inbound: inbound.rows,
+    inboundRoutes: inboundRoutes.rows,
+    audit: audit.rows,
+    revisions: revisions.rows,
+    settings: Object.fromEntries(settings.rows.map(row => [row.key, row.value])),
+    descriptors: providerDescriptors()
+  }
+}

@@ -1,13 +1,134 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { CanonicalEventType, ProviderModule } from "../contracts";
-import { accepted, checkedJson, decodeJson, event, header, parseMultipart, type MultipartValue } from "../shared";
+import { accepted, checkedJson, decodeJson, event, header, type MultipartValue, parseMultipart } from "../shared";
 
-const eventMap:Record<string,CanonicalEventType>={accepted:"accepted",delivered:"delivered",failed:"failed",opened:"opened",clicked:"clicked",complained:"complained",unsubscribed:"unsubscribed",stored:"inbound.received"};
-export const mailgunModule:ProviderModule={
-  descriptor:{type:"mailgun",displayName:"Mailgun",capabilities:{nativeIdempotency:false,inboundMode:"route",domainManagement:true,webhookSecurity:"Timestamp token HMAC",eventTypes:Object.keys(eventMap),attachments:true,scheduling:true}},
-  sender:{async send(message,context){if(context.config.type!=="mailgun"||context.secret.type!=="mailgun")throw new Error("Invalid Mailgun configuration");const form=new FormData();form.set("from",`${message.from.name} <${message.from.email}>`);form.set("to",message.to.name?`${message.to.name} <${message.to.email}>`:message.to.email);form.set("subject",message.subject);form.set("text",message.text);form.set("html",message.html);if(message.replyTo)form.set("h:Reply-To",message.replyTo);const host=context.config.region==="eu"?"https://api.eu.mailgun.net":"https://api.mailgun.net";const response=await fetch(`${host}/v3/${context.config.sendingDomain}/messages`,{method:"POST",headers:{authorization:`Basic ${Buffer.from(`api:${context.secret.apiKey}`).toString("base64")}`},body:form});const body=await checkedJson(response);return accepted(body.id,body);}},
-  webhook:{async verify(request,context){if(context.secret.type!=="mailgun")throw new Error("Invalid Mailgun credential");const contentType=header(request.headers,"content-type");const parsed=contentType.includes("multipart/form-data")?await parseMultipart(request.rawBody,contentType):decodeJson(request.rawBody);const value=(key:string)=>{const v=(parsed as Record<string,unknown>)[key];return typeof v==="string"?v:""};const signature=((parsed as Record<string,unknown>).signature??{}) as Record<string,unknown>;const timestamp=value("timestamp")||String(signature.timestamp??"");const token=value("token")||String(signature.token??"");const actual=value("signature")||String(signature.signature??"");const expected=createHmac("sha256",context.secret.webhookSigningKey).update(timestamp+token).digest("hex");const valid=actual.length===expected.length&&timingSafeEqual(Buffer.from(actual),Buffer.from(expected));const data=((parsed as Record<string,unknown>)["event-data"]??{}) as Record<string,unknown>;const inbound=contentType.includes("multipart/form-data")&&!data.event;return{valid,replaySafe:Math.abs(Date.now()/1000-Number(timestamp))<300,providerEventId:inbound?token:String(data.id??token),nativeType:inbound?"inbound":String(data.event??"unknown"),parsed};},async normalize(verified){if(verified.nativeType==="inbound")return[event({id:verified.providerEventId??crypto.randomUUID(),type:"inbound.received",occurredAt:new Date(),inboundReference:verified.providerEventId})];const payload=verified.parsed as Record<string,unknown>;const data=(payload["event-data"]??{}) as Record<string,unknown>;const type=eventMap[String(data.event)];if(!type)return[];const message=(data.message??{}) as Record<string,unknown>;const headers=(message.headers??{}) as Record<string,unknown>;const recipient=typeof data.recipient==="string"?data.recipient:undefined;return[event({id:String(data.id),externalMessageId:typeof headers["message-id"]==="string"?String(headers["message-id"]):undefined,type,occurredAt:new Date(Number(data.timestamp??Date.now()/1000)*1000),recipient})]}},
-  inbound:{async receive(verified){if(verified.nativeType!=="inbound")return null;const p=verified.parsed as Record<string,MultipartValue|MultipartValue[]>;const text=(key:string)=>typeof p[key]==="string"?p[key] as string:"";const attachments=Object.entries(p).filter(([key,value])=>key.startsWith("attachment")&&!Array.isArray(value)&&typeof value!=="string").map(([,value])=>{const file=value as Exclude<MultipartValue,string>;return{fileName:file.name,contentType:file.type,content:file.bytes}});return{externalMessageId:text("Message-Id")||verified.providerEventId||crypto.randomUUID(),messageId:text("Message-Id"),from:text("sender")||text("from"),to:(text("recipient")||text("To")).split(",").filter(Boolean),cc:text("Cc").split(",").filter(Boolean),bcc:[],subject:text("subject"),html:text("body-html"),text:text("body-plain"),rawMime:typeof p["body-mime"]==="string"?new TextEncoder().encode(p["body-mime"] as string):undefined,attachments,receivedAt:new Date(Number(text("timestamp")||Date.now()/1000)*1000)}}},
-  reconciliation:{async reconcile(){return"unknown"}},
-  health:{async check(context){if(context.config.type!=="mailgun"||context.secret.type!=="mailgun")throw new Error("Invalid Mailgun configuration");const host=context.config.region==="eu"?"https://api.eu.mailgun.net":"https://api.mailgun.net";const response=await fetch(`${host}/v3/domains`,{headers:{authorization:`Basic ${Buffer.from(`api:${context.secret.apiKey}`).toString("base64")}`}});return{healthy:response.ok,details:{status:response.status}}}},
+const eventMap: Record<string, CanonicalEventType> = {
+  accepted: "accepted",
+  delivered: "delivered",
+  failed: "failed",
+  opened: "opened",
+  clicked: "clicked",
+  complained: "complained",
+  unsubscribed: "unsubscribed",
+  stored: "inbound.received"
+};
+export const mailgunModule: ProviderModule = {
+  descriptor: {
+    type: "mailgun",
+    displayName: "Mailgun",
+    capabilities: {
+      nativeIdempotency: false,
+      inboundMode: "route",
+      domainManagement: true,
+      webhookSecurity: "Timestamp token HMAC",
+      eventTypes: Object.keys(eventMap),
+      attachments: true,
+      scheduling: true
+    }
+  },
+  sender: {
+    async send(message, context) {
+      if (context.config.type !== "mailgun" || context.secret.type !== "mailgun") throw new Error("Invalid Mailgun configuration");
+      const form = new FormData();
+      form.set("from", `${message.from.name} <${message.from.email}>`);
+      form.set("to", message.to.name ? `${message.to.name} <${message.to.email}>` : message.to.email);
+      form.set("subject", message.subject);
+      form.set("text", message.text);
+      form.set("html", message.html);
+      if (message.replyTo) form.set("h:Reply-To", message.replyTo);
+      const host = context.config.region === "eu" ? "https://api.eu.mailgun.net" : "https://api.mailgun.net";
+      const response = await fetch(`${host}/v3/${context.config.sendingDomain}/messages`, {
+        method: "POST",
+        headers: { authorization: `Basic ${Buffer.from(`api:${context.secret.apiKey}`).toString("base64")}` },
+        body: form
+      });
+      const body = await checkedJson(response);
+      return accepted(body.id, body);
+    }
+  },
+  webhook: {
+    async verify(request, context) {
+      if (context.secret.type !== "mailgun") throw new Error("Invalid Mailgun credential");
+      const contentType = header(request.headers, "content-type");
+      const parsed = contentType.includes("multipart/form-data") ? await parseMultipart(request.rawBody, contentType) : decodeJson(request.rawBody);
+      const value = (key: string) => {
+        const v = (parsed as Record<string, unknown>)[key];
+        return typeof v === "string" ? v : ""
+      };
+      const signature = ((parsed as Record<string, unknown>).signature ?? {}) as Record<string, unknown>;
+      const timestamp = value("timestamp") || String(signature.timestamp ?? "");
+      const token = value("token") || String(signature.token ?? "");
+      const actual = value("signature") || String(signature.signature ?? "");
+      const expected = createHmac("sha256", context.secret.webhookSigningKey).update(timestamp + token).digest("hex");
+      const valid = actual.length === expected.length && timingSafeEqual(Buffer.from(actual), Buffer.from(expected));
+      const data = ((parsed as Record<string, unknown>)["event-data"] ?? {}) as Record<string, unknown>;
+      const inbound = contentType.includes("multipart/form-data") && !data.event;
+      return {
+        valid,
+        replaySafe: Math.abs(Date.now() / 1000 - Number(timestamp)) < 300,
+        providerEventId: inbound ? token : String(data.id ?? token),
+        nativeType: inbound ? "inbound" : String(data.event ?? "unknown"),
+        parsed
+      };
+    }, async normalize(verified) {
+      if (verified.nativeType === "inbound") return [event({
+        id: verified.providerEventId ?? crypto.randomUUID(),
+        type: "inbound.received",
+        occurredAt: new Date(),
+        inboundReference: verified.providerEventId
+      })];
+      const payload = verified.parsed as Record<string, unknown>;
+      const data = (payload["event-data"] ?? {}) as Record<string, unknown>;
+      const type = eventMap[String(data.event)];
+      if (!type) return [];
+      const message = (data.message ?? {}) as Record<string, unknown>;
+      const headers = (message.headers ?? {}) as Record<string, unknown>;
+      const recipient = typeof data.recipient === "string" ? data.recipient : undefined;
+      return [event({
+        id: String(data.id),
+        externalMessageId: typeof headers["message-id"] === "string" ? String(headers["message-id"]) : undefined,
+        type,
+        occurredAt: new Date(Number(data.timestamp ?? Date.now() / 1000) * 1000),
+        recipient
+      })]
+    }
+  },
+  inbound: {
+    async receive(verified) {
+      if (verified.nativeType !== "inbound") return null;
+      const p = verified.parsed as Record<string, MultipartValue | MultipartValue[]>;
+      const text = (key: string) => typeof p[key] === "string" ? p[key] as string : "";
+      const attachments = Object.entries(p).filter(([key, value]) => key.startsWith("attachment") && !Array.isArray(value) && typeof value !== "string").map(([, value]) => {
+        const file = value as Exclude<MultipartValue, string>;
+        return { fileName: file.name, contentType: file.type, content: file.bytes }
+      });
+      return {
+        externalMessageId: text("Message-Id") || verified.providerEventId || crypto.randomUUID(),
+        messageId: text("Message-Id"),
+        from: text("sender") || text("from"),
+        to: (text("recipient") || text("To")).split(",").filter(Boolean),
+        cc: text("Cc").split(",").filter(Boolean),
+        bcc: [],
+        subject: text("subject"),
+        html: text("body-html"),
+        text: text("body-plain"),
+        rawMime: typeof p["body-mime"] === "string" ? new TextEncoder().encode(p["body-mime"] as string) : undefined,
+        attachments,
+        receivedAt: new Date(Number(text("timestamp") || Date.now() / 1000) * 1000)
+      }
+    }
+  },
+  reconciliation: {
+    async reconcile() {
+      return "unknown"
+    }
+  },
+  health: {
+    async check(context) {
+      if (context.config.type !== "mailgun" || context.secret.type !== "mailgun") throw new Error("Invalid Mailgun configuration");
+      const host = context.config.region === "eu" ? "https://api.eu.mailgun.net" : "https://api.mailgun.net";
+      const response = await fetch(`${host}/v3/domains`, { headers: { authorization: `Basic ${Buffer.from(`api:${context.secret.apiKey}`).toString("base64")}` } });
+      return { healthy: response.ok, details: { status: response.status } }
+    }
+  },
 };

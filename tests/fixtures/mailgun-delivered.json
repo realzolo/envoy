@@ -1,1 +1,18 @@
-{"signature":{"timestamp":"1789891200","token":"mailgun-token-123","signature":"generated-in-test"},"event-data":{"id":"mailgun-event-123","event":"delivered","timestamp":1789891200,"recipient":"person@example.net","message":{"headers":{"message-id":"mailgun-message-123"}}}}
+{
+  "signature": {
+    "timestamp": "1789891200",
+    "token": "mailgun-token-123",
+    "signature": "generated-in-test"
+  },
+  "event-data": {
+    "id": "mailgun-event-123",
+    "event": "delivered",
+    "timestamp": 1789891200,
+    "recipient": "person@example.net",
+    "message": {
+      "headers": {
+        "message-id": "mailgun-message-123"
+      }
+    }
+  }
+}

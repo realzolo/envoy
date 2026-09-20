@@ -10,7 +10,9 @@ type OutboxRow = {
 
 export async function dispatchOutboxBatch(limit = 100) {
   const client = await db().connect();
-  const lock = await client.query<{ locked: boolean }>("SELECT pg_try_advisory_lock(hashtext('envoy-outbox-dispatcher')) AS locked");
+  const lock = await client.query<{
+    locked: boolean
+  }>("SELECT pg_try_advisory_lock(hashtext('envoy-outbox-dispatcher')) AS locked");
   if (!lock.rows[0]?.locked) {
     client.release();
     return 0;

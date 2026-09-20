@@ -6,5 +6,81 @@ import { RetryDeliveryButton } from "@/components/admin-console";
 import { StatusPill } from "@/components/status-pill";
 import { getDeliveryDetail } from "@/modules/admin/queries";
 
-export const metadata:Metadata={title:"Delivery details"};
-export default async function DeliveryPage({params}:{params:Promise<{id:string}>}){const detail=await getDeliveryDetail((await params).id);if(!detail)notFound();const retryable=["unknown","failed","bounced","deferred"].includes(detail.lifecycle);return <div className="space-y-6"><div><Link href="/emails" className="mb-5 inline-flex items-center gap-1.5 text-xs text-zinc-600 hover:text-zinc-300"><ArrowLeft size={13}/>Back to messages</Link><div className="flex flex-col gap-4 border-b border-zinc-800 pb-6 sm:flex-row sm:items-start sm:justify-between"><div className="min-w-0"><div className="flex flex-wrap items-center gap-3"><h1 className="truncate text-xl font-medium text-zinc-50">{detail.subject}</h1><StatusPill status={detail.status}/></div><p className="mt-2 font-mono text-xs text-zinc-600">{detail.id}</p></div>{retryable&&<RetryDeliveryButton id={detail.id} unknown={detail.lifecycle==="unknown"}/>}</div>{detail.lifecycle==="unknown"&&<div className="mt-4 flex gap-3 rounded-md border border-amber-900/50 bg-amber-950/20 p-4 text-xs leading-5 text-amber-200"><CircleHelp size={16} className="shrink-0"/><p>The provider outcome is unknown. Envoy will reconcile before retrying. A manual retry can produce a duplicate and requires explicit operator acknowledgement.</p></div>}</div><div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]"><section className="rounded-lg border border-zinc-800 bg-[#090909]"><div className="border-b border-zinc-800 px-5 py-4"><h2 className="text-sm font-medium text-zinc-100">Canonical timeline</h2></div><div className="p-5">{detail.events.length?detail.events.map((event:Record<string,unknown>,index:number)=><div key={String(event.id)} className="relative flex gap-4 pb-7 last:pb-0">{index!==detail.events.length-1&&<span className="absolute left-[7px] top-4 h-full w-px bg-zinc-800"/>}<span className="relative z-10 mt-0.5 flex size-4 items-center justify-center rounded-full border border-emerald-500/40 bg-emerald-500/10 text-emerald-400"><CheckCircle2 size={10}/></span><div className="min-w-0 flex-1"><div className="flex justify-between gap-4"><h3 className="text-sm text-zinc-300">{String(event.event_type)}</h3><time className="font-mono text-[11px] text-zinc-700">{new Date(String(event.occurred_at)).toLocaleString("en-GB")}</time></div><pre className="mt-2 overflow-auto whitespace-pre-wrap text-[11px] text-zinc-600">{JSON.stringify(event.canonical_payload,null,2)}</pre></div></div>):<p className="py-10 text-center text-sm text-zinc-600">No canonical events yet.</p>}</div></section><aside className="space-y-4"><section className="rounded-lg border border-zinc-800 bg-[#090909] p-5"><h2 className="text-sm font-medium text-zinc-100">Delivery</h2><dl className="mt-5 space-y-4">{[["Recipient",detail.recipient],["From",detail.from],["Product",detail.product],["Template",detail.template],["Lifecycle",detail.lifecycle],["Engagement",detail.engagement],["Compliance",detail.compliance],["Accepted",detail.createdAt]].map(([key,val])=><div key={key}><dt className="text-[11px] text-zinc-700">{key}</dt><dd className="mt-1 break-words text-xs text-zinc-400">{val}</dd></div>)}</dl></section></aside></div><section><div className="mb-3 flex items-center gap-2"><Route size={15} className="text-zinc-600"/><h2 className="text-sm font-medium text-zinc-200">Routing attempts</h2></div><div className="space-y-3">{detail.attempts.map((attempt:Record<string,unknown>)=><div key={String(attempt.id)} className="rounded-lg border border-zinc-800 bg-[#090909] p-4"><div className="flex flex-wrap items-center gap-3 text-xs"><span className="font-medium text-zinc-200">Attempt {String(attempt.attempt_number)}</span><span className="text-zinc-500">{String(attempt.provider_account)} ({String(attempt.provider_type)})</span><span className={`ml-auto ${attempt.status==="accepted"?"text-emerald-400":attempt.status==="unknown"?"text-amber-400":"text-zinc-500"}`}>{String(attempt.status)}</span></div><div className="mt-3 grid gap-3 md:grid-cols-2"><pre className="max-h-52 overflow-auto rounded border border-zinc-900 bg-zinc-950 p-3 text-[10px] text-zinc-600">{JSON.stringify(attempt.routing_snapshot,null,2)}</pre><div className="space-y-2 text-xs text-zinc-500"><p>External ID: <code>{String(attempt.external_message_id??"Not assigned")}</code></p><p>Outcome determinate: {String(attempt.outcome_determinate)}</p>{Boolean(attempt.error_message)&&<p className="text-red-400">{String(attempt.error_category)} / {String(attempt.error_code)}: {String(attempt.error_message)}</p>}</div></div></div>)}</div></section></div>}
+export const metadata: Metadata = { title: "Delivery details" };
+export default async function DeliveryPage({ params }: { params: Promise<{ id: string }> }) {
+  const detail = await getDeliveryDetail((await params).id);
+  if (!detail) notFound();
+  const retryable = ["unknown", "failed", "bounced", "deferred"].includes(detail.lifecycle);
+  return <div className="space-y-6">
+    <div><Link href="/emails"
+               className="mb-5 inline-flex items-center gap-1.5 text-xs text-zinc-600 hover:text-zinc-300"><ArrowLeft
+      size={13}/>Back to messages</Link>
+      <div className="flex flex-col gap-4 border-b border-zinc-800 pb-6 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-3"><h1
+            className="truncate text-xl font-medium text-zinc-50">{detail.subject}</h1><StatusPill
+            status={detail.status}/></div>
+          <p className="mt-2 font-mono text-xs text-zinc-600">{detail.id}</p></div>
+        {retryable && <RetryDeliveryButton id={detail.id} unknown={detail.lifecycle === "unknown"}/>}</div>
+      {detail.lifecycle === "unknown" && <div
+        className="mt-4 flex gap-3 rounded-md border border-amber-900/50 bg-amber-950/20 p-4 text-xs leading-5 text-amber-200">
+        <CircleHelp size={16} className="shrink-0"/><p>The provider outcome is unknown. Envoy will reconcile before
+        retrying. A manual retry can produce a duplicate and requires explicit operator acknowledgement.</p></div>}
+    </div>
+    <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
+      <section className="rounded-lg border border-zinc-800 bg-[#090909]">
+        <div className="border-b border-zinc-800 px-5 py-4"><h2 className="text-sm font-medium text-zinc-100">Canonical
+          timeline</h2></div>
+        <div
+          className="p-5">{detail.events.length ? detail.events.map((event: Record<string, unknown>, index: number) =>
+          <div key={String(event.id)}
+               className="relative flex gap-4 pb-7 last:pb-0">{index !== detail.events.length - 1 &&
+            <span className="absolute left-[7px] top-4 h-full w-px bg-zinc-800"/>}<span
+            className="relative z-10 mt-0.5 flex size-4 items-center justify-center rounded-full border border-emerald-500/40 bg-emerald-500/10 text-emerald-400"><CheckCircle2
+            size={10}/></span>
+            <div className="min-w-0 flex-1">
+              <div className="flex justify-between gap-4"><h3
+                className="text-sm text-zinc-300">{String(event.event_type)}</h3>
+                <time
+                  className="font-mono text-[11px] text-zinc-700">{new Date(String(event.occurred_at)).toLocaleString("en-GB")}</time>
+              </div>
+              <pre
+                className="mt-2 overflow-auto whitespace-pre-wrap text-[11px] text-zinc-600">{JSON.stringify(event.canonical_payload, null, 2)}</pre>
+            </div>
+          </div>) : <p className="py-10 text-center text-sm text-zinc-600">No canonical events yet.</p>}</div>
+      </section>
+      <aside className="space-y-4">
+        <section className="rounded-lg border border-zinc-800 bg-[#090909] p-5"><h2
+          className="text-sm font-medium text-zinc-100">Delivery</h2>
+          <dl
+            className="mt-5 space-y-4">{[["Recipient", detail.recipient], ["From", detail.from], ["Product", detail.product], ["Template", detail.template], ["Lifecycle", detail.lifecycle], ["Engagement", detail.engagement], ["Compliance", detail.compliance], ["Accepted", detail.createdAt]].map(([key, val]) =>
+            <div key={key}>
+              <dt className="text-[11px] text-zinc-700">{key}</dt>
+              <dd className="mt-1 break-words text-xs text-zinc-400">{val}</dd>
+            </div>)}</dl>
+        </section>
+      </aside>
+    </div>
+    <section>
+      <div className="mb-3 flex items-center gap-2"><Route size={15} className="text-zinc-600"/><h2
+        className="text-sm font-medium text-zinc-200">Routing attempts</h2></div>
+      <div className="space-y-3">{detail.attempts.map((attempt: Record<string, unknown>) => <div
+        key={String(attempt.id)} className="rounded-lg border border-zinc-800 bg-[#090909] p-4">
+        <div className="flex flex-wrap items-center gap-3 text-xs"><span
+          className="font-medium text-zinc-200">Attempt {String(attempt.attempt_number)}</span><span
+          className="text-zinc-500">{String(attempt.provider_account)} ({String(attempt.provider_type)})</span><span
+          className={`ml-auto ${attempt.status === "accepted" ? "text-emerald-400" : attempt.status === "unknown" ? "text-amber-400" : "text-zinc-500"}`}>{String(attempt.status)}</span>
+        </div>
+        <div className="mt-3 grid gap-3 md:grid-cols-2">
+          <pre
+            className="max-h-52 overflow-auto rounded border border-zinc-900 bg-zinc-950 p-3 text-[10px] text-zinc-600">{JSON.stringify(attempt.routing_snapshot, null, 2)}</pre>
+          <div className="space-y-2 text-xs text-zinc-500"><p>External
+            ID: <code>{String(attempt.external_message_id ?? "Not assigned")}</code></p><p>Outcome
+            determinate: {String(attempt.outcome_determinate)}</p>{Boolean(attempt.error_message) && <p
+            className="text-red-400">{String(attempt.error_category)} / {String(attempt.error_code)}: {String(attempt.error_message)}</p>}
+          </div>
+        </div>
+      </div>)}</div>
+    </section>
+  </div>
+}

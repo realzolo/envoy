@@ -1,12 +1,84 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockClient } from "aws-sdk-client-mock";
-import { SESv2Client, SendEmailCommand } from "@aws-sdk/client-sesv2";
+import { SendEmailCommand, SESv2Client } from "@aws-sdk/client-sesv2";
 import { providerRegistry } from "@/modules/providers/registry";
 import type { CanonicalMessage, ProviderSendContext, ProviderType } from "@/modules/providers/contracts";
 
-const message:CanonicalMessage={deliveryId:"dlv_test",from:{name:"Envoy",email:"hello@example.com"},to:{email:"person@example.net"},subject:"Contract test",html:"<p>Hello</p>",text:"Hello",attachments:[],tags:{test:"contract"}};
-const contexts:Record<ProviderType,ProviderSendContext>={resend:{accountId:"pa_resend",config:{type:"resend",schemaVersion:1,apiBase:"https://api.resend.com"},secret:{type:"resend",apiKey:"re_test_key"},idempotencyKey:"idem-1"},ses:{accountId:"pa_ses",config:{type:"ses",schemaVersion:1,region:"us-east-1"},secret:{type:"ses",accessKeyId:"AKIATEST",secretAccessKey:"test-secret"}},sendgrid:{accountId:"pa_sendgrid",config:{type:"sendgrid",schemaVersion:1,apiBase:"https://api.sendgrid.com"},secret:{type:"sendgrid",apiKey:"SG.test-key"}},mailgun:{accountId:"pa_mailgun",config:{type:"mailgun",schemaVersion:1,region:"us",sendingDomain:"mg.example.com"},secret:{type:"mailgun",apiKey:"key-test-mailgun",webhookSigningKey:"signing-test"}},postmark:{accountId:"pa_postmark",config:{type:"postmark",schemaVersion:1,apiBase:"https://api.postmarkapp.com",messageStream:"outbound"},secret:{type:"postmark",serverToken:"postmark-test-token"}},mock:{accountId:"pa_mock",config:{type:"mock",schemaVersion:1,behavior:"deliver"},secret:{type:"mock",token:"local-mock"}}};
-const sesMock=mockClient(SESv2Client);
-beforeEach(()=>{sesMock.reset();sesMock.on(SendEmailCommand).resolves({MessageId:"ses-message-id"})});
-afterEach(()=>vi.unstubAllGlobals());
-describe.each(["resend","ses","sendgrid","mailgun","postmark","mock"] as ProviderType[])("%s outbound adapter",provider=>{it("accepts a canonical message and returns an external identifier",async()=>{if(provider==="resend")vi.stubGlobal("fetch",vi.fn().mockResolvedValue(new Response(JSON.stringify({id:"resend-message-id"}),{status:200,headers:{"content-type":"application/json"}})));if(provider==="sendgrid")vi.stubGlobal("fetch",vi.fn().mockResolvedValue(new Response(null,{status:202,headers:{"x-message-id":"sendgrid-message-id"}})));if(provider==="mailgun")vi.stubGlobal("fetch",vi.fn().mockResolvedValue(new Response(JSON.stringify({id:"mailgun-message-id",message:"Queued"}),{status:200,headers:{"content-type":"application/json"}})));if(provider==="postmark")vi.stubGlobal("fetch",vi.fn().mockResolvedValue(new Response(JSON.stringify({MessageID:"postmark-message-id",ErrorCode:0}),{status:200,headers:{"content-type":"application/json"}})));const result=await providerRegistry(provider).sender.send(message,contexts[provider]);expect(result.outcome).toBe("accepted");if(result.outcome==="accepted")expect(result.externalMessageId).toMatch(/message-id|mock_/)});it("declares routing-relevant capabilities",()=>{const capabilities=providerRegistry(provider).descriptor.capabilities;expect(typeof capabilities.nativeIdempotency).toBe("boolean");expect(capabilities.webhookSecurity.length).toBeGreaterThan(3);expect(Array.isArray(capabilities.eventTypes)).toBe(true)})});
+const message: CanonicalMessage = {
+  deliveryId: "dlv_test",
+  from: { name: "Envoy", email: "hello@example.com" },
+  to: { email: "person@example.net" },
+  subject: "Contract test",
+  html: "<p>Hello</p>",
+  text: "Hello",
+  attachments: [],
+  tags: { test: "contract" }
+};
+const contexts: Record<ProviderType, ProviderSendContext> = {
+  resend: {
+    accountId: "pa_resend",
+    config: { type: "resend", schemaVersion: 1, apiBase: "https://api.resend.com" },
+    secret: { type: "resend", apiKey: "re_test_key" },
+    idempotencyKey: "idem-1"
+  },
+  ses: {
+    accountId: "pa_ses",
+    config: { type: "ses", schemaVersion: 1, region: "us-east-1" },
+    secret: { type: "ses", accessKeyId: "AKIATEST", secretAccessKey: "test-secret" }
+  },
+  sendgrid: {
+    accountId: "pa_sendgrid",
+    config: { type: "sendgrid", schemaVersion: 1, apiBase: "https://api.sendgrid.com" },
+    secret: { type: "sendgrid", apiKey: "SG.test-key" }
+  },
+  mailgun: {
+    accountId: "pa_mailgun",
+    config: { type: "mailgun", schemaVersion: 1, region: "us", sendingDomain: "mg.example.com" },
+    secret: { type: "mailgun", apiKey: "key-test-mailgun", webhookSigningKey: "signing-test" }
+  },
+  postmark: {
+    accountId: "pa_postmark",
+    config: { type: "postmark", schemaVersion: 1, apiBase: "https://api.postmarkapp.com", messageStream: "outbound" },
+    secret: { type: "postmark", serverToken: "postmark-test-token" }
+  },
+  mock: {
+    accountId: "pa_mock",
+    config: { type: "mock", schemaVersion: 1, behavior: "deliver" },
+    secret: { type: "mock", token: "local-mock" }
+  }
+};
+const sesMock = mockClient(SESv2Client);
+beforeEach(() => {
+  sesMock.reset();
+  sesMock.on(SendEmailCommand).resolves({ MessageId: "ses-message-id" })
+});
+afterEach(() => vi.unstubAllGlobals());
+describe.each(["resend", "ses", "sendgrid", "mailgun", "postmark", "mock"] as ProviderType[])("%s outbound adapter", provider => {
+  it("accepts a canonical message and returns an external identifier", async () => {
+    if (provider === "resend") vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: "resend-message-id" }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    })));
+    if (provider === "sendgrid") vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, {
+      status: 202,
+      headers: { "x-message-id": "sendgrid-message-id" }
+    })));
+    if (provider === "mailgun") vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      id: "mailgun-message-id",
+      message: "Queued"
+    }), { status: 200, headers: { "content-type": "application/json" } })));
+    if (provider === "postmark") vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      MessageID: "postmark-message-id",
+      ErrorCode: 0
+    }), { status: 200, headers: { "content-type": "application/json" } })));
+    const result = await providerRegistry(provider).sender.send(message, contexts[provider]);
+    expect(result.outcome).toBe("accepted");
+    if (result.outcome === "accepted") expect(result.externalMessageId).toMatch(/message-id|mock_/)
+  });
+  it("declares routing-relevant capabilities", () => {
+    const capabilities = providerRegistry(provider).descriptor.capabilities;
+    expect(typeof capabilities.nativeIdempotency).toBe("boolean");
+    expect(capabilities.webhookSecurity.length).toBeGreaterThan(3);
+    expect(Array.isArray(capabilities.eventTypes)).toBe(true)
+  })
+});

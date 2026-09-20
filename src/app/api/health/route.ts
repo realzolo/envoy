@@ -19,6 +19,10 @@ export async function GET() {
       dependencies: { database: databaseTime.toISOString(), redis: redisStatus, pendingOutbox },
     });
   } catch (error) {
-    return Response.json({ name: "envoy", status: "degraded", error: error instanceof Error ? error.message : "Unknown dependency error" }, { status: 503 });
+    return Response.json({
+      name: "envoy",
+      status: "degraded",
+      error: error instanceof Error ? error.message : "Unknown dependency error"
+    }, { status: 503 });
   }
 }

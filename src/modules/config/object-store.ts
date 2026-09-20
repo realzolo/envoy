@@ -2,19 +2,64 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 
-export interface ObjectStore { put(key:string,data:Uint8Array,contentType:string):Promise<void>; get(key:string):Promise<Uint8Array> }
-class LocalObjectStore implements ObjectStore{
-  private root=resolve(join(process.cwd(),"var","objects"));
-  private path(key:string){const target=resolve(join(this.root,key));if(!target.startsWith(`${this.root}/`))throw new Error("Invalid object key");return target}
-  async put(key:string,data:Uint8Array){const path=this.path(key);await mkdir(dirname(path),{recursive:true});await writeFile(path,data)}
-  async get(key:string){return new Uint8Array(await readFile(this.path(key)))}
+export interface ObjectStore {
+  put(key: string, data: Uint8Array, contentType: string): Promise<void>;
+
+  get(key: string): Promise<Uint8Array>
 }
-class S3ObjectStore implements ObjectStore{
-  private client=new S3Client({region:process.env.OBJECT_STORAGE_REGION,endpoint:process.env.OBJECT_STORAGE_ENDPOINT,forcePathStyle:Boolean(process.env.OBJECT_STORAGE_ENDPOINT)});
-  private bucket=process.env.OBJECT_STORAGE_BUCKET??"";
-  constructor(){if(!this.bucket)throw new Error("OBJECT_STORAGE_BUCKET is required for the S3 object store")}
-  async put(key:string,data:Uint8Array,contentType:string){await this.client.send(new PutObjectCommand({Bucket:this.bucket,Key:key,Body:data,ContentType:contentType,ServerSideEncryption:"AES256"}))}
-  async get(key:string){const result=await this.client.send(new GetObjectCommand({Bucket:this.bucket,Key:key}));if(!result.Body)throw new Error("Object body is empty");return result.Body.transformToByteArray()}
+
+class LocalObjectStore implements ObjectStore {
+  private root = resolve(join(process.cwd(), "var", "objects"));
+
+  private path(key: string) {
+    const target = resolve(join(this.root, key));
+    if (!target.startsWith(`${this.root}/`)) throw new Error("Invalid object key");
+    return target
+  }
+
+  async put(key: string, data: Uint8Array) {
+    const path = this.path(key);
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, data)
+  }
+
+  async get(key: string) {
+    return new Uint8Array(await readFile(this.path(key)))
+  }
 }
-let instance:ObjectStore|undefined;
-export function objectStore(){instance??=process.env.OBJECT_STORAGE_DRIVER==="s3"?new S3ObjectStore():new LocalObjectStore();return instance}
+
+class S3ObjectStore implements ObjectStore {
+  private client = new S3Client({
+    region: process.env.OBJECT_STORAGE_REGION,
+    endpoint: process.env.OBJECT_STORAGE_ENDPOINT,
+    forcePathStyle: Boolean(process.env.OBJECT_STORAGE_ENDPOINT)
+  });
+  private bucket = process.env.OBJECT_STORAGE_BUCKET ?? "";
+
+  constructor() {
+    if (!this.bucket) throw new Error("OBJECT_STORAGE_BUCKET is required for the S3 object store")
+  }
+
+  async put(key: string, data: Uint8Array, contentType: string) {
+    await this.client.send(new PutObjectCommand({
+      Bucket: this.bucket,
+      Key: key,
+      Body: data,
+      ContentType: contentType,
+      ServerSideEncryption: "AES256"
+    }))
+  }
+
+  async get(key: string) {
+    const result = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: key }));
+    if (!result.Body) throw new Error("Object body is empty");
+    return result.Body.transformToByteArray()
+  }
+}
+
+let instance: ObjectStore | undefined;
+
+export function objectStore() {
+  instance ??= process.env.OBJECT_STORAGE_DRIVER === "s3" ? new S3ObjectStore() : new LocalObjectStore();
+  return instance
+}

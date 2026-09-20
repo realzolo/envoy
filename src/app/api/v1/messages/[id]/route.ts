@@ -25,6 +25,13 @@ export async function GET(
     recipientCount: message.recipient_count,
     acceptedAt: message.accepted_at.toISOString(),
     referenceId: message.reference_id,
-    deliveries: message.deliveries.map(delivery=>({id:delivery.id,recipient:delivery.recipient_email,lifecycle:delivery.lifecycle_status,engagement:delivery.engagement_status,compliance:delivery.compliance_status,updatedAt:delivery.updated_at.toISOString()})),
+    deliveries: message.deliveries.map(delivery => ({
+      id: delivery.id,
+      recipient: delivery.recipient_email,
+      lifecycle: delivery.lifecycle_status,
+      engagement: delivery.engagement_status,
+      compliance: delivery.compliance_status,
+      updatedAt: delivery.updated_at.toISOString()
+    })),
   });
 }

@@ -24,15 +24,28 @@ export async function POST(request: Request) {
       status: 401,
       detail: "A valid Envoy service credential is required.",
     });
-    await recordRequest({method:"POST",path:"/api/v1/messages",statusCode:401,durationMs:Date.now()-started});
+    await recordRequest({
+      method: "POST",
+      path: "/api/v1/messages",
+      statusCode: 401,
+      durationMs: Date.now() - started
+    });
     return response;
   }
 
   const rateLimit = await enforceRateLimit(identity.serviceId, identity.rateLimitPerMinute);
   if (!rateLimit.allowed) {
     return Response.json(
-      { type: "https://envoy.local/problems/rate-limit", title: "Rate limit exceeded", status: 429, detail: "Service request quota exceeded." },
-      { status: 429, headers: { "Retry-After": "60", "RateLimit-Limit": String(rateLimit.limit), "RateLimit-Remaining": "0" } },
+      {
+        type: "https://envoy.local/problems/rate-limit",
+        title: "Rate limit exceeded",
+        status: 429,
+        detail: "Service request quota exceeded."
+      },
+      {
+        status: 429,
+        headers: { "Retry-After": "60", "RateLimit-Limit": String(rateLimit.limit), "RateLimit-Remaining": "0" }
+      },
     );
   }
 
@@ -101,6 +114,13 @@ export async function POST(request: Request) {
       "RateLimit-Remaining": String(rateLimit.remaining),
     },
   });
-  await recordRequest({method:"POST",path:"/api/v1/messages",statusCode:202,durationMs:Date.now()-started,actor:`service:${identity.serviceId}`,details:{messageId:accepted.message.id,duplicate:accepted.duplicate}});
+  await recordRequest({
+    method: "POST",
+    path: "/api/v1/messages",
+    statusCode: 202,
+    durationMs: Date.now() - started,
+    actor: `service:${identity.serviceId}`,
+    details: { messageId: accepted.message.id, duplicate: accepted.duplicate }
+  });
   return response;
 }

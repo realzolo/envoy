@@ -1,1 +1,16 @@
-{"eventType":"Delivery","mail":{"timestamp":"2026-09-20T08:00:00.000Z","messageId":"ses_message_123","destination":["person@example.net"]},"delivery":{"timestamp":"2026-09-20T08:00:02.000Z","recipients":["person@example.net"]}}
+{
+  "eventType": "Delivery",
+  "mail": {
+    "timestamp": "2026-09-20T08:00:00.000Z",
+    "messageId": "ses_message_123",
+    "destination": [
+      "person@example.net"
+    ]
+  },
+  "delivery": {
+    "timestamp": "2026-09-20T08:00:02.000Z",
+    "recipients": [
+      "person@example.net"
+    ]
+  }
+}

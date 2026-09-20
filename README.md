@@ -1,17 +1,23 @@
 # Envoy
 
-Envoy is a provider-neutral email control plane and delivery data plane for internal products and services. Business services submit a template key, recipients, locale, variables, reference ID, and metadata. Envoy owns rendering, sender identity, provider routing, credentials, delivery state, inbound mail, suppressions, and canonical callbacks.
+Envoy is a provider-neutral email control plane and delivery data plane for internal products and services. Business
+services submit a template key, recipients, locale, variables, reference ID, and metadata. Envoy owns rendering, sender
+identity, provider routing, credentials, delivery state, inbound mail, suppressions, and canonical callbacks.
 
 ## Architecture
 
 - Next.js serves the internal Message API, provider event ingress, authentication, and the operations console.
-- A separate TypeScript worker runs delivery, event normalization, inbound processing, callbacks, reconciliation, and transactional outbox dispatch.
+- A separate TypeScript worker runs delivery, event normalization, inbound processing, callbacks, reconciliation, and
+  transactional outbox dispatch.
 - PostgreSQL is the only source of truth. Redis and BullMQ are scheduling infrastructure only.
-- Provider credentials are stored as envelope-encrypted database records. Every secret has an independent AES-256-GCM data key wrapped by the configured root KEK.
+- Provider credentials are stored as envelope-encrypted database records. Every secret has an independent AES-256-GCM
+  data key wrapped by the configured root KEK.
 - Templates are rendered by Envoy into final HTML and text. Providers never own business templates.
-- One logical delivery is created per recipient. Every provider call creates an immutable attempt with a complete routing decision snapshot.
+- One logical delivery is created per recipient. Every provider call creates an immutable attempt with a complete
+  routing decision snapshot.
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the domain model, failure semantics, provider setup, inbound pipeline, and security model.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the domain model, failure semantics, provider setup, inbound
+pipeline, and security model.
 
 ## Local setup
 
@@ -29,9 +35,12 @@ Open [http://localhost:3000](http://localhost:3000) and sign in with the develop
 - Email: `admin@envoy.local`
 - Password: `envoy`
 
-The seed creates one active Mock provider account. Real provider accounts and their write-only credentials are created in **Provider Accounts**; no provider key belongs in an environment file.
+The seed creates one active Mock provider account. Real provider accounts and their write-only credentials are created
+in **Provider Accounts**; no provider key belongs in an environment file.
 
-The web process and worker are intentionally separate. In production, run `pnpm start` and `pnpm worker` as independently scalable processes. Both require PostgreSQL and Redis; only the worker performs provider sends, event application, callbacks, and reconciliation.
+The web process and worker are intentionally separate. In production, run `pnpm start` and `pnpm worker` as
+independently scalable processes. Both require PostgreSQL and Redis; only the worker performs provider sends, event
+application, callbacks, and reconciliation.
 
 ## Message API
 
@@ -55,7 +64,9 @@ curl --request POST http://localhost:3000/api/v1/messages \
   }'
 ```
 
-The API returns `202 Accepted` after the message, recipient deliveries, and outbox records commit in one PostgreSQL transaction. The request contract rejects provider names, provider accounts, domains, scheduling options, and other provider-specific fields.
+The API returns `202 Accepted` after the message, recipient deliveries, and outbox records commit in one PostgreSQL
+transaction. The request contract rejects provider names, provider accounts, domains, scheduling options, and other
+provider-specific fields.
 
 Query status with the same service credential:
 
@@ -72,7 +83,8 @@ Each provider account receives an opaque endpoint:
 POST /api/provider-events/{provider}/{opaqueEndpointId}
 ```
 
-The HTTP path verifies the provider signature and replay window, stores the immutable raw event plus an outbox record in one transaction, and returns immediately. Workers normalize and apply canonical events asynchronously.
+The HTTP path verifies the provider signature and replay window, stores the immutable raw event plus an outbox record in
+one transaction, and returns immediately. Workers normalize and apply canonical events asynchronously.
 
 For a local inbound smoke test against the seeded Mock endpoint:
 
@@ -105,4 +117,6 @@ pnpm worker
 pnpm infra:down
 ```
 
-All provider credentials, webhook secrets, and callback signing secrets live in encrypted database envelopes. The environment contains root infrastructure trust only: database, Redis, the KEK, admin authentication, object storage, scanner connectivity, and worker tuning.
+All provider credentials, webhook secrets, and callback signing secrets live in encrypted database envelopes. The
+environment contains root infrastructure trust only: database, Redis, the KEK, admin authentication, object storage,
+scanner connectivity, and worker tuning.

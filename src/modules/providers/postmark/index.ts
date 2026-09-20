@@ -3,13 +3,134 @@ import { z } from "zod";
 import type { CanonicalEventType, ProviderModule } from "../contracts";
 import { accepted, checkedJson, decodeJson, event, header } from "../shared";
 
-const eventMap:Record<string,CanonicalEventType>={Delivery:"delivered",Bounce:"bounced",Open:"opened",Click:"clicked",SpamComplaint:"complained",SubscriptionChange:"unsubscribed",Inbound:"inbound.received"};
-const payloadSchema=z.object({RecordType:z.string(),MessageID:z.string().optional(),Recipient:z.string().optional(),DeliveredAt:z.string().optional(),BouncedAt:z.string().optional()}).passthrough();
-export const postmarkModule:ProviderModule={
-  descriptor:{type:"postmark",displayName:"Postmark",capabilities:{nativeIdempotency:false,inboundMode:"webhook-fetch",domainManagement:true,webhookSecurity:"Basic Auth, opaque URL, IP allowlist, schema validation",eventTypes:Object.keys(eventMap),attachments:true,scheduling:false}},
-  sender:{async send(message,context){if(context.config.type!=="postmark"||context.secret.type!=="postmark")throw new Error("Invalid Postmark configuration");const response=await fetch(`${context.config.apiBase}/email`,{method:"POST",headers:{"x-postmark-server-token":context.secret.serverToken,"content-type":"application/json"},body:JSON.stringify({From:`${message.from.name} <${message.from.email}>`,To:message.to.name?`${message.to.name} <${message.to.email}>`:message.to.email,ReplyTo:message.replyTo,Subject:message.subject,HtmlBody:message.html,TextBody:message.text,MessageStream:context.config.messageStream,Metadata:message.tags})});const body=await checkedJson(response);return accepted(body.MessageID,body);}},
-  webhook:{async verify(request,context,security){if(context.secret.type!=="postmark")throw new Error("Invalid Postmark credential");const allowed=Array.isArray(security.ipAllowlist)?security.ipAllowlist.map(String):[];const ipValid=!allowed.length||Boolean(request.remoteAddress&&allowed.includes(request.remoteAddress));const username=typeof security.username==="string"?security.username:context.secret.webhookUsername;const password=typeof security.password==="string"?security.password:context.secret.webhookPassword;const expected=username&&password?`Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`:"";const actual=header(request.headers,"authorization");const authValid=Boolean(expected)&&actual.length===expected.length&&timingSafeEqual(Buffer.from(actual),Buffer.from(expected));let parsed:unknown=null;let schemaValid=false;try{parsed=decodeJson(request.rawBody);schemaValid=payloadSchema.safeParse(parsed).success}catch{}const p=(parsed??{}) as Record<string,unknown>;return{valid:ipValid&&authValid&&schemaValid,replaySafe:true,providerEventId:typeof p.ID==="number"?String(p.ID):typeof p.MessageID==="string"?`${p.RecordType}:${p.MessageID}:${p.DeliveredAt??p.BouncedAt??""}`:undefined,nativeType:String(p.RecordType??"unknown"),parsed};},async normalize(verified){const p=verified.parsed as Record<string,unknown>;const type=eventMap[String(p.RecordType)];if(!type)return[];return[event({id:verified.providerEventId??crypto.randomUUID(),externalMessageId:typeof p.MessageID==="string"?p.MessageID:undefined,type,occurredAt:new Date(String(p.DeliveredAt??p.BouncedAt??p.ReceivedAt??new Date().toISOString())),recipient:typeof p.Recipient==="string"?p.Recipient:undefined})]}},
-  inbound:{async receive(verified){const p=verified.parsed as Record<string,unknown>;if(p.RecordType!=="Inbound")return null;const attachments=Array.isArray(p.Attachments)?p.Attachments.flatMap(item=>{const a=item as Record<string,unknown>;if(typeof a.Content!=="string")return[];return[{fileName:String(a.Name??"attachment"),contentType:String(a.ContentType??"application/octet-stream"),content:new Uint8Array(Buffer.from(a.Content,"base64")),contentId:typeof a.ContentID==="string"?a.ContentID:undefined}]}):[];return{externalMessageId:String(p.MessageID??verified.providerEventId??crypto.randomUUID()),messageId:typeof p.MessageID==="string"?p.MessageID:undefined,from:String(p.From??""),to:Array.isArray(p.ToFull)?p.ToFull.map(item=>String((item as Record<string,unknown>).Email??"")):String(p.To??"").split(",").filter(Boolean),cc:String(p.Cc??"").split(",").filter(Boolean),bcc:String(p.Bcc??"").split(",").filter(Boolean),subject:String(p.Subject??""),html:typeof p.HtmlBody==="string"?p.HtmlBody:undefined,text:typeof p.TextBody==="string"?p.TextBody:undefined,attachments,receivedAt:new Date(String(p.Date??new Date().toISOString()))}}},
-  reconciliation:{async reconcile(){return"unknown"}},
-  health:{async check(context){if(context.config.type!=="postmark"||context.secret.type!=="postmark")throw new Error("Invalid Postmark configuration");const response=await fetch(`${context.config.apiBase}/server`,{headers:{"x-postmark-server-token":context.secret.serverToken}});return{healthy:response.ok,details:{status:response.status}}}},
+const eventMap: Record<string, CanonicalEventType> = {
+  Delivery: "delivered",
+  Bounce: "bounced",
+  Open: "opened",
+  Click: "clicked",
+  SpamComplaint: "complained",
+  SubscriptionChange: "unsubscribed",
+  Inbound: "inbound.received"
+};
+const payloadSchema = z.object({
+  RecordType: z.string(),
+  MessageID: z.string().optional(),
+  Recipient: z.string().optional(),
+  DeliveredAt: z.string().optional(),
+  BouncedAt: z.string().optional()
+}).passthrough();
+export const postmarkModule: ProviderModule = {
+  descriptor: {
+    type: "postmark",
+    displayName: "Postmark",
+    capabilities: {
+      nativeIdempotency: false,
+      inboundMode: "webhook-fetch",
+      domainManagement: true,
+      webhookSecurity: "Basic Auth, opaque URL, IP allowlist, schema validation",
+      eventTypes: Object.keys(eventMap),
+      attachments: true,
+      scheduling: false
+    }
+  },
+  sender: {
+    async send(message, context) {
+      if (context.config.type !== "postmark" || context.secret.type !== "postmark") throw new Error("Invalid Postmark configuration");
+      const response = await fetch(`${context.config.apiBase}/email`, {
+        method: "POST",
+        headers: { "x-postmark-server-token": context.secret.serverToken, "content-type": "application/json" },
+        body: JSON.stringify({
+          From: `${message.from.name} <${message.from.email}>`,
+          To: message.to.name ? `${message.to.name} <${message.to.email}>` : message.to.email,
+          ReplyTo: message.replyTo,
+          Subject: message.subject,
+          HtmlBody: message.html,
+          TextBody: message.text,
+          MessageStream: context.config.messageStream,
+          Metadata: message.tags
+        })
+      });
+      const body = await checkedJson(response);
+      return accepted(body.MessageID, body);
+    }
+  },
+  webhook: {
+    async verify(request, context, security) {
+      if (context.secret.type !== "postmark") throw new Error("Invalid Postmark credential");
+      const allowed = Array.isArray(security.ipAllowlist) ? security.ipAllowlist.map(String) : [];
+      const ipValid = !allowed.length || Boolean(request.remoteAddress && allowed.includes(request.remoteAddress));
+      const username = typeof security.username === "string" ? security.username : context.secret.webhookUsername;
+      const password = typeof security.password === "string" ? security.password : context.secret.webhookPassword;
+      const expected = username && password ? `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}` : "";
+      const actual = header(request.headers, "authorization");
+      const authValid = Boolean(expected) && actual.length === expected.length && timingSafeEqual(Buffer.from(actual), Buffer.from(expected));
+      let parsed: unknown = null;
+      let schemaValid = false;
+      try {
+        parsed = decodeJson(request.rawBody);
+        schemaValid = payloadSchema.safeParse(parsed).success
+      } catch {
+      }
+      const p = (parsed ?? {}) as Record<string, unknown>;
+      return {
+        valid: ipValid && authValid && schemaValid,
+        replaySafe: true,
+        providerEventId: typeof p.ID === "number" ? String(p.ID) : typeof p.MessageID === "string" ? `${p.RecordType}:${p.MessageID}:${p.DeliveredAt ?? p.BouncedAt ?? ""}` : undefined,
+        nativeType: String(p.RecordType ?? "unknown"),
+        parsed
+      };
+    }, async normalize(verified) {
+      const p = verified.parsed as Record<string, unknown>;
+      const type = eventMap[String(p.RecordType)];
+      if (!type) return [];
+      return [event({
+        id: verified.providerEventId ?? crypto.randomUUID(),
+        externalMessageId: typeof p.MessageID === "string" ? p.MessageID : undefined,
+        type,
+        occurredAt: new Date(String(p.DeliveredAt ?? p.BouncedAt ?? p.ReceivedAt ?? new Date().toISOString())),
+        recipient: typeof p.Recipient === "string" ? p.Recipient : undefined
+      })]
+    }
+  },
+  inbound: {
+    async receive(verified) {
+      const p = verified.parsed as Record<string, unknown>;
+      if (p.RecordType !== "Inbound") return null;
+      const attachments = Array.isArray(p.Attachments) ? p.Attachments.flatMap(item => {
+        const a = item as Record<string, unknown>;
+        if (typeof a.Content !== "string") return [];
+        return [{
+          fileName: String(a.Name ?? "attachment"),
+          contentType: String(a.ContentType ?? "application/octet-stream"),
+          content: new Uint8Array(Buffer.from(a.Content, "base64")),
+          contentId: typeof a.ContentID === "string" ? a.ContentID : undefined
+        }]
+      }) : [];
+      return {
+        externalMessageId: String(p.MessageID ?? verified.providerEventId ?? crypto.randomUUID()),
+        messageId: typeof p.MessageID === "string" ? p.MessageID : undefined,
+        from: String(p.From ?? ""),
+        to: Array.isArray(p.ToFull) ? p.ToFull.map(item => String((item as Record<string, unknown>).Email ?? "")) : String(p.To ?? "").split(",").filter(Boolean),
+        cc: String(p.Cc ?? "").split(",").filter(Boolean),
+        bcc: String(p.Bcc ?? "").split(",").filter(Boolean),
+        subject: String(p.Subject ?? ""),
+        html: typeof p.HtmlBody === "string" ? p.HtmlBody : undefined,
+        text: typeof p.TextBody === "string" ? p.TextBody : undefined,
+        attachments,
+        receivedAt: new Date(String(p.Date ?? new Date().toISOString()))
+      }
+    }
+  },
+  reconciliation: {
+    async reconcile() {
+      return "unknown"
+    }
+  },
+  health: {
+    async check(context) {
+      if (context.config.type !== "postmark" || context.secret.type !== "postmark") throw new Error("Invalid Postmark configuration");
+      const response = await fetch(`${context.config.apiBase}/server`, { headers: { "x-postmark-server-token": context.secret.serverToken } });
+      return { healthy: response.ok, details: { status: response.status } }
+    }
+  },
 };

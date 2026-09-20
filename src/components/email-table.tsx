@@ -20,9 +20,9 @@ const statusOptions: Array<{ value: "all" | DeliveryStatus; label: string }> = [
 ];
 
 export function EmailTable({
-  records,
-  compact = false,
-}: {
+                             records,
+                             compact = false,
+                           }: {
   records: EmailRecord[];
   compact?: boolean;
 }) {
@@ -86,41 +86,41 @@ export function EmailTable({
         <div className="overflow-x-auto">
           <table className="w-full min-w-[760px] border-collapse text-left">
             <thead>
-              <tr className="border-b border-zinc-800/90 text-[11px] text-zinc-600">
-                <th className="px-4 py-3 font-medium">Recipient</th>
-                <th className="px-4 py-3 font-medium">Subject</th>
-                <th className="px-4 py-3 font-medium">Product</th>
-                <th className="px-4 py-3 font-medium">Status</th>
-                <th className="px-4 py-3 text-right font-medium">Time</th>
-              </tr>
+            <tr className="border-b border-zinc-800/90 text-[11px] text-zinc-600">
+              <th className="px-4 py-3 font-medium">Recipient</th>
+              <th className="px-4 py-3 font-medium">Subject</th>
+              <th className="px-4 py-3 font-medium">Product</th>
+              <th className="px-4 py-3 font-medium">Status</th>
+              <th className="px-4 py-3 text-right font-medium">Time</th>
+            </tr>
             </thead>
             <tbody>
-              {filtered.slice(0, compact ? 5 : undefined).map((email) => (
-                <tr
-                  key={email.id}
-                  className="group border-b border-zinc-900 text-sm last:border-0 hover:bg-zinc-900/40"
-                >
-                  <td className="px-4 py-3.5">
-                    <Link href={`/emails/${email.id}`} className="block">
+            {filtered.slice(0, compact ? 5 : undefined).map((email) => (
+              <tr
+                key={email.id}
+                className="group border-b border-zinc-900 text-sm last:border-0 hover:bg-zinc-900/40"
+              >
+                <td className="px-4 py-3.5">
+                  <Link href={`/emails/${email.id}`} className="block">
                       <span className="font-medium text-zinc-300 transition group-hover:text-white">
                         {email.recipient}
                       </span>
-                    </Link>
-                  </td>
-                  <td className="max-w-xs px-4 py-3.5">
-                    <Link href={`/emails/${email.id}`} className="block truncate text-zinc-400 group-hover:text-zinc-200">
-                      {email.subject}
-                    </Link>
-                  </td>
-                  <td className="px-4 py-3.5 text-zinc-500">{email.product}</td>
-                  <td className="px-4 py-3.5">
-                    <StatusPill status={email.status} />
-                  </td>
-                  <td className="px-4 py-3.5 text-right text-xs text-zinc-600">
-                    {email.relativeTime}
-                  </td>
-                </tr>
-              ))}
+                  </Link>
+                </td>
+                <td className="max-w-xs px-4 py-3.5">
+                  <Link href={`/emails/${email.id}`} className="block truncate text-zinc-400 group-hover:text-zinc-200">
+                    {email.subject}
+                  </Link>
+                </td>
+                <td className="px-4 py-3.5 text-zinc-500">{email.product}</td>
+                <td className="px-4 py-3.5">
+                  <StatusPill status={email.status}/>
+                </td>
+                <td className="px-4 py-3.5 text-right text-xs text-zinc-600">
+                  {email.relativeTime}
+                </td>
+              </tr>
+            ))}
             </tbody>
           </table>
         </div>
