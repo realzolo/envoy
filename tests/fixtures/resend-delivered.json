@@ -1,0 +1,1 @@
+{"type":"email.delivered","created_at":"2026-09-20T08:00:00.000Z","data":{"email_id":"re_message_123","from":"Envoy <hello@example.com>","to":["person@example.net"],"subject":"Fixture message"}}

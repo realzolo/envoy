@@ -4,24 +4,57 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:all": "concurrently -k -n web,worker -c blue,green \"next dev\" \"tsx watch src/worker/index.ts\"",
+    "worker": "tsx src/worker/index.ts",
+    "worker:dev": "tsx watch src/worker/index.ts",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "typecheck": "next typegen && tsc --noEmit",
+    "test": "vitest run",
+    "infra:up": "docker compose up -d --wait",
+    "infra:down": "docker compose down",
+    "db:migrate": "tsx scripts/migrate.ts",
+    "db:seed": "tsx scripts/seed.ts",
+    "db:setup": "pnpm db:migrate && pnpm db:seed"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1136.0",
+    "@aws-sdk/client-sesv2": "^3.1136.0",
+    "@aws-sdk/client-sts": "^3.1136.0",
+    "@aws-sdk/credential-providers": "^3.1136.0",
+    "@next/env": "16.3.5",
+    "bullmq": "^6.3.8",
+    "handlebars": "^4.7.9",
+    "ioredis": "^6.0.0",
+    "jose": "^6.2.12",
+    "lucide-react": "^1.47.0",
+    "mailparser": "^3.9.28",
     "next": "16.3.5",
+    "pg": "^8.23.0",
     "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react-dom": "19.2.8",
+    "resend": "^6.28.1",
+    "sanitize-html": "^2.17.7",
+    "svix": "^2.5.0",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
-    "@types/node": "^20",
+    "@types/mailparser": "^3.4.6",
+    "@types/node": "^24.13.6",
+    "@types/pg": "^8.23.1",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@types/sanitize-html": "^2.16.1",
+    "aws-sdk-client-mock": "^4.1.0",
+    "concurrently": "^10.0.5",
     "eslint": "^9",
     "eslint-config-next": "16.3.5",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "tsx": "^4.23.13",
+    "typescript": "^5",
+    "vitest": "^5.0.1"
   },
   "packageManager": "pnpm@10.33.0"
 }

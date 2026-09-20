@@ -1,0 +1,8 @@
+import type { Metadata } from "next";
+import Link from "next/link";
+import { notFound } from "next/navigation";
+import { ArrowLeft } from "lucide-react";
+import { TemplateEditor } from "@/components/template-editor";
+import { adminData, getTemplate } from "@/modules/admin/queries";
+export async function generateMetadata({params}:{params:Promise<{id:string}>}):Promise<Metadata>{const id=(await params).id;if(id==="new")return{title:"New template"};const item=await getTemplate(id);return{title:item?.name??"Template"}}
+export default async function TemplatePage({params}:{params:Promise<{id:string}>}){const id=(await params).id;const [template,data]=await Promise.all([id==="new"?null:getTemplate(id),adminData()]);if(id!=="new"&&!template)notFound();const editable=template?{...template,productId:template.productId}:{key:"",name:"New template",description:"",category:"transactional",subject:"",html:"<!doctype html><html><body><h1>Hello {{name}}</h1></body></html>",text:"Hello {{name}}",schema:{name:"string"},sampleData:{name:"Alex"},product:""};return <div className="space-y-6"><div><Link href="/templates" className="mb-5 inline-flex items-center gap-1.5 text-xs text-zinc-600 hover:text-zinc-300"><ArrowLeft size={13}/>Back to templates</Link><div className="border-b border-zinc-800 pb-6"><h1 className="text-xl font-medium text-zinc-50">{template?.name??"New template"}</h1><p className="mt-1.5 text-sm text-zinc-600">{template?.description??"Create a provider-neutral template rendered by Envoy."}</p></div></div><TemplateEditor template={editable} products={(data.products as Array<{id:string;name:string}>).map(p=>({id:p.id,name:p.name}))}/></div>}
