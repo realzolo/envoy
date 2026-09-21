@@ -1,7 +1,6 @@
-import type { DeliveryStatus, EmailRecord, TemplateRecord } from "@/lib/types";
+import type { DeliveryStatus, EmailRecord } from "@/lib/types";
 import { providerDescriptors } from "@/modules/providers/registry";
 import { query } from "@/server/database";
-import { renderTemplate } from "@/server/template-renderer";
 
 function relative(date: Date) {
   const seconds = Math.max(0, Math.floor((Date.now() - date.getTime()) / 1000));
@@ -23,29 +22,23 @@ type EmailRow = {
   compliance_status: string;
   accepted_at: Date;
   reference_id: string | null;
-  variables: Record<string, unknown>;
-  subject_template: string;
-  template_key: string;
+  subject: string;
+  category: string;
   product_name: string;
   from_name: string;
   from_local_part: string;
   domain: string;
   external_message_id: string | null
 };
-const emailSelect = `SELECT d.id AS delivery_id,d.recipient_email,d.recipient_name,d.lifecycle_status,d.compliance_status,d.engagement_status,d.message_id,d.current_attempt_id,m.accepted_at,m.reference_id,m.variables,tv.subject_template,t.key AS template_key,p.name AS product_name,sp.from_name,sp.from_local_part,sd.domain,da.external_message_id FROM deliveries d JOIN messages m ON m.id=d.message_id JOIN products p ON p.id=m.product_id JOIN templates t ON t.id=m.template_id JOIN template_versions tv ON tv.id=m.template_version_id JOIN sender_profiles sp ON sp.id=m.sender_profile_id JOIN sending_domains sd ON sd.id=sp.sending_domain_id LEFT JOIN delivery_attempts da ON da.id=d.current_attempt_id`;
+const emailSelect = `SELECT d.id AS delivery_id,d.recipient_email,d.recipient_name,d.lifecycle_status,d.compliance_status,d.engagement_status,d.message_id,d.current_attempt_id,m.accepted_at,m.reference_id,m.subject,m.message_category AS category,p.name AS product_name,sp.from_name,sp.from_local_part,sd.domain,da.external_message_id FROM deliveries d JOIN messages m ON m.id=d.message_id JOIN products p ON p.id=m.product_id JOIN sender_profiles sp ON sp.id=m.sender_profile_id JOIN sending_domains sd ON sd.id=sp.sending_domain_id LEFT JOIN delivery_attempts da ON da.id=d.current_attempt_id`;
 
 function mapEmail(row: EmailRow): EmailRecord {
-  const subject = renderTemplate({
-    subjectTemplate: row.subject_template,
-    htmlTemplate: "",
-    textTemplate: ""
-  }, row.variables).subject;
   return {
     id: row.delivery_id,
     recipient: row.recipient_email,
     recipientName: row.recipient_name ?? undefined,
-    subject,
-    template: row.template_key,
+    subject: row.subject,
+    category: row.category,
     product: row.product_name,
     from: `${row.from_name} <${row.from_local_part}@${row.domain}>`,
     status: (row.compliance_status === "suppressed" ? "suppressed" : row.lifecycle_status) as DeliveryStatus,
@@ -81,56 +74,19 @@ export async function getDeliveryDetail(id: string) {
   }
 }
 
-export async function listTemplates(): Promise<Array<TemplateRecord & {
-  productId: string;
-  html: string;
-  text: string;
-  sampleData: Record<string, unknown>;
-  schema: Record<string, string>;
-  status: string;
-  category: string
-}>> {
-  const rows = (await query<{
-    id: string;
-    product_id: string;
-    key: string;
-    name: string;
-    description: string;
-    category: string;
-    product: string;
-    version: number;
-    status: string;
-    subject_template: string;
-    html_template: string;
-    text_template: string;
-    variables_schema: Record<string, string>;
-    sample_data: Record<string, unknown>;
-    updated_at: Date
-  }>(`SELECT t.id,t.product_id,t.key,t.name,t.description,t.category,p.name AS product,tv.version,tv.status,tv.subject_template,tv.html_template,tv.text_template,tv.variables_schema,tv.sample_data,t.updated_at FROM templates t JOIN products p ON p.id=t.product_id JOIN LATERAL(SELECT * FROM template_versions WHERE template_id=t.id ORDER BY (status='published') DESC,version DESC LIMIT 1)tv ON true ORDER BY t.updated_at DESC`)).rows;
-  const accents = ["blue", "green", "violet", "amber"] as const;
-  return rows.map((row, index) => ({
-    id: row.id,
-    productId: row.product_id,
-    key: row.key,
-    name: row.name,
-    description: row.description,
-    category: row.category,
-    subject: row.subject_template,
-    product: row.product,
-    version: row.version,
-    status: row.status,
-    updatedAt: relative(row.updated_at),
-    accent: accents[index % accents.length],
-    variables: Object.keys(row.variables_schema),
-    html: row.html_template,
-    text: row.text_template,
-    sampleData: row.sample_data,
-    schema: row.variables_schema
-  }))
-}
-
-export async function getTemplate(id: string) {
-  return (await listTemplates()).find(item => item.id === id) ?? null
+export async function messageComposerData() {
+  const [services, senders] = await Promise.all([
+    query<{ id: string; name: string; product: string; product_id: string }>(`SELECT s.id,s.name,p.name AS product,p.id AS product_id
+      FROM services s JOIN products p ON p.id=s.product_id
+      WHERE s.status='active' AND p.status='active'
+      ORDER BY p.name,s.name`),
+    query<{ name: string; product_id: string; category: string; from_address: string }>(`SELECT sp.name,sp.product_id,sp.message_category AS category,
+      sp.from_name||' <'||sp.from_local_part||'@'||sd.domain||'>' AS from_address
+      FROM sender_profiles sp JOIN sending_domains sd ON sd.id=sp.sending_domain_id
+      WHERE sp.status='active' AND sd.status='active'
+      ORDER BY sp.name`)
+  ]);
+  return { services: services.rows, senders: senders.rows }
 }
 
 export async function dashboardData() {
@@ -176,14 +132,13 @@ export async function dashboardData() {
 }
 
 export async function adminData() {
-  const [products, services, templates, providers, domains, senders, policies, credentials, webhooks, callbacks, rawEvents, canonicalEvents, suppressions, inbound, inboundRoutes, audit, revisions, settings] = await Promise.all([
+  const [products, services, providers, domains, senders, policies, credentials, webhooks, callbacks, rawEvents, canonicalEvents, suppressions, inbound, inboundRoutes, audit, revisions, settings] = await Promise.all([
     query("SELECT id,name,slug,status FROM products ORDER BY name"),
     query("SELECT s.id,s.name,s.status,p.name AS product,p.id AS product_id FROM services s JOIN products p ON p.id=s.product_id ORDER BY p.name,s.name"),
-    query("SELECT id,key,name,product_id FROM templates ORDER BY key"),
     query("SELECT id,type,name,status,region,public_config,config_revision,coalesce(health->>'status','unknown') AS health,quota,created_at FROM provider_accounts ORDER BY name"),
     query(`SELECT sd.id,sd.domain,sd.region,sd.inbound_enabled,sd.status,json_agg(json_build_object('id',pi.id,'accountId',pa.id,'account',pa.name,'type',pa.type,'status',pi.status,'externalId',pi.external_identity_id,'dnsRecords',pi.dns_records,'lastCheckedAt',pi.last_checked_at) ORDER BY pa.name)FILTER(WHERE pi.id IS NOT NULL) AS identities FROM sending_domains sd LEFT JOIN provider_identities pi ON pi.sending_domain_id=sd.id LEFT JOIN provider_accounts pa ON pa.id=pi.provider_account_id GROUP BY sd.id ORDER BY sd.domain`),
     query(`SELECT sp.id,sp.name,sp.from_name,sp.from_local_part,sp.reply_to,sp.message_category,sp.status,p.name AS product,p.id AS product_id,sd.domain,sd.id AS domain_id FROM sender_profiles sp JOIN products p ON p.id=sp.product_id JOIN sending_domains sd ON sd.id=sp.sending_domain_id ORDER BY p.name,sp.name`),
-    query(`SELECT rp.id,rp.name,rp.priority,rp.status,p.name AS product,s.name AS service,t.key AS template,rp.message_category,rp.destination_region,json_agg(json_build_object('id',rt.id,'accountId',pa.id,'account',pa.name,'type',pa.type,'identityId',pi.id,'domain',sd.domain,'priority',rt.priority,'weight',rt.weight,'rateLimit',rt.rate_limit_per_minute,'status',rt.status,'circuitOpenUntil',rt.circuit_open_until)ORDER BY rt.priority)FILTER(WHERE rt.id IS NOT NULL) AS targets FROM routing_policies rp LEFT JOIN products p ON p.id=rp.product_id LEFT JOIN services s ON s.id=rp.service_id LEFT JOIN templates t ON t.id=rp.template_id LEFT JOIN routing_targets rt ON rt.policy_id=rp.id LEFT JOIN provider_accounts pa ON pa.id=rt.provider_account_id LEFT JOIN provider_identities pi ON pi.id=rt.provider_identity_id LEFT JOIN sending_domains sd ON sd.id=pi.sending_domain_id GROUP BY rp.id,p.name,s.name,t.key ORDER BY rp.priority,rp.name`),
+    query(`SELECT rp.id,rp.name,rp.priority,rp.status,p.name AS product,s.name AS service,rp.message_category,rp.destination_region,json_agg(json_build_object('id',rt.id,'accountId',pa.id,'account',pa.name,'type',pa.type,'identityId',pi.id,'domain',sd.domain,'priority',rt.priority,'weight',rt.weight,'rateLimit',rt.rate_limit_per_minute,'status',rt.status,'circuitOpenUntil',rt.circuit_open_until)ORDER BY rt.priority)FILTER(WHERE rt.id IS NOT NULL) AS targets FROM routing_policies rp LEFT JOIN products p ON p.id=rp.product_id LEFT JOIN services s ON s.id=rp.service_id LEFT JOIN routing_targets rt ON rt.policy_id=rp.id LEFT JOIN provider_accounts pa ON pa.id=rt.provider_account_id LEFT JOIN provider_identities pi ON pi.id=rt.provider_identity_id LEFT JOIN sending_domains sd ON sd.id=pi.sending_domain_id GROUP BY rp.id,p.name,s.name ORDER BY rp.priority,rp.name`),
     query(`SELECT c.id,c.key_prefix,c.status,c.valid_from,c.valid_to,c.last_used_at,s.name AS service,s.id AS service_id,p.name AS product FROM service_credentials c JOIN services s ON s.id=c.service_id JOIN products p ON p.id=s.product_id ORDER BY c.created_at DESC`),
     query(`SELECT e.id,e.opaque_token,e.status,e.expected_topic_arn,e.ip_allowlist,e.created_at,pa.name AS account,pa.type FROM provider_webhook_endpoints e JOIN provider_accounts pa ON pa.id=e.provider_account_id ORDER BY e.created_at DESC`),
     query(`SELECT e.id,e.name,e.url,e.status,e.subscribed_events,s.name AS service,p.name AS product,count(d.id)FILTER(WHERE d.status='dead_letter') AS dead_letters FROM callback_endpoints e JOIN services s ON s.id=e.service_id JOIN products p ON p.id=s.product_id LEFT JOIN callback_deliveries d ON d.endpoint_id=e.id GROUP BY e.id,s.name,p.name ORDER BY e.created_at DESC`),
@@ -199,7 +154,6 @@ export async function adminData() {
   return {
     products: products.rows,
     services: services.rows,
-    templates: templates.rows,
     providers: providers.rows,
     domains: domains.rows,
     senders: senders.rows,

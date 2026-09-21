@@ -19,7 +19,7 @@ async function addCallbacks(client: PoolClient, delivery: {
   reference_id: string | null;
   recipient_email: string;
   product: string;
-  template_key: string;
+  category: string;
   lifecycle_status: string;
   engagement_status: string;
   compliance_status: string
@@ -40,7 +40,7 @@ async function addCallbacks(client: PoolClient, delivery: {
         referenceId: delivery.reference_id,
         recipient: delivery.recipient_email,
         product: delivery.product,
-        template: delivery.template_key,
+        category: delivery.category,
         lifecycle: delivery.lifecycle_status,
         engagement: delivery.engagement_status,
         compliance: delivery.compliance_status
@@ -97,11 +97,11 @@ export async function applyCanonicalEvent(providerAccountId: string, rawEventId:
       reference_id: string | null;
       recipient_email: string;
       product: string;
-      template_key: string;
+      category: string;
       lifecycle_status: string;
       engagement_status: string;
       compliance_status: string
-    }>(`SELECT d.id,d.message_id,m.service_id,m.product_id,m.reference_id,d.recipient_email,p.name AS product,t.key AS template_key,d.lifecycle_status,d.engagement_status,d.compliance_status FROM deliveries d JOIN messages m ON m.id=d.message_id JOIN products p ON p.id=m.product_id JOIN templates t ON t.id=m.template_id WHERE d.id=$1`, [attempt.rows[0].delivery_id])).rows[0];
+    }>(`SELECT d.id,d.message_id,m.service_id,m.product_id,m.reference_id,d.recipient_email,p.name AS product,m.message_category AS category,d.lifecycle_status,d.engagement_status,d.compliance_status FROM deliveries d JOIN messages m ON m.id=d.message_id JOIN products p ON p.id=m.product_id WHERE d.id=$1`, [attempt.rows[0].delivery_id])).rows[0];
     if (delivery) {
       await applySuppression(client, delivery, event);
       await addCallbacks(client, delivery, eventId, event)
@@ -130,11 +130,11 @@ export async function applySuppressedDelivery(deliveryId: string) {
       reference_id: string | null;
       recipient_email: string;
       product: string;
-      template_key: string;
+      category: string;
       lifecycle_status: string;
       engagement_status: string;
       compliance_status: string
-    }>(`SELECT d.id,d.message_id,m.service_id,m.product_id,m.reference_id,d.recipient_email,p.name AS product,t.key AS template_key,d.lifecycle_status,d.engagement_status,d.compliance_status FROM deliveries d JOIN messages m ON m.id=d.message_id JOIN products p ON p.id=m.product_id JOIN templates t ON t.id=m.template_id WHERE d.id=$1`, [deliveryId])).rows[0];
+    }>(`SELECT d.id,d.message_id,m.service_id,m.product_id,m.reference_id,d.recipient_email,p.name AS product,m.message_category AS category,d.lifecycle_status,d.engagement_status,d.compliance_status FROM deliveries d JOIN messages m ON m.id=d.message_id JOIN products p ON p.id=m.product_id WHERE d.id=$1`, [deliveryId])).rows[0];
     if (delivery) await addCallbacks(client, delivery, eventId, {
       id: eventId,
       type: "suppressed",

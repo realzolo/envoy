@@ -9,6 +9,7 @@ const statusStyles: Record<DeliveryStatus, string> = {
   unknown: "border-amber-500/20 bg-amber-500/10 text-amber-300",
   bounced: "border-red-500/20 bg-red-500/10 text-red-400",
   failed: "border-red-500/20 bg-red-500/10 text-red-400",
+  canceled: "border-zinc-700 bg-zinc-900 text-zinc-500",
   suppressed: "border-violet-500/20 bg-violet-500/10 text-violet-300",
 };
 
@@ -21,6 +22,7 @@ const statusLabels: Record<DeliveryStatus, string> = {
   unknown: "Unknown",
   bounced: "Bounced",
   failed: "Failed",
+  canceled: "Canceled",
   suppressed: "Suppressed",
 };
 

@@ -1,7 +1,7 @@
 import { createMessageSchema, type ProblemDetails } from "@/lib/contracts";
 import { authenticateService } from "@/server/auth";
 import { enforceRateLimit } from "@/server/redis";
-import { acceptMessage, IdempotencyConflictError, MessageValidationError } from "@/modules/core/message/service";
+import { acceptMessage, decodeCursor, IdempotencyConflictError, listMessages, MessageValidationError } from "@/modules/core/message/service";
 import { recordRequest } from "@/server/request-log";
 
 export const runtime = "nodejs";
@@ -11,6 +11,52 @@ function problem(body: ProblemDetails) {
     status: body.status,
     headers: { "content-type": "application/problem+json" },
   });
+}
+
+export async function GET(request: Request) {
+  const started = Date.now();
+  const identity = await authenticateService(request);
+  if (!identity) return problem({
+    type: "https://envoy.local/problems/unauthorized",
+    title: "Unauthorized",
+    status: 401,
+    detail: "A valid Envoy service credential is required.",
+  });
+  const url = new URL(request.url);
+  const rawLimit = Number(url.searchParams.get("limit") ?? "50");
+  const rawCursor = url.searchParams.get("cursor");
+  const cursor = decodeCursor(rawCursor);
+  const status = url.searchParams.get("status");
+  if (!Number.isSafeInteger(rawLimit) || rawLimit < 1 || rawLimit > 100 || (rawCursor && !cursor)) {
+    return problem({
+      type: "https://envoy.local/problems/invalid-query",
+      title: "Invalid query",
+      status: 400,
+      detail: "limit must be between 1 and 100 and cursor must be a valid Envoy cursor.",
+    });
+  }
+  if (status && !["in_progress", "delivered", "completed", "canceled"].includes(status)) {
+    return problem({
+      type: "https://envoy.local/problems/invalid-query",
+      title: "Invalid query",
+      status: 400,
+      detail: "status is not a supported message status.",
+    });
+  }
+  const result = await listMessages(identity.serviceId, {
+    limit: rawLimit,
+    cursor,
+    status,
+    referenceId: url.searchParams.get("referenceId"),
+  });
+  await recordRequest({
+    method: "GET",
+    path: "/api/v1/messages",
+    statusCode: 200,
+    durationMs: Date.now() - started,
+    actor: `service:${identity.serviceId}`,
+  });
+  return Response.json(result);
 }
 
 export async function POST(request: Request) {

@@ -6,6 +6,10 @@ Business services authenticate with service-scoped credentials and know nothing 
 request and callback contracts contain no provider-specific fields. Provider SDKs and native payloads are confined to
 modules under `src/modules/providers`.
 
+Business services own content definitions, localization, and rendering. They submit the final subject, HTML, and/or
+plain text plus a stable message category. Envoy persists only the resulting delivery payload for operations and
+retention; it has no business content registry, versioning model, or rendering engine.
+
 The core domain imports only `CanonicalMessage`, `CanonicalEvent`, and `CanonicalProviderError`. A provider module
 exposes a descriptor, capabilities, and narrow ports for sending, webhook processing, identity management, inbound mail,
 suppression synchronization, reconciliation, and health checks.
@@ -22,7 +26,7 @@ bucket.
 
 ## Routing
 
-The routing engine evaluates product, service, template, category, and destination region. It removes targets whose
+The routing engine evaluates product, service, category, and destination region. It removes targets whose
 provider account is disabled or unhealthy, whose identity is not verified, whose circuit is open, or whose quota or
 account/identity rate limit is exhausted. It then selects the lowest priority tier and performs deterministic weighted
 selection.
@@ -49,7 +53,7 @@ acknowledgement before manually retrying an unknown delivery.
 
 Delivery facts are independent dimensions:
 
-- lifecycle: `queued`, `submitting`, `accepted`, `deferred`, `delivered`, `bounced`, `failed`, `unknown`;
+- lifecycle: `queued`, `submitting`, `accepted`, `deferred`, `delivered`, `bounced`, `failed`, `unknown`, `canceled`;
 - engagement: `unopened`, `opened`, `clicked`;
 - compliance: `clean`, `complained`, `unsubscribed`, `suppressed`.
 
@@ -136,13 +140,24 @@ supported only as an encrypted fallback.
 
 ## Canonical callbacks
 
-Callbacks contain Envoy message, delivery, inbound, product, template, and recipient identifiers. They never expose
+Callbacks contain Envoy message, delivery, inbound, product, category, and recipient identifiers. They never expose
 provider account IDs, native event names, or provider payloads. Requests are signed as
 `HMAC-SHA256(timestamp + "." + body)` and retried with exponential backoff. Exhausted callbacks enter the dead-letter
 state and can be replayed from the console.
 
 Consumers should reject stale timestamps, compare signatures in constant time, and deduplicate on the stable
 `x-envoy-id` header. Callback delivery is at least once.
+
+## Service API
+
+The versioned service API is discovered at `/api/v1` and described by `/api/v1/openapi.json`. A service credential is
+scoped to one product and service. Ownership filters are applied to every message, delivery, event, inbound message,
+and suppression operation.
+
+Message acceptance is asynchronous and idempotent. A successful request commits the message, one delivery per
+recipient, and durable outbox work before returning `202`. The API also exposes cursor-paginated message, delivery,
+event, and inbound collections; logical sender discovery; product suppression management; pre-provider cancellation;
+and controlled retry. An `unknown` delivery can only be retried when the caller explicitly acknowledges duplicate risk.
 
 ## Operational recovery
 

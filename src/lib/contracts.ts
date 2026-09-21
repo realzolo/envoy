@@ -1,11 +1,13 @@
 import { z } from "zod";
 
 export const createMessageSchema = z.object({
-  template: z
+  category: z
     .string()
-    .min(3)
-    .max(120)
-    .regex(/^[a-z0-9]+(?:[.-][a-z0-9]+)*$/, "template must be a stable lowercase key"),
+    .min(2)
+    .max(80)
+    .regex(/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/, "category must be a stable lowercase key")
+    .default("transactional"),
+  senderProfile: z.string().trim().min(1).max(120).optional(),
   to: z
     .array(
       z.object({
@@ -15,19 +17,42 @@ export const createMessageSchema = z.object({
     )
     .min(1)
     .max(50),
-  locale: z.string().regex(/^[a-z]{2}(?:-[A-Z]{2})?$/).default("en-US"),
-  variables: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()])),
+  subject: z.string().trim().min(1).max(998),
+  html: z.string().max(2_000_000).optional(),
+  text: z.string().max(2_000_000).optional(),
+  replyTo: z.string().email().optional(),
+  tags: z.record(z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/), z.string().max(256))
+    .refine(value => Object.keys(value).length <= 20, "tags must contain at most 20 entries")
+    .optional(),
   referenceId: z.string().trim().min(1).max(160).optional(),
   metadata: z.record(z.string(), z.string().max(500)).optional(),
-}).strict();
+}).strict().refine(input => Boolean(input.html || input.text), {
+  message: "At least one of html or text is required",
+  path: ["html"]
+});
 
 export type CreateMessageInput = z.infer<typeof createMessageSchema>;
+
+export const retryMessageSchema = z.object({
+  acknowledgeDuplicateRisk: z.boolean().default(false),
+}).strict();
+
+export const createSuppressionSchema = z.object({
+  email: z.string().email(),
+  scope: z.enum(["product", "list"]).default("product"),
+  listId: z.string().trim().min(1).max(160).optional(),
+  reason: z.string().trim().min(1).max(240),
+  expiresAt: z.string().datetime({ offset: true }).optional(),
+}).strict().refine(input => input.scope !== "list" || Boolean(input.listId), {
+  message: "listId is required for list suppressions",
+  path: ["listId"],
+});
 
 export type AcceptedMessage = {
   id: string;
   status: "queued";
   product: string;
-  template: string;
+  category: string;
   recipientCount: number;
   acceptedAt: string;
   referenceId?: string;

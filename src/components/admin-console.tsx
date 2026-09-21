@@ -155,13 +155,13 @@ function Providers({ data }: { data: Data }) {
       className={label}>Account name<input name="name" required className={input}/></label><label className={label}>Region<input
       name="region" required defaultValue="us-east-1" className={input}/></label><label
       className={`${label} md:col-span-3`}>Public configuration JSON<textarea name="publicConfig" rows={3}
-                                                                              defaultValue={'{"behavior":"deliver"}'}
+                                                                              defaultValue="{}"
                                                                               className={`${input} h-auto py-2 font-mono text-xs`}/></label><label
       className={`${label} md:col-span-3`}>Credential JSON<textarea name="secret" rows={3}
-                                                                    defaultValue={'{"token":"local-mock-token"}'}
+                                                                    defaultValue={'{"apiKey":""}'}
                                                                     className={`${input} h-auto py-2 font-mono text-xs`}/></label><label
       className={`${label} md:col-span-3`}>Webhook security JSON<textarea name="webhookSecurity" rows={3}
-                                                                          defaultValue={'{"token":"local-webhook-token"}'}
+                                                                          defaultValue={'{"signingSecret":""}'}
                                                                           className={`${input} h-auto py-2 font-mono text-xs`}/></label><label
       className={label}>Expected SNS Topic ARN (SES)<input name="expectedTopicArn" className={input}/></label><label
       className={label}>Webhook IP allowlist<input name="ipAllowlist" placeholder="203.0.113.10, 203.0.113.11"
@@ -403,7 +403,6 @@ function Routing({ data }: { data: Data }) {
         name: d.get("name"),
         productId: d.get("productId"),
         serviceId: d.get("serviceId"),
-        templateId: d.get("templateId"),
         category: d.get("category"),
         region: d.get("region"),
         priority: Number(d.get("policyPriority")),
@@ -449,9 +448,6 @@ function Routing({ data }: { data: Data }) {
       <option value="">Any</option>
       {rows(data.services).map(s => <option key={value(s, "id")}
                                             value={value(s, "id")}>{value(s, "product")} / {value(s, "name")}</option>)}
-    </select></label><label className={label}>Template<select name="templateId" className={input}>
-      <option value="">Any</option>
-      {rows(data.templates).map(t => <option key={value(t, "id")} value={value(t, "id")}>{value(t, "key")}</option>)}
     </select></label><label className={label}>Category<input name="category" className={input}/></label><label
       className={label}>Destination region<input name="region" className={input}/></label><label className={label}>Provider
       identity<select name="identityId" required className={input}>{identities.map(i => <option key={value(i, "id")}
@@ -484,7 +480,7 @@ function Routing({ data }: { data: Data }) {
       }}>{p.status === "active" ? "Disable" : "Enable"}</Button></div>
     </div>
     <p
-      className="mt-2 text-xs text-zinc-600">{value(p, "product") || "Any product"} / {value(p, "service") || "Any service"} / {value(p, "template") || value(p, "message_category") || "Any message"}</p>
+      className="mt-2 text-xs text-zinc-600">{value(p, "product") || "Any product"} / {value(p, "service") || "Any service"} / {value(p, "message_category") || "Any category"}</p>
     <div className="mt-4 space-y-2">{rows(p.targets).map(t => <div key={value(t, "id")}
                                                                    className="flex flex-wrap items-center gap-3 rounded-md border border-zinc-800 px-3 py-2 text-xs">
       <span className="text-zinc-300">{value(t, "account")}</span><span
@@ -496,7 +492,19 @@ function Routing({ data }: { data: Data }) {
 
 function Credentials({ data }: { data: Data }) {
   const action = useAction();
+  const productAction = useAction();
   const [key, setKey] = useState("");
+
+  async function createProduct(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const d = new FormData(form);
+    try {
+      await productAction.run({ action: "product.create", name: d.get("name"), slug: d.get("slug") });
+      form.reset()
+    } catch {
+    }
+  }
 
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -512,13 +520,26 @@ function Credentials({ data }: { data: Data }) {
     }
   }
 
-  return <div className="space-y-5"><Panel title="Issue service credential"
+  return <div className="space-y-5"><Panel title="Create product" description="Top-level tenant for sender and service isolation">
+    <form onSubmit={createProduct} className="grid gap-3 md:grid-cols-3"><label className={label}>Name<input name="name"
+      required className={input}/></label><label className={label}>Slug<input name="slug" required
+      pattern="[a-z0-9]+(?:-[a-z0-9]+)*" placeholder="customer-portal" className={input}/></label>
+      <div className="flex items-end"><Submit pending={productAction.pending} labelText="Create product"/></div>
+    </form><Notice text={productAction.notice}/></Panel>{rows(data.products).length ? <Table
+    headers={["Product", "Slug", "Status", "Action"]} min="520px">{rows(data.products).map(product => <tr
+      key={value(product, "id")} className="border-b border-zinc-900"><Cell>{value(product, "name")}</Cell><Cell
+      mono>{value(product, "slug")}</Cell><Cell>{value(product, "status")}</Cell><Cell><Button body={{
+        action: "product.toggle",
+        id: product.id,
+        enabled: product.status !== "active"
+      }}>{product.status === "active" ? "Suspend" : "Activate"}</Button></Cell></tr>)}</Table> :
+    <Empty text="No products configured. Create the first product to issue a service credential."/>}<Panel title="Issue service credential"
                                            description="The plaintext key is shown once">
     <form onSubmit={submit} className="grid gap-3 md:grid-cols-3"><label className={label}>Product<select
       name="productId" className={input}>{rows(data.products).map(p => <option key={value(p, "id")}
                                                                                value={value(p, "id")}>{value(p, "name")}</option>)}</select></label><label
       className={label}>Service name<input name="serviceName" required className={input}/></label>
-      <div className="flex items-end"><Submit pending={action.pending} labelText="Issue credential"/></div>
+      <div className="flex items-end"><Submit pending={action.pending || !rows(data.products).length} labelText="Issue credential"/></div>
     </form>
     {key && <Secret value={key}/>}<Notice text={action.notice}/></Panel><Table
     headers={["Service", "Product", "Prefix", "Last used", "Status", "Actions"]}>{rows(data.credentials).map(c => <tr

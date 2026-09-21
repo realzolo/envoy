@@ -1,8 +1,9 @@
 # Envoy
 
 Envoy is a provider-neutral email control plane and delivery data plane for internal products and services. Business
-services submit a template key, recipients, locale, variables, reference ID, and metadata. Envoy owns rendering, sender
-identity, provider routing, credentials, delivery state, inbound mail, suppressions, and canonical callbacks.
+services submit recipients and final rendered subject, HTML, and/or plain text. Envoy owns sender identity, provider
+routing, credentials, delivery state, inbound mail, suppressions, and canonical callbacks. Business content definitions,
+localization, and rendering remain in the calling service.
 
 ## Architecture
 
@@ -12,7 +13,8 @@ identity, provider routing, credentials, delivery state, inbound mail, suppressi
 - PostgreSQL is the only source of truth. Redis and BullMQ are scheduling infrastructure only.
 - Provider credentials are stored as envelope-encrypted database records. Every secret has an independent AES-256-GCM
   data key wrapped by the configured root KEK.
-- Templates are rendered by Envoy into final HTML and text. Providers never own business templates.
+- Envoy never stores or renders business content definitions. Persisted content is the immutable send payload needed for
+  delivery, support, callbacks, and configured retention.
 - One logical delivery is created per recipient. Every provider call creates an immutable attempt with a complete
   routing decision snapshot.
 
@@ -35,8 +37,9 @@ Open [http://localhost:3000](http://localhost:3000) and sign in with the develop
 - Email: `admin@envoy.local`
 - Password: `envoy`
 
-The seed creates one active Mock provider account. Real provider accounts and their write-only credentials are created
-in **Provider Accounts**; no provider key belongs in an environment file.
+The database starts with no products, services, domains, providers, messages, or inbound mail. Create the first product
+under **Service Credentials**, then configure real provider accounts and their write-only credentials under
+**Provider Accounts**. No provider key belongs in an environment file.
 
 The web process and worker are intentionally separate. In production, run `pnpm start` and `pnpm worker` as
 independently scalable processes. Both require PostgreSQL and Redis; only the worker performs provider sends, event
@@ -46,19 +49,16 @@ application, callbacks, and reconciliation.
 
 ```bash
 curl --request POST http://localhost:3000/api/v1/messages \
-  --header 'Authorization: Bearer envoy_dev_key' \
+  --header "Authorization: Bearer $ENVOY_SERVICE_KEY" \
   --header 'Idempotency-Key: login-attempt-456' \
   --header 'Content-Type: application/json' \
   --data '{
-    "template": "auth.login-code",
-    "to": [{ "email": "developer@example.com", "name": "Developer" }],
-    "locale": "en-US",
-    "variables": {
-      "code": "482901",
-      "expiresInMinutes": 10,
-      "userName": "Developer",
-      "productName": "Atlas"
-    },
+    "category": "security",
+    "to": [{ "email": "recipient@company.com", "name": "Recipient" }],
+    "subject": "482901 is your login code",
+    "html": "<p>Hello, your login code is <strong>482901</strong>.</p>",
+    "text": "Your login code is 482901.",
+    "tags": { "purpose": "login" },
     "referenceId": "login_attempt_456",
     "metadata": { "environment": "development" }
   }'
@@ -68,11 +68,26 @@ The API returns `202 Accepted` after the message, recipient deliveries, and outb
 transaction. The request contract rejects provider names, provider accounts, domains, scheduling options, and other
 provider-specific fields.
 
+The service API is self-describing at `GET /api/v1` and `GET /api/v1/openapi.json`. Authenticated resources include:
+
+| Resource | Operations |
+|----------|------------|
+| `/messages` | Queue and list messages |
+| `/messages/{id}` | Inspect final content and recipient deliveries |
+| `/messages/{id}/cancel` | Cancel deliveries that have not crossed the provider boundary |
+| `/messages/{id}/retry` | Retry eligible outcomes with duplicate-risk acknowledgement for unknown outcomes |
+| `/deliveries` | List recipient-level deliveries and inspect attempts |
+| `/events` | Read normalized delivery events |
+| `/inbound-messages` | List and inspect sanitized inbound mail |
+| `/suppressions` | Check, create, and remove product-owned suppressions |
+| `/senders` | Discover logical sender profiles available to the product |
+| `/capabilities` | Discover limits, content rules, and available senders |
+
 Query status with the same service credential:
 
 ```bash
 curl http://localhost:3000/api/v1/messages/msg_example \
-  --header 'Authorization: Bearer envoy_dev_key'
+  --header "Authorization: Bearer $ENVOY_SERVICE_KEY"
 ```
 
 ## Provider event ingress
@@ -86,25 +101,8 @@ POST /api/provider-events/{provider}/{opaqueEndpointId}
 The HTTP path verifies the provider signature and replay window, stores the immutable raw event plus an outbox record in
 one transaction, and returns immediately. Workers normalize and apply canonical events asynchronously.
 
-For a local inbound smoke test against the seeded Mock endpoint:
-
-```bash
-curl --request POST http://localhost:3000/api/provider-events/mock/mock-local-endpoint \
-  --header 'Authorization: Bearer local-mock-webhook' \
-  --header 'Content-Type: application/json' \
-  --data '{
-    "id": "inbound-local-1",
-    "type": "inbound.received",
-    "externalMessageId": "mock-inbound-local-1",
-    "from": "sender@example.net",
-    "to": ["support@mail.atlas.example"],
-    "subject": "Local inbound test",
-    "html": "<p>Inbound content</p>",
-    "text": "Inbound content"
-  }'
-```
-
-Open **Inbound** to inspect the sanitized message and **Audit & Revisions** to verify the signed local callback.
+Open **Inbound** to inspect sanitized messages received from configured production providers and **Audit & Revisions**
+to verify signed business callbacks.
 
 ## Commands
 

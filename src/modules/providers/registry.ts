@@ -18,5 +18,7 @@ export function providerRegistry(type: ProviderType) {
 }
 
 export function providerDescriptors() {
-  return [...modules.values()].map(providerModule => providerModule.descriptor)
+  return [...modules.values()]
+    .filter(providerModule => providerModule.descriptor.type !== "mock")
+    .map(providerModule => providerModule.descriptor)
 }

@@ -30,6 +30,18 @@ export async function POST(request: Request) {
   let status = 200;
   try {
     switch (body.action) {
+      case"product.create":
+        result = {
+          id: await actions.createProduct({
+            name: text(body, "name"),
+            slug: text(body, "slug")
+          }, session.email)
+        };
+        status = 201;
+        break;
+      case"product.toggle":
+        await actions.toggleProduct(text(body, "id"), body.enabled === true, session.email);
+        break;
       case"provider.create": {
         const type = providerTypeSchema.parse(body.type);
         result = await actions.createProviderAccount({
@@ -104,7 +116,6 @@ export async function POST(request: Request) {
             name: text(body, "name"),
             productId: typeof body.productId === "string" ? body.productId : undefined,
             serviceId: typeof body.serviceId === "string" ? body.serviceId : undefined,
-            templateId: typeof body.templateId === "string" ? body.templateId : undefined,
             category: typeof body.category === "string" ? body.category : undefined,
             region: typeof body.region === "string" ? body.region : undefined,
             priority: Number(body.priority ?? 100),
@@ -123,7 +134,6 @@ export async function POST(request: Request) {
         result = await actions.simulateRouting({
           productId: typeof body.productId === "string" ? body.productId : undefined,
           serviceId: typeof body.serviceId === "string" ? body.serviceId : undefined,
-          templateId: typeof body.templateId === "string" ? body.templateId : undefined,
           category: typeof body.category === "string" ? body.category : undefined,
           region: typeof body.region === "string" ? body.region : undefined
         });
@@ -155,24 +165,16 @@ export async function POST(request: Request) {
       case"suppression.remove":
         await actions.removeSuppression(text(body, "id"), session.email);
         break;
-      case"template.publish":
-        result = await actions.publishTemplate({
-          templateId: typeof body.templateId === "string" ? body.templateId : undefined,
-          productId: text(body, "productId"),
-          key: text(body, "key"),
-          name: text(body, "name"),
-          description: typeof body.description === "string" ? body.description : "",
+      case"message.test":
+        result = await actions.sendTestMessage({
+          serviceId: text(body, "serviceId"),
+          recipient: text(body, "recipient"),
           category: text(body, "category"),
+          senderProfile: typeof body.senderProfile === "string" && body.senderProfile ? body.senderProfile : undefined,
           subject: text(body, "subject"),
-          html: text(body, "html"),
-          text: text(body, "text"),
-          schema: object(body, "schema") as Record<string, string>,
-          sampleData: object(body, "sampleData")
+          html: typeof body.html === "string" && body.html ? body.html : undefined,
+          text: typeof body.text === "string" && body.text ? body.text : undefined
         }, session.email);
-        status = 201;
-        break;
-      case"template.test":
-        result = await actions.sendTemplateTest(text(body, "templateId"), text(body, "recipient"), session.email);
         status = 202;
         break;
       case"credential.create":

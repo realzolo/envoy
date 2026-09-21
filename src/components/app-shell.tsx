@@ -6,7 +6,6 @@ import {
   Ban,
   BookOpenText,
   Boxes,
-  FileCode2,
   Gauge,
   Globe2,
   Inbox,
@@ -35,9 +34,8 @@ const navigation = [
     ],
   },
   {
-    label: "CONTENT",
+    label: "DELIVERY",
     items: [
-      { href: "/templates", label: "Templates", icon: FileCode2 },
       { href: "/senders", label: "Sender Profiles", icon: SendHorizonal },
     ],
   },

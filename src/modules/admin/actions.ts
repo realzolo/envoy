@@ -21,6 +21,24 @@ async function revision(client: import("pg").PoolClient, type: string, id: strin
   await client.query("INSERT INTO config_revisions(resource_type,resource_id,revision,config,actor) VALUES ($1,$2,$3,$4,$5)", [type, id, (current.rows[0]?.revision ?? 0) + 1, config, actor])
 }
 
+export async function createProduct(input: { name: string; slug: string }, actor: string) {
+  const validated = z.object({
+    name: z.string().trim().min(2).max(120),
+    slug: z.string().trim().min(2).max(80).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/)
+  }).parse(input);
+  const id = createId("prd");
+  await transaction(async client => {
+    await client.query("INSERT INTO products(id,slug,name) VALUES ($1,$2,$3)", [id, validated.slug, validated.name]);
+    await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES ($1,'product.create','product',$2,$3)", [actor, id, validated])
+  });
+  return id
+}
+
+export async function toggleProduct(id: string, enabled: boolean, actor: string) {
+  await query("UPDATE products SET status=$2,updated_at=now() WHERE id=$1", [id, enabled ? "active" : "suspended"]);
+  await audit(actor, "product.toggle", "product", id, { enabled })
+}
+
 export async function createProviderAccount(input: {
   type: ProviderType;
   name: string;
@@ -31,6 +49,7 @@ export async function createProviderAccount(input: {
   expectedTopicArn?: string;
   ipAllowlist?: string[]
 }, actor: string) {
+  if (input.type === "mock") throw new Error("Mock providers are available only to automated tests");
   const config = providerConfigSchema.parse({ type: input.type, schemaVersion: 1, ...input.publicConfig });
   const secret = providerSecretSchema.parse({ type: input.type, ...input.secret });
   const accountId = createId("pa");
@@ -212,7 +231,6 @@ export async function createRoutingPolicy(input: {
   name: string;
   productId?: string;
   serviceId?: string;
-  templateId?: string;
   category?: string;
   region?: string;
   priority: number;
@@ -220,7 +238,7 @@ export async function createRoutingPolicy(input: {
 }, actor: string) {
   const id = createId("rp");
   await transaction(async client => {
-    await client.query("INSERT INTO routing_policies(id,name,product_id,service_id,template_id,message_category,destination_region,priority) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)", [id, input.name, input.productId || null, input.serviceId || null, input.templateId || null, input.category || null, input.region || null, input.priority]);
+    await client.query("INSERT INTO routing_policies(id,name,product_id,service_id,message_category,destination_region,priority) VALUES ($1,$2,$3,$4,$5,$6,$7)", [id, input.name, input.productId || null, input.serviceId || null, input.category || null, input.region || null, input.priority]);
     for (const target of input.targets) await client.query("INSERT INTO routing_targets(id,policy_id,provider_account_id,provider_identity_id,priority,weight,rate_limit_per_minute) VALUES ($1,$2,$3,$4,$5,$6,$7)", [createId("rt"), id, target.accountId, target.identityId, target.priority, target.weight, target.rateLimit]);
     await revision(client, "routing_policy", id, input, actor);
     await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES ($1,'routing_policy.create','routing_policy',$2,$3)", [actor, id, { targetCount: input.targets.length }])
@@ -236,7 +254,6 @@ export async function toggleRoutingPolicy(id: string, enabled: boolean, actor: s
 export async function simulateRouting(input: {
   productId?: string;
   serviceId?: string;
-  templateId?: string;
   category?: string;
   region?: string
 }) {
@@ -268,7 +285,7 @@ export async function simulateRouting(input: {
     FROM routing_policies rp JOIN routing_targets rt ON rt.policy_id=rp.id JOIN provider_accounts pa ON pa.id=rt.provider_account_id
     JOIN provider_identities pi ON pi.id=rt.provider_identity_id AND pi.provider_account_id=pa.id JOIN sending_domains sd ON sd.id=pi.sending_domain_id
     CROSS JOIN LATERAL(SELECT count(*)FILTER(WHERE da.started_at>=date_trunc('month',now())AND da.status IN('submitting','accepted','reconciled'))monthly_usage,count(*)FILTER(WHERE da.started_at>=date_trunc('day',now())AND da.status IN('submitting','accepted','reconciled'))daily_usage FROM delivery_attempts da WHERE da.provider_account_id=pa.id)usage
-    WHERE rp.status='active' AND ($1::text IS NULL OR rp.product_id IS NULL OR rp.product_id=$1) AND ($2::text IS NULL OR rp.service_id IS NULL OR rp.service_id=$2) AND ($3::text IS NULL OR rp.template_id IS NULL OR rp.template_id=$3) AND ($4::text IS NULL OR rp.message_category IS NULL OR rp.message_category=$4) AND ($5::text IS NULL OR rp.destination_region IS NULL OR rp.destination_region=$5) ORDER BY rp.priority,rt.priority,rt.id`, [input.productId || null, input.serviceId || null, input.templateId || null, input.category || null, input.region || null]);
+    WHERE rp.status='active' AND ($1::text IS NULL OR rp.product_id IS NULL OR rp.product_id=$1) AND ($2::text IS NULL OR rp.service_id IS NULL OR rp.service_id=$2) AND ($3::text IS NULL OR rp.message_category IS NULL OR rp.message_category=$3) AND ($4::text IS NULL OR rp.destination_region IS NULL OR rp.destination_region=$4) ORDER BY rp.priority,rt.priority,rt.id`, [input.productId || null, input.serviceId || null, input.category || null, input.region || null]);
   const candidates = result.rows.map(row => {
     const reasons: string[] = [];
     if (row.status === "disabled") reasons.push("target_disabled");
@@ -342,62 +359,45 @@ export async function removeSuppression(id: string, actor: string) {
   await audit(actor, "suppression.remove", "suppression", id)
 }
 
-export async function publishTemplate(input: {
-  templateId?: string;
-  productId: string;
-  key: string;
-  name: string;
-  description: string;
+export async function sendTestMessage(input: {
+  serviceId: string;
+  recipient: string;
   category: string;
+  senderProfile?: string;
   subject: string;
-  html: string;
-  text: string;
-  schema: Record<string, string>;
-  sampleData: Record<string, unknown>
+  html?: string;
+  text?: string
 }, actor: string) {
-  return transaction(async client => {
-    const id = input.templateId || createId("tpl");
-    await client.query("INSERT INTO templates(id,product_id,key,name,description,category) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT(id) DO UPDATE SET name=$4,description=$5,category=$6,updated_at=now()", [id, input.productId, input.key, input.name, input.description, input.category]);
-    const latest = await client.query<{
-      version: number
-    }>("SELECT version FROM template_versions WHERE template_id=$1 ORDER BY version DESC LIMIT 1", [id]);
-    const version = (latest.rows[0]?.version ?? 0) + 1;
-    await client.query("UPDATE template_versions SET status='archived' WHERE template_id=$1 AND status='published'", [id]);
-    await client.query("INSERT INTO template_versions(id,template_id,version,status,subject_template,html_template,text_template,variables_schema,sample_data,created_by,published_at) VALUES ($1,$2,$3,'published',$4,$5,$6,$7,$8,$9,now())", [createId("tv"), id, version, input.subject, input.html, input.text, input.schema, input.sampleData, actor]);
-    await revision(client, "template", id, { version, ...input }, actor);
-    await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES ($1,'template.publish','template',$2,$3)", [actor, id, { version }]);
-    return { templateId: id, version }
-  })
-}
-
-export async function sendTemplateTest(templateId: string, recipient: string, actor: string) {
   const row = (await query<{
     service_id: string;
     service_name: string;
     product_id: string;
     product_name: string;
-    template_key: string;
-    sample_data: Record<string, string | number | boolean | null>
-  }>(`SELECT s.id AS service_id,s.name AS service_name,p.id AS product_id,p.name AS product_name,t.key AS template_key,tv.sample_data FROM templates t JOIN products p ON p.id=t.product_id JOIN services s ON s.product_id=p.id AND s.status='active' JOIN template_versions tv ON tv.template_id=t.id AND tv.status='published' WHERE t.id=$1 ORDER BY s.created_at LIMIT 1`, [templateId])).rows[0];
-  if (!row) throw new Error("No active service is available for this template");
+    rate_limit_per_minute: number
+  }>(`SELECT s.id AS service_id,s.name AS service_name,p.id AS product_id,p.name AS product_name,s.rate_limit_per_minute
+      FROM services s JOIN products p ON p.id=s.product_id
+      WHERE s.id=$1 AND s.status='active' AND p.status='active'`, [input.serviceId])).rows[0];
+  if (!row) throw new Error("The selected service is unavailable");
   const result = await acceptMessage({
     identity: {
       serviceId: row.service_id,
       serviceName: row.service_name,
       productId: row.product_id,
       product: row.product_name,
-      rateLimitPerMinute: 600
+      rateLimitPerMinute: row.rate_limit_per_minute
     },
     idempotencyKey: `admin-test-${crypto.randomUUID()}`,
     input: {
-      template: row.template_key,
-      to: [{ email: recipient }],
-      locale: "en-US",
-      variables: row.sample_data,
+      category: input.category,
+      senderProfile: input.senderProfile,
+      to: [{ email: input.recipient }],
+      subject: input.subject,
+      html: input.html,
+      text: input.text,
       metadata: { source: "admin_test" }
     }
   });
-  await audit(actor, "template.test_send", "template", templateId, { messageId: result.message.id, recipient });
+  await audit(actor, "message.test_send", "message", result.message.id, { recipient: input.recipient, serviceId: input.serviceId });
   return result.message
 }
 

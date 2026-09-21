@@ -53,7 +53,7 @@ export default async function DeliveryPage({ params }: { params: Promise<{ id: s
         <section className="rounded-lg border border-zinc-800 bg-[#090909] p-5"><h2
           className="text-sm font-medium text-zinc-100">Delivery</h2>
           <dl
-            className="mt-5 space-y-4">{[["Recipient", detail.recipient], ["From", detail.from], ["Product", detail.product], ["Template", detail.template], ["Lifecycle", detail.lifecycle], ["Engagement", detail.engagement], ["Compliance", detail.compliance], ["Accepted", detail.createdAt]].map(([key, val]) =>
+            className="mt-5 space-y-4">{[["Recipient", detail.recipient], ["From", detail.from], ["Product", detail.product], ["Category", detail.category], ["Lifecycle", detail.lifecycle], ["Engagement", detail.engagement], ["Compliance", detail.compliance], ["Accepted", detail.createdAt]].map(([key, val]) =>
             <div key={key}>
               <dt className="text-[11px] text-zinc-700">{key}</dt>
               <dd className="mt-1 break-words text-xs text-zinc-400">{val}</dd>

@@ -3,21 +3,14 @@ import { CanonicalProviderError, type ProviderSendResult } from "@/modules/provi
 import { loadProviderAccount } from "@/modules/config/provider-account";
 import { applyCanonicalEvent } from "@/modules/core/event/service";
 import { markAccepted, markDeterminateFailure, markUnknown, prepareSubmission } from "@/modules/core/routing/engine";
-import { renderTemplate } from "@/server/template-renderer";
 
 export async function processDelivery(job: Job<{ deliveryId: string }>) {
   const submission = await prepareSubmission(job.data.deliveryId);
   if (!submission || "reconcileAttemptId" in submission) return;
   let account: Awaited<ReturnType<typeof loadProviderAccount>>;
-  let rendered: ReturnType<typeof renderTemplate>;
   try {
     account = await loadProviderAccount(submission.providerAccountId);
     account.context.idempotencyKey = submission.providerIdempotencyKey ?? undefined;
-    rendered = renderTemplate({
-      subjectTemplate: submission.subjectTemplate,
-      htmlTemplate: submission.htmlTemplate,
-      textTemplate: submission.textTemplate
-    }, submission.variables)
   } catch (error) {
     await markDeterminateFailure(submission.attemptId, {
       category: "policy",
@@ -33,11 +26,11 @@ export async function processDelivery(job: Job<{ deliveryId: string }>) {
       from: { name: submission.fromName, email: submission.fromEmail },
       to: { name: submission.recipientName ?? undefined, email: submission.recipientEmail },
       replyTo: submission.replyTo ?? undefined,
-      subject: rendered.subject,
-      html: rendered.html,
-      text: rendered.text,
+      subject: submission.subject,
+      html: submission.html,
+      text: submission.text,
       attachments: [],
-      tags: { product: submission.product, template: submission.templateKey }
+      tags: { product: submission.product, category: submission.category, ...submission.tags }
     }, account.context);
   } catch (error) {
     if (error instanceof CanonicalProviderError) {

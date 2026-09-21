@@ -38,12 +38,12 @@ export type DeliverySubmission = {
   fromName: string;
   fromEmail: string;
   replyTo: string | null;
-  subjectTemplate: string;
-  htmlTemplate: string;
-  textTemplate: string;
-  variables: Record<string, unknown>;
+  subject: string;
+  html: string;
+  text: string;
   product: string;
-  templateKey: string
+  category: string;
+  tags: Record<string, string>
 };
 
 export function chooseWeighted<T extends {
@@ -134,24 +134,22 @@ export async function prepareSubmission(deliveryId: string): Promise<DeliverySub
       lifecycle_status: string;
       product_id: string;
       service_id: string;
-      template_id: string;
       sender_profile_id: string;
       category: string;
       product: string;
-      template_key: string;
-      variables: Record<string, unknown>;
-      subject_template: string;
-      html_template: string;
-      text_template: string;
+      payload_hash: string;
+      subject: string;
+      html_body: string | null;
+      text_body: string | null;
+      provider_tags: Record<string, string>;
       from_name: string;
       from_local_part: string;
       reply_to: string | null;
       sending_domain_id: string
-    }>(`SELECT d.id,d.message_id,d.recipient_email,d.recipient_name,d.lifecycle_status,m.product_id,m.service_id,m.template_id,m.sender_profile_id,
-      t.category,p.name AS product,t.key AS template_key,m.variables,tv.subject_template,tv.html_template,tv.text_template,
-      sp.from_name,sp.from_local_part,sp.reply_to,sp.sending_domain_id
+    }>(`SELECT d.id,d.message_id,d.recipient_email,d.recipient_name,d.lifecycle_status,m.product_id,m.service_id,m.sender_profile_id,
+      m.message_category AS category,p.name AS product,m.payload_hash,m.subject,m.html_body,m.text_body,m.provider_tags,
+      sp.from_name,sp.from_local_part,m.reply_to,sp.sending_domain_id
       FROM deliveries d JOIN messages m ON m.id=d.message_id JOIN products p ON p.id=m.product_id
-      JOIN templates t ON t.id=m.template_id JOIN template_versions tv ON tv.id=m.template_version_id
       JOIN sender_profiles sp ON sp.id=m.sender_profile_id WHERE d.id=$1 FOR UPDATE OF d`, [deliveryId]);
     const delivery = deliveryResult.rows[0];
     if (!delivery) return null;
@@ -173,7 +171,7 @@ export async function prepareSubmission(deliveryId: string): Promise<DeliverySub
     if (delivery.lifecycle_status !== "queued" && delivery.lifecycle_status !== "deferred" && delivery.lifecycle_status !== "failed") return null;
     const prior = await client.query<{
       provider_account_id: string
-    }>("SELECT provider_account_id FROM delivery_attempts WHERE delivery_id=$1 AND outcome_determinate=true AND status='failed' AND NOT (routing_snapshot?'manualRetryAuthorizedAt')", [deliveryId]);
+    }>("SELECT provider_account_id FROM delivery_attempts WHERE delivery_id=$1 AND outcome_determinate=true AND status='failed' AND NOT (routing_snapshot?'manualRetryAuthorizedAt' OR routing_snapshot?'serviceRetryAuthorizedAt')", [deliveryId]);
     const excluded = prior.rows.map(r => r.provider_account_id);
     const candidates = await client.query<Candidate>(`SELECT rt.id AS target_id,rp.id AS policy_id,rp.name AS policy_name,rp.priority AS policy_priority,rt.provider_account_id,rt.provider_identity_id,
       pa.type AS provider_type,pa.name AS provider_name,rt.priority,rt.weight,rt.rate_limit_per_minute,sd.domain,pi.capabilities,pa.quota,
@@ -191,10 +189,10 @@ export async function prepareSubmission(deliveryId: string): Promise<DeliverySub
         AND (NOT (pa.quota?'monthlyLimit') OR ((pa.quota->>'monthlyLimit')~'^[0-9]+$' AND usage.monthly_usage<(pa.quota->>'monthlyLimit')::bigint))
         AND (NOT (pa.quota?'dailyLimit') OR ((pa.quota->>'dailyLimit')~'^[0-9]+$' AND usage.daily_usage<(pa.quota->>'dailyLimit')::bigint))
         AND (rp.product_id IS NULL OR rp.product_id=$2) AND (rp.service_id IS NULL OR rp.service_id=$3)
-        AND (rp.template_id IS NULL OR rp.template_id=$4) AND (rp.message_category IS NULL OR rp.message_category=$5)
+        AND (rp.message_category IS NULL OR rp.message_category=$4)
         AND (rp.destination_region IS NULL OR rp.destination_region=sd.region)
-        AND (cardinality($6::text[])=0 OR NOT (rt.provider_account_id=ANY($6::text[])))
-      ORDER BY rp.priority,rt.priority,rt.id`, [delivery.sending_domain_id, delivery.product_id, delivery.service_id, delivery.template_id, delivery.category, excluded]);
+        AND (cardinality($5::text[])=0 OR NOT (rt.provider_account_id=ANY($5::text[])))
+      ORDER BY rp.priority,rt.priority,rt.id`, [delivery.sending_domain_id, delivery.product_id, delivery.service_id, delivery.category, excluded]);
     if (!candidates.rows.length) {
       await deferDelivery(client, deliveryId, "No healthy verified routing target is available");
       return null
@@ -224,8 +222,7 @@ export async function prepareSubmission(deliveryId: string): Promise<DeliverySub
       deliveryId,
       attemptNumber,
       to: delivery.recipient_email,
-      template: delivery.template_key,
-      variables: delivery.variables,
+      payloadHash: delivery.payload_hash,
       from: `${delivery.from_local_part}@${selected.domain}`
     })).digest("hex");
     const snapshot = {
@@ -277,12 +274,12 @@ export async function prepareSubmission(deliveryId: string): Promise<DeliverySub
       fromName: delivery.from_name,
       fromEmail: `${delivery.from_local_part}@${selected.domain}`,
       replyTo: delivery.reply_to,
-      subjectTemplate: delivery.subject_template,
-      htmlTemplate: delivery.html_template,
-      textTemplate: delivery.text_template,
-      variables: delivery.variables,
+      subject: delivery.subject,
+      html: delivery.html_body ?? "",
+      text: delivery.text_body ?? "",
       product: delivery.product,
-      templateKey: delivery.template_key
+      category: delivery.category,
+      tags: delivery.provider_tags
     };
   });
 }

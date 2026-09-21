@@ -7,6 +7,7 @@ export type DeliveryStatus =
   | "unknown"
   | "bounced"
   | "failed"
+  | "canceled"
   | "suppressed";
 
 export type EmailRecord = {
@@ -14,7 +15,7 @@ export type EmailRecord = {
   recipient: string;
   recipientName?: string;
   subject: string;
-  template: string;
+  category: string;
   product: string;
   from: string;
   status: DeliveryStatus;
@@ -22,19 +23,6 @@ export type EmailRecord = {
   relativeTime: string;
   providerId?: string;
   referenceId?: string;
-};
-
-export type TemplateRecord = {
-  id: string;
-  key: string;
-  name: string;
-  description: string;
-  subject: string;
-  product: string;
-  version: number;
-  updatedAt: string;
-  accent: "blue" | "green" | "violet" | "amber";
-  variables: string[];
 };
 
 export type DomainRecord = {

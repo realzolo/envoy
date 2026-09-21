@@ -1,7 +1,22 @@
 import type { Job } from "bullmq";
 import { afterAll, describe, expect, it } from "vitest";
-import { acceptMessage, IdempotencyConflictError } from "@/modules/core/message/service";
+import {
+  acceptMessage,
+  cancelMessage,
+  DuplicateRiskError,
+  getMessage,
+  IdempotencyConflictError,
+  listMessages,
+  retryMessage
+} from "@/modules/core/message/service";
 import { applyCanonicalEvent, processRawProviderEvent } from "@/modules/core/event/service";
+import {
+  createSuppression,
+  listDeliveries,
+  listSenderProfiles,
+  listSuppressions,
+  removeSuppression
+} from "@/modules/core/resources/service";
 import { ingestProviderWebhook } from "@/modules/webhooks/ingress";
 import { manualRetryDelivery, replayDeadLetters } from "@/modules/admin/actions";
 import { deadLetterCallback } from "@/modules/callbacks/service";
@@ -17,10 +32,12 @@ const identity = {
   rateLimitPerMinute: 600
 };
 const request = {
-  template: "auth.login-code",
+  category: "security",
   to: [{ email: "pipeline@example.net" }],
-  locale: "en-US",
-  variables: { code: "123456", expiresInMinutes: 10, userName: "Pipeline", productName: "Atlas" },
+  subject: "123456 is your Atlas login code",
+  html: "<p>Hello Pipeline, your login code is <strong>123456</strong>.</p>",
+  text: "Hello Pipeline, your login code is 123456.",
+  tags: { purpose: "integration" },
   referenceId: "pipeline-test",
   metadata: { suite: "integration" }
 };
@@ -64,8 +81,86 @@ describe("durable message pipeline", () => {
     await expect(acceptMessage({
       identity,
       idempotencyKey: key,
-      input: { ...request, variables: { ...request.variables, code: "999999" } }
+      input: { ...request, subject: "999999 is your Atlas login code" }
     })).rejects.toBeInstanceOf(IdempotencyConflictError)
+  });
+  it("persists final content and exposes service-scoped message and delivery collections", async () => {
+    const referenceId = `resources-${crypto.randomUUID()}`;
+    const accepted = await acceptMessage({
+      identity,
+      idempotencyKey: `resources-${crypto.randomUUID()}`,
+      input: { ...request, referenceId, replyTo: "reply@example.net" }
+    });
+    messageIds.push(accepted.message.id);
+    const detail = await getMessage(accepted.message.id, identity.serviceId);
+    expect(detail).toMatchObject({
+      subject: request.subject,
+      html_body: request.html,
+      text_body: request.text,
+      category: request.category,
+      reply_to: "reply@example.net",
+      provider_tags: request.tags
+    });
+    expect(await getMessage(accepted.message.id, "svc_nova_app")).toBeNull();
+    const messages = await listMessages(identity.serviceId, { limit: 10, referenceId });
+    expect(messages.data.map(item => item.id)).toContain(accepted.message.id);
+    const deliveries = await listDeliveries(identity.serviceId, { limit: 10, messageId: accepted.message.id });
+    expect(deliveries.data).toHaveLength(1);
+    expect(deliveries.data[0]).toMatchObject({ subject: request.subject, category: request.category })
+  });
+  it("cancels queued deliveries before any provider attempt is created", async () => {
+    const accepted = await acceptMessage({
+      identity,
+      idempotencyKey: `cancel-${crypto.randomUUID()}`,
+      input: { ...request, to: [{ email: `cancel-${crypto.randomUUID()}@example.net` }] }
+    });
+    messageIds.push(accepted.message.id);
+    expect(await cancelMessage(accepted.message.id, "svc_nova_app")).toBeNull();
+    const result = await cancelMessage(accepted.message.id, identity.serviceId);
+    expect(result?.canceled).toBe(1);
+    const delivery = (await query<{ id: string }>("SELECT id FROM deliveries WHERE message_id=$1", [accepted.message.id])).rows[0];
+    await processDelivery({ data: { deliveryId: delivery.id } } as Job<{ deliveryId: string }>);
+    expect(Number((await query<{ count: string }>("SELECT count(*) FROM delivery_attempts WHERE delivery_id=$1", [delivery.id])).rows[0].count)).toBe(0);
+    expect((await getMessage(accepted.message.id, identity.serviceId))?.status).toBe("canceled")
+  });
+  it("requires duplicate-risk acknowledgement before retrying an unknown outcome", async () => {
+    const accepted = await acceptMessage({
+      identity,
+      idempotencyKey: `service-retry-${crypto.randomUUID()}`,
+      input: { ...request, to: [{ email: `service-retry-${crypto.randomUUID()}@example.net` }] }
+    });
+    messageIds.push(accepted.message.id);
+    const delivery = (await query<{ id: string }>("SELECT id FROM deliveries WHERE message_id=$1", [accepted.message.id])).rows[0];
+    expect(await prepareSubmission(delivery.id)).toBeTruthy();
+    expect(await prepareSubmission(delivery.id)).toHaveProperty("reconcileAttemptId");
+    await expect(retryMessage(accepted.message.id, identity.serviceId, false)).rejects.toBeInstanceOf(DuplicateRiskError);
+    expect((await retryMessage(accepted.message.id, identity.serviceId, true))?.queued).toBe(1);
+    const attempt = (await query<{ status: string; authorized: string | null }>(`SELECT status,routing_snapshot->>'serviceRetryAuthorizedAt' AS authorized
+      FROM delivery_attempts WHERE delivery_id=$1 ORDER BY attempt_number DESC LIMIT 1`, [delivery.id])).rows[0];
+    expect(attempt.status).toBe("failed");
+    expect(attempt.authorized).toBeTruthy()
+  });
+  it("manages product-scoped suppressions and discovers sender profiles", async () => {
+    const email = `suppression-${crypto.randomUUID()}@example.net`;
+    suppressionEmails.push(email);
+    const created = await createSuppression({
+      productId: identity.productId,
+      email,
+      scope: "product",
+      reason: "integration_test"
+    });
+    expect(created.duplicate).toBe(false);
+    expect((await createSuppression({
+      productId: identity.productId,
+      email,
+      scope: "product",
+      reason: "integration_test"
+    })).duplicate).toBe(true);
+    expect(await listSuppressions("prd_nova", email)).toHaveLength(0);
+    expect(await listSuppressions(identity.productId, email)).toHaveLength(1);
+    expect(await removeSuppression(created.id, "prd_nova")).toBeNull();
+    expect(await removeSuppression(created.id, identity.productId)).toEqual({ id: created.id });
+    expect((await listSenderProfiles(identity.productId)).some(sender => sender.category === request.category)).toBe(true)
   });
   it("is safe under duplicate worker consumption", async () => {
     const accepted = await acceptMessage({
@@ -129,13 +224,13 @@ describe("durable message pipeline", () => {
       recipient: "events@example.net"
     };
     const raw = new TextEncoder().encode(JSON.stringify(payload));
-    const first = await ingestProviderWebhook("mock", "mock-local-endpoint", {
+    const first = await ingestProviderWebhook("mock", "test-endpoint", {
       rawBody: raw,
-      headers: { authorization: "Bearer local-mock-webhook" }
+      headers: { authorization: "Bearer test-webhook-token" }
     });
-    const second = await ingestProviderWebhook("mock", "mock-local-endpoint", {
+    const second = await ingestProviderWebhook("mock", "test-endpoint", {
       rawBody: raw,
-      headers: { authorization: "Bearer local-mock-webhook" }
+      headers: { authorization: "Bearer test-webhook-token" }
     });
     expect(first.status).toBe(202);
     expect(second.status).toBe(202);
@@ -245,9 +340,11 @@ describe("durable message pipeline", () => {
       }
       expect((await query<{
         status: string
-      }>("SELECT status FROM routing_targets WHERE id='rt_tpl_atlas_login'")).rows[0].status).toBe("circuit_open")
+      }>(`SELECT rt.status FROM routing_targets rt JOIN routing_policies rp ON rp.id=rt.policy_id
+          WHERE rp.product_id='prd_atlas' ORDER BY rp.priority,rt.priority LIMIT 1`)).rows[0].status).toBe("circuit_open")
     } finally {
-      await query("UPDATE routing_targets SET status='active',circuit_open_until=NULL WHERE id='rt_tpl_atlas_login'")
+      await query(`UPDATE routing_targets SET status='active',circuit_open_until=NULL
+        WHERE policy_id IN (SELECT id FROM routing_policies WHERE product_id='prd_atlas')`)
     }
   });
   it("accepts, sanitizes, deduplicates, and routes inbound mail while outbound is disabled", async () => {
@@ -258,7 +355,7 @@ describe("durable message pipeline", () => {
       type: "inbound.received",
       externalMessageId,
       from: "External Sender <sender@example.net>",
-      to: ["support@mail.atlas.example"],
+      to: ["support@mail.atlas.test"],
       subject: "Inbound fixture",
       html: "<p>Safe</p><script>alert(1)</script>",
       text: "Safe"
@@ -266,9 +363,9 @@ describe("durable message pipeline", () => {
     const raw = new TextEncoder().encode(JSON.stringify(payload));
     await query("UPDATE provider_accounts SET status='disabled' WHERE id='pa_mock'");
     try {
-      const accepted = await ingestProviderWebhook("mock", "mock-local-endpoint", {
+      const accepted = await ingestProviderWebhook("mock", "test-endpoint", {
         rawBody: raw,
-        headers: { authorization: "Bearer local-mock-webhook" }
+        headers: { authorization: "Bearer test-webhook-token" }
       });
       if (accepted.status !== 202) throw new Error("Expected the inbound webhook to be accepted");
       const stored = (await query<{
@@ -284,9 +381,9 @@ describe("durable message pipeline", () => {
       inboundIds.push(inbound.id);
       expect(inbound.status).toBe("ready");
       expect(inbound.sanitized_html).toBe("<p>Safe</p>");
-      const duplicate = await ingestProviderWebhook("mock", "mock-local-endpoint", {
+      const duplicate = await ingestProviderWebhook("mock", "test-endpoint", {
         rawBody: raw,
-        headers: { authorization: "Bearer local-mock-webhook" }
+        headers: { authorization: "Bearer test-webhook-token" }
       });
       expect(duplicate.duplicate).toBe(true)
     } finally {

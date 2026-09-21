@@ -16,6 +16,7 @@ const statusOptions: Array<{ value: "all" | DeliveryStatus; label: string }> = [
   { value: "unknown", label: "Unknown" },
   { value: "bounced", label: "Bounced" },
   { value: "failed", label: "Failed" },
+  { value: "canceled", label: "Canceled" },
   { value: "suppressed", label: "Suppressed" },
 ];
 
