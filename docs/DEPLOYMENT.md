@@ -39,17 +39,16 @@ The command installs locked dependencies, runs type checking, lint, tests, and t
 
 ```text
 dist/envoy-<commit>-<timestamp>.tar.gz
-dist/envoy-<commit>-<timestamp>.tar.gz.sha256
 ```
 
 The archive intentionally excludes `node_modules` and `.env.local`. The server installs dependencies for its own
 platform and retains secrets outside release directories. `ENVOY_SKIP_TESTS=1` may skip tests only when a preceding CI
 stage already passed them. Dirty worktrees are rejected unless `ENVOY_ALLOW_DIRTY_RELEASE=1` is explicitly set.
 
-Upload the archive and checksum:
+Upload the archive:
 
 ```bash
-scp dist/envoy-<release>.tar.gz* deploy@server:/tmp/
+scp dist/envoy-<release>.tar.gz deploy@server:/tmp/
 ```
 
 ## Prepare The Server
@@ -67,12 +66,10 @@ sudo chown -R envoy:envoy /opt/envoy
 
 ## Deploy An Artifact
 
-Verify the checksum, extract into a new release directory, and link the persistent environment file:
+Extract the archive into a new release directory and link the persistent environment file:
 
 ```bash
 cd /tmp
-sha256sum --check envoy-<release>.tar.gz.sha256
-
 release=/opt/envoy/releases/<release>
 sudo -u envoy mkdir -p "$release"
 sudo -u envoy tar -xzf "/tmp/envoy-<release>.tar.gz" -C "$release"

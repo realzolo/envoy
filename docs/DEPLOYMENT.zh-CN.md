@@ -41,7 +41,6 @@ pnpm release:build
 
 ```text
 dist/envoy-RELEASE_ID.tar.gz
-dist/envoy-RELEASE_ID.tar.gz.sha256
 ```
 
 发布包不包含 `.env.local` 和 `node_modules`。
@@ -55,9 +54,9 @@ dist/envoy-RELEASE_ID.tar.gz.sha256
 ```bash
 release_id="REPLACE_WITH_RELEASE_ID"
 
+ssh deploy@server "mkdir -p /opt/envoy/releases/${release_id}"
 scp "dist/envoy-${release_id}.tar.gz" \
-  "dist/envoy-${release_id}.tar.gz.sha256" \
-  deploy@server:/tmp/
+  "deploy@server:/opt/envoy/releases/${release_id}/"
 ```
 
 ## 4. 首次部署
@@ -68,16 +67,13 @@ scp "dist/envoy-${release_id}.tar.gz" \
 ssh deploy@server
 ```
 
-校验并解压发布包：
+进入对应版本目录并解压：
 
 ```bash
-cd /tmp
 release_id="REPLACE_WITH_RELEASE_ID"
-sha256sum --check "envoy-${release_id}.tar.gz.sha256"
-
 release_dir="/opt/envoy/releases/$release_id"
-mkdir -p "$release_dir"
-tar -xzf "envoy-${release_id}.tar.gz" -C "$release_dir"
+cd "$release_dir"
+tar -xzf "envoy-${release_id}.tar.gz"
 ```
 
 创建生产环境配置：
@@ -150,16 +146,13 @@ curl --fail http://127.0.0.1:6178/api/health
 
 ## 6. 后续版本发布
 
-本地重新构建并上传新发布包，然后在服务器执行：
+本地重新构建，并按照第 3 节将压缩包直接上传到新的版本目录。登录服务器后执行：
 
 ```bash
-cd /tmp
 release_id="REPLACE_WITH_NEW_RELEASE_ID"
-sha256sum --check "envoy-${release_id}.tar.gz.sha256"
-
 release_dir="/opt/envoy/releases/$release_id"
-mkdir -p "$release_dir"
-tar -xzf "envoy-${release_id}.tar.gz" -C "$release_dir"
+cd "$release_dir"
+tar -xzf "envoy-${release_id}.tar.gz"
 ln -s /opt/envoy/envoy.env "$release_dir/.env.local"
 
 cd "$release_dir"

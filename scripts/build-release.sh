@@ -53,11 +53,4 @@ fi
 mkdir -p "$OUTPUT_DIR"
 tar --exclude='.next/cache' --exclude='.next/dev' -czf "$archive" "${paths[@]}"
 
-if command -v sha256sum >/dev/null 2>&1; then
-  (cd "$OUTPUT_DIR" && sha256sum "$(basename "$archive")" > "$(basename "$archive").sha256")
-else
-  (cd "$OUTPUT_DIR" && shasum -a 256 "$(basename "$archive")" > "$(basename "$archive").sha256")
-fi
-
 echo "Release artifact: $archive"
-echo "Checksum: $archive.sha256"
