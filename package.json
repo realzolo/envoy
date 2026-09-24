@@ -2,20 +2,27 @@
   "name": "envoy",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=20.9.0"
+  },
   "scripts": {
-    "dev": "next dev",
-    "dev:all": "concurrently -k -n web,worker -c blue,green \"next dev\" \"tsx watch src/worker/index.ts\"",
+    "dev": "next dev -p 6178",
+    "dev:all": "concurrently -k -n web,worker -c blue,green \"next dev -p 6178\" \"tsx watch src/worker/index.ts\"",
     "worker": "tsx src/worker/index.ts",
     "worker:dev": "tsx watch src/worker/index.ts",
     "build": "next build",
-    "start": "next start",
+    "start": "next start -p 6178",
     "lint": "eslint",
     "typecheck": "next typegen && tsc --noEmit",
     "test": "vitest run",
     "infra:up": "docker compose up -d --wait",
     "infra:down": "docker compose down",
     "db:migrate": "tsx scripts/migrate.ts",
-    "db:setup": "pnpm db:migrate"
+    "db:setup": "pnpm db:migrate",
+    "pm2:start": "pm2 start ecosystem.config.cjs",
+    "pm2:reload": "pm2 startOrReload ecosystem.config.cjs --update-env",
+    "deploy:pm2": "bash scripts/deploy-pm2.sh",
+    "release:build": "bash scripts/build-release.sh"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1136.0",

@@ -32,7 +32,7 @@ pnpm db:setup
 pnpm dev:all
 ```
 
-Open [http://localhost:3000](http://localhost:3000) and sign in with the development credentials from `.env.local`:
+Open [http://localhost:6178](http://localhost:6178) and sign in with the development credentials from `.env.local`:
 
 - Email: `admin@envoy.local`
 - Password: `envoy`
@@ -48,7 +48,7 @@ application, callbacks, and reconciliation.
 ## Message API
 
 ```bash
-curl --request POST http://localhost:3000/api/v1/messages \
+curl --request POST http://localhost:6178/api/v1/messages \
   --header "Authorization: Bearer $ENVOY_SERVICE_KEY" \
   --header 'Idempotency-Key: login-attempt-456' \
   --header 'Content-Type: application/json' \
@@ -86,7 +86,7 @@ The service API is self-describing at `GET /api/v1` and `GET /api/v1/openapi.jso
 Query status with the same service credential:
 
 ```bash
-curl http://localhost:3000/api/v1/messages/msg_example \
+curl http://localhost:6178/api/v1/messages/msg_example \
   --header "Authorization: Bearer $ENVOY_SERVICE_KEY"
 ```
 
@@ -103,6 +103,12 @@ one transaction, and returns immediately. Workers normalize and apply canonical 
 
 Open **Inbound** to inspect sanitized messages received from configured production providers and **Audit & Revisions**
 to verify signed business callbacks.
+
+## Production deployment
+
+The supported PM2 deployment uses a prebuilt release artifact and runs the Next.js Web process and asynchronous Worker
+independently behind Nginx. The default application port is `6178`. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the
+build, upload, production environment, migration, PM2 startup, TLS proxy, health check, and rollback procedure.
 
 ## Commands
 
