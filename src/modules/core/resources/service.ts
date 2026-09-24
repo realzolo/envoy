@@ -1,4 +1,4 @@
-import { transaction, query } from "@/server/database";
+import { query, transaction } from "@/server/database";
 import { createId } from "@/server/ids";
 import { encodeCursor } from "@/modules/core/message/service";
 
@@ -9,7 +9,10 @@ function nextCursor<T extends { id: string }>(rows: T[], limit: number, date: (r
   const data = hasMore ? rows.slice(0, limit) : rows;
   return {
     data,
-    nextCursor: hasMore ? encodeCursor({ id: data[data.length - 1].id, accepted_at: date(data[data.length - 1]) }) : null,
+    nextCursor: hasMore ? encodeCursor({
+      id: data[data.length - 1].id,
+      accepted_at: date(data[data.length - 1])
+    }) : null,
   };
 }
 

@@ -1,7 +1,13 @@
 import { createMessageSchema, type ProblemDetails } from "@/lib/contracts";
 import { authenticateService } from "@/server/auth";
 import { enforceRateLimit } from "@/server/redis";
-import { acceptMessage, decodeCursor, IdempotencyConflictError, listMessages, MessageValidationError } from "@/modules/core/message/service";
+import {
+  acceptMessage,
+  decodeCursor,
+  IdempotencyConflictError,
+  listMessages,
+  MessageValidationError
+} from "@/modules/core/message/service";
 import { recordRequest } from "@/server/request-log";
 
 export const runtime = "nodejs";

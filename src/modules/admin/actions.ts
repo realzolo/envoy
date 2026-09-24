@@ -397,7 +397,10 @@ export async function sendTestMessage(input: {
       metadata: { source: "admin_test" }
     }
   });
-  await audit(actor, "message.test_send", "message", result.message.id, { recipient: input.recipient, serviceId: input.serviceId });
+  await audit(actor, "message.test_send", "message", result.message.id, {
+    recipient: input.recipient,
+    serviceId: input.serviceId
+  });
   return result.message
 }
 

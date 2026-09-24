@@ -21,12 +21,6 @@ export function objectStorageKey(key: string, configuredPrefix = process.env.OBJ
 class LocalObjectStore implements ObjectStore {
   private root = resolve(join(process.cwd(), "var", "objects"));
 
-  private path(key: string) {
-    const target = resolve(join(this.root, objectStorageKey(key)));
-    if (!target.startsWith(`${this.root}/`)) throw new Error("Invalid object key");
-    return target
-  }
-
   async put(key: string, data: Uint8Array) {
     const path = this.path(key);
     await mkdir(dirname(path), { recursive: true });
@@ -35,6 +29,12 @@ class LocalObjectStore implements ObjectStore {
 
   async get(key: string) {
     return new Uint8Array(await readFile(this.path(key)))
+  }
+
+  private path(key: string) {
+    const target = resolve(join(this.root, objectStorageKey(key)));
+    if (!target.startsWith(`${this.root}/`)) throw new Error("Invalid object key");
+    return target
   }
 }
 

@@ -37,8 +37,8 @@ Open [http://localhost:6178](http://localhost:6178) and sign in with the develop
 - Password: `envoy`
 
 The database starts with no products, services, domains, providers, messages, or inbound mail. Create the first product
-under **Service Credentials**, then configure real provider accounts and their write-only credentials under
-**Provider Accounts**. No provider key belongs in an environment file.
+under **Service Credentials**, then configure real provider accounts and their write-only credentials under **Provider
+Accounts**. No provider key belongs in an environment file.
 
 The web process and worker are intentionally separate. The production Compose file runs them as independently
 restartable containers from one image. Both require PostgreSQL and Redis; only the worker performs provider sends,
@@ -69,18 +69,18 @@ provider-specific fields.
 
 The service API is self-describing at `GET /api/v1` and `GET /api/v1/openapi.json`. Authenticated resources include:
 
-| Resource | Operations |
-|----------|------------|
-| `/messages` | Queue and list messages |
-| `/messages/{id}` | Inspect final content and recipient deliveries |
-| `/messages/{id}/cancel` | Cancel deliveries that have not crossed the provider boundary |
-| `/messages/{id}/retry` | Retry eligible outcomes with duplicate-risk acknowledgement for unknown outcomes |
-| `/deliveries` | List recipient-level deliveries and inspect attempts |
-| `/events` | Read normalized delivery events |
-| `/inbound-messages` | List and inspect sanitized inbound mail |
-| `/suppressions` | Check, create, and remove product-owned suppressions |
-| `/senders` | Discover logical sender profiles available to the product |
-| `/capabilities` | Discover limits, content rules, and available senders |
+| Resource                | Operations                                                                       |
+|-------------------------|----------------------------------------------------------------------------------|
+| `/messages`             | Queue and list messages                                                          |
+| `/messages/{id}`        | Inspect final content and recipient deliveries                                   |
+| `/messages/{id}/cancel` | Cancel deliveries that have not crossed the provider boundary                    |
+| `/messages/{id}/retry`  | Retry eligible outcomes with duplicate-risk acknowledgement for unknown outcomes |
+| `/deliveries`           | List recipient-level deliveries and inspect attempts                             |
+| `/events`               | Read normalized delivery events                                                  |
+| `/inbound-messages`     | List and inspect sanitized inbound mail                                          |
+| `/suppressions`         | Check, create, and remove product-owned suppressions                             |
+| `/senders`              | Discover logical sender profiles available to the product                        |
+| `/capabilities`         | Discover limits, content rules, and available senders                            |
 
 Query status with the same service credential:
 

@@ -11,9 +11,11 @@ export class MessageValidationError extends Error {
   }
 }
 
-export class IdempotencyConflictError extends Error {}
+export class IdempotencyConflictError extends Error {
+}
 
-export class DuplicateRiskError extends Error {}
+export class DuplicateRiskError extends Error {
+}
 
 function stable(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stable);

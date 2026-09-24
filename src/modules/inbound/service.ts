@@ -56,11 +56,28 @@ export async function persistInbound(input: {
     product_id: string;
     service_id: string | null;
     callback_endpoint_id: string | null
-  }>(`SELECT r.id,r.product_id,r.service_id,r.callback_endpoint_id FROM inbound_routes r JOIN sending_domains d ON d.id=r.sending_domain_id WHERE r.provider_webhook_endpoint_id=$1 AND r.status='active' AND d.status='active' AND d.inbound_enabled=true AND EXISTS (SELECT 1 FROM unnest($2::text[]) recipient WHERE split_part(recipient,'@',2)=d.domain AND (r.local_part_pattern='*' OR split_part(recipient,'@',1) LIKE replace(r.local_part_pattern,'*','%'))) ORDER BY (r.local_part_pattern<>'*') DESC LIMIT 1`, [input.webhookEndpointId, recipients])).rows[0] ?? null);
+  }>(`SELECT r.id, r.product_id, r.service_id, r.callback_endpoint_id
+      FROM inbound_routes r
+               JOIN sending_domains d ON d.id = r.sending_domain_id
+      WHERE r.provider_webhook_endpoint_id = $1
+        AND r.status = 'active'
+        AND d.status = 'active'
+        AND d.inbound_enabled = true
+        AND EXISTS (SELECT 1
+                    FROM unnest($2::text[]) recipient
+                    WHERE split_part(recipient, '@', 2) = d.domain
+                      AND (r.local_part_pattern = '*' OR
+                           split_part(recipient, '@', 1) LIKE replace(r.local_part_pattern, '*', '%')))
+      ORDER BY (r.local_part_pattern <> '*') DESC LIMIT 1`, [input.webhookEndpointId, recipients])).rows[0] ?? null);
   if (!route) throw new Error("No inbound route matched the recipients");
   const id = createId("inb");
-  const inserted = await query(`INSERT INTO inbound_messages(id,inbound_route_id,product_id,service_id,provider_account_id,raw_provider_event_id,external_message_id,message_id,from_email,to_emails,cc_emails,bcc_emails,subject,sanitized_html,text_body,status,received_at)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'scanning',$16) ON CONFLICT(provider_account_id,external_message_id) DO NOTHING RETURNING id`, [id, route.id, route.product_id, route.service_id, input.providerAccountId, input.rawEventId, message.externalMessageId, message.messageId ?? null, address(message.from), recipients, message.cc.map(address), message.bcc.map(address), message.subject, message.html ? sanitizeHtml(message.html) : null, message.text ?? null, message.receivedAt]);
+  const inserted = await query(`INSERT INTO inbound_messages(id, inbound_route_id, product_id, service_id,
+                                                             provider_account_id, raw_provider_event_id,
+                                                             external_message_id, message_id, from_email, to_emails,
+                                                             cc_emails, bcc_emails, subject, sanitized_html, text_body,
+                                                             status, received_at)
+                                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 'scanning',
+                                        $16) ON CONFLICT(provider_account_id,external_message_id) DO NOTHING RETURNING id`, [id, route.id, route.product_id, route.service_id, input.providerAccountId, input.rawEventId, message.externalMessageId, message.messageId ?? null, address(message.from), recipients, message.cc.map(address), message.bcc.map(address), message.subject, message.html ? sanitizeHtml(message.html) : null, message.text ?? null, message.receivedAt]);
   if (!inserted.rowCount) return (await query<{
     id: string
   }>("SELECT id FROM inbound_messages WHERE provider_account_id=$1 AND external_message_id=$2", [input.providerAccountId, message.externalMessageId])).rows[0].id;

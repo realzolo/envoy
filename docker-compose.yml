@@ -14,7 +14,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    command: ["node", "server.js"]
+    command: [ "node", "server.js" ]
     ports:
       - "6178:6178"
     restart: unless-stopped
@@ -32,11 +32,11 @@ services:
 
   worker:
     <<: *envoy-service
-    command: ["node", "node_modules/tsx/dist/cli.mjs", "src/worker/index.ts"]
+    command: [ "node", "node_modules/tsx/dist/cli.mjs", "src/worker/index.ts" ]
     restart: unless-stopped
     stop_grace_period: 30s
 
   migrate:
     <<: *envoy-service
-    command: ["node", "node_modules/tsx/dist/cli.mjs", "scripts/migrate.ts"]
+    command: [ "node", "node_modules/tsx/dist/cli.mjs", "scripts/migrate.ts" ]
     restart: "no"

@@ -1,6 +1,7 @@
 # Envoy Docker 部署
 
-生产服务器直接拉取源码，通过 Docker Compose 构建并运行。生产环境包含 Web、Worker 和一次性 Migration 三个容器任务，PostgreSQL、Redis 和 R2 使用外部服务。
+生产服务器直接拉取源码，通过 Docker Compose 构建并运行。生产环境包含 Web、Worker 和一次性 Migration 三个容器任务，PostgreSQL、Redis
+和 R2 使用外部服务。
 
 ## 1. 环境要求
 

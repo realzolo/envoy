@@ -520,26 +520,32 @@ function Credentials({ data }: { data: Data }) {
     }
   }
 
-  return <div className="space-y-5"><Panel title="Create product" description="Top-level tenant for sender and service isolation">
+  return <div className="space-y-5"><Panel title="Create product"
+                                           description="Top-level tenant for sender and service isolation">
     <form onSubmit={createProduct} className="grid gap-3 md:grid-cols-3"><label className={label}>Name<input name="name"
-      required className={input}/></label><label className={label}>Slug<input name="slug" required
-      pattern="[a-z0-9]+(?:-[a-z0-9]+)*" placeholder="customer-portal" className={input}/></label>
+                                                                                                             required
+                                                                                                             className={input}/></label><label
+      className={label}>Slug<input name="slug" required
+                                   pattern="[a-z0-9]+(?:-[a-z0-9]+)*" placeholder="customer-portal" className={input}/></label>
       <div className="flex items-end"><Submit pending={productAction.pending} labelText="Create product"/></div>
-    </form><Notice text={productAction.notice}/></Panel>{rows(data.products).length ? <Table
-    headers={["Product", "Slug", "Status", "Action"]} min="520px">{rows(data.products).map(product => <tr
+    </form>
+    <Notice text={productAction.notice}/></Panel>{rows(data.products).length ? <Table
+      headers={["Product", "Slug", "Status", "Action"]} min="520px">{rows(data.products).map(product => <tr
       key={value(product, "id")} className="border-b border-zinc-900"><Cell>{value(product, "name")}</Cell><Cell
       mono>{value(product, "slug")}</Cell><Cell>{value(product, "status")}</Cell><Cell><Button body={{
-        action: "product.toggle",
-        id: product.id,
-        enabled: product.status !== "active"
-      }}>{product.status === "active" ? "Suspend" : "Activate"}</Button></Cell></tr>)}</Table> :
-    <Empty text="No products configured. Create the first product to issue a service credential."/>}<Panel title="Issue service credential"
-                                           description="The plaintext key is shown once">
+      action: "product.toggle",
+      id: product.id,
+      enabled: product.status !== "active"
+    }}>{product.status === "active" ? "Suspend" : "Activate"}</Button></Cell></tr>)}</Table> :
+    <Empty text="No products configured. Create the first product to issue a service credential."/>}<Panel
+    title="Issue service credential"
+    description="The plaintext key is shown once">
     <form onSubmit={submit} className="grid gap-3 md:grid-cols-3"><label className={label}>Product<select
       name="productId" className={input}>{rows(data.products).map(p => <option key={value(p, "id")}
                                                                                value={value(p, "id")}>{value(p, "name")}</option>)}</select></label><label
       className={label}>Service name<input name="serviceName" required className={input}/></label>
-      <div className="flex items-end"><Submit pending={action.pending || !rows(data.products).length} labelText="Issue credential"/></div>
+      <div className="flex items-end"><Submit pending={action.pending || !rows(data.products).length}
+                                              labelText="Issue credential"/></div>
     </form>
     {key && <Secret value={key}/>}<Notice text={action.notice}/></Panel><Table
     headers={["Service", "Product", "Prefix", "Last used", "Status", "Actions"]}>{rows(data.credentials).map(c => <tr

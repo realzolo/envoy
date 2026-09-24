@@ -118,9 +118,13 @@ describe("durable message pipeline", () => {
     expect(await cancelMessage(accepted.message.id, "svc_nova_app")).toBeNull();
     const result = await cancelMessage(accepted.message.id, identity.serviceId);
     expect(result?.canceled).toBe(1);
-    const delivery = (await query<{ id: string }>("SELECT id FROM deliveries WHERE message_id=$1", [accepted.message.id])).rows[0];
+    const delivery = (await query<{
+      id: string
+    }>("SELECT id FROM deliveries WHERE message_id=$1", [accepted.message.id])).rows[0];
     await processDelivery({ data: { deliveryId: delivery.id } } as Job<{ deliveryId: string }>);
-    expect(Number((await query<{ count: string }>("SELECT count(*) FROM delivery_attempts WHERE delivery_id=$1", [delivery.id])).rows[0].count)).toBe(0);
+    expect(Number((await query<{
+      count: string
+    }>("SELECT count(*) FROM delivery_attempts WHERE delivery_id=$1", [delivery.id])).rows[0].count)).toBe(0);
     expect((await getMessage(accepted.message.id, identity.serviceId))?.status).toBe("canceled")
   });
   it("requires duplicate-risk acknowledgement before retrying an unknown outcome", async () => {
@@ -130,7 +134,9 @@ describe("durable message pipeline", () => {
       input: { ...request, to: [{ email: `service-retry-${crypto.randomUUID()}@example.net` }] }
     });
     messageIds.push(accepted.message.id);
-    const delivery = (await query<{ id: string }>("SELECT id FROM deliveries WHERE message_id=$1", [accepted.message.id])).rows[0];
+    const delivery = (await query<{
+      id: string
+    }>("SELECT id FROM deliveries WHERE message_id=$1", [accepted.message.id])).rows[0];
     expect(await prepareSubmission(delivery.id)).toBeTruthy();
     expect(await prepareSubmission(delivery.id)).toHaveProperty("reconcileAttemptId");
     await expect(retryMessage(accepted.message.id, identity.serviceId, false)).rejects.toBeInstanceOf(DuplicateRiskError);

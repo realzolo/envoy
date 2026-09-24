@@ -56,57 +56,70 @@ export function MessageComposer({ services, senders }: { services: Service[]; se
   return <form onSubmit={submit} className="grid gap-6 xl:grid-cols-[380px_minmax(0,1fr)]">
     <aside className="space-y-4">
       <label className="block text-xs text-zinc-500">Service<select required value={serviceId}
-        onChange={event => {
-          const nextServiceId = event.target.value;
-          const nextProductId = services.find(item => item.id === nextServiceId)?.product_id;
-          setServiceId(nextServiceId);
-          setSenderProfile("");
-          setCategory(senders.find(item => item.product_id === nextProductId)?.category ?? "transactional")
-        }} className={`${field} h-9`}>
+                                                                    onChange={event => {
+                                                                      const nextServiceId = event.target.value;
+                                                                      const nextProductId = services.find(item => item.id === nextServiceId)?.product_id;
+                                                                      setServiceId(nextServiceId);
+                                                                      setSenderProfile("");
+                                                                      setCategory(senders.find(item => item.product_id === nextProductId)?.category ?? "transactional")
+                                                                    }} className={`${field} h-9`}>
         {services.map(item => <option key={item.id} value={item.id}>{item.product} / {item.name}</option>)}
       </select></label>
       <label className="block text-xs text-zinc-500">Sender profile<select value={senderProfile}
-        onChange={event => {
-          const profile = event.target.value;
-          setSenderProfile(profile);
-          if (profile) setCategory(availableSenders.find(item => item.name === profile)?.category ?? category)
-        }} className={`${field} h-9`}>
+                                                                           onChange={event => {
+                                                                             const profile = event.target.value;
+                                                                             setSenderProfile(profile);
+                                                                             if (profile) setCategory(availableSenders.find(item => item.name === profile)?.category ?? category)
+                                                                           }} className={`${field} h-9`}>
         <option value="">Automatic by category</option>
-        {availableSenders.map(item => <option key={item.name} value={item.name}>{item.name} / {item.from_address}</option>)}
+        {availableSenders.map(item => <option key={item.name}
+                                              value={item.name}>{item.name} / {item.from_address}</option>)}
       </select></label>
       <label className="block text-xs text-zinc-500">Recipient<input name="recipient" type="email" required
-        placeholder="recipient@company.com" className={`${field} h-9`}/></label>
+                                                                     placeholder="recipient@company.com"
+                                                                     className={`${field} h-9`}/></label>
       <label className="block text-xs text-zinc-500">Category<input name="category" required value={category}
-        onChange={event => setCategory(event.target.value)} className={`${field} h-9`}/></label>
+                                                                    onChange={event => setCategory(event.target.value)}
+                                                                    className={`${field} h-9`}/></label>
       <label className="block text-xs text-zinc-500">Subject<input value={subject}
-        onChange={event => setSubject(event.target.value)} required className={`${field} h-9`}/></label>
+                                                                   onChange={event => setSubject(event.target.value)}
+                                                                   required className={`${field} h-9`}/></label>
       <label className="block text-xs text-zinc-500">Plain text<textarea value={textBody}
-        onChange={event => setTextBody(event.target.value)} rows={6} className={`${field} py-2 font-mono text-xs`}/></label>
+                                                                         onChange={event => setTextBody(event.target.value)}
+                                                                         rows={6}
+                                                                         className={`${field} py-2 font-mono text-xs`}/></label>
       <label className="block text-xs text-zinc-500">HTML<textarea value={html}
-        onChange={event => setHtml(event.target.value)} rows={14} spellCheck={false}
-        className={`${field} py-2 font-mono text-xs`}/></label>
+                                                                   onChange={event => setHtml(event.target.value)}
+                                                                   rows={14} spellCheck={false}
+                                                                   className={`${field} py-2 font-mono text-xs`}/></label>
       <button disabled={pending || !services.length}
-        className="inline-flex h-9 items-center gap-2 rounded-md bg-zinc-100 px-3 text-sm font-medium text-zinc-950 disabled:opacity-50">
+              className="inline-flex h-9 items-center gap-2 rounded-md bg-zinc-100 px-3 text-sm font-medium text-zinc-950 disabled:opacity-50">
         {pending ? <LoaderCircle size={14} className="animate-spin"/> : <Send size={14}/>}Queue test message
       </button>
-      {notice && <p role="status" className={`break-words text-xs ${notice.startsWith("Queued") ? "text-emerald-400" : "text-red-400"}`}>{notice}</p>}
+      {notice && <p role="status"
+                    className={`break-words text-xs ${notice.startsWith("Queued") ? "text-emerald-400" : "text-red-400"}`}>{notice}</p>}
     </aside>
     <section className="overflow-hidden rounded-lg border border-zinc-800 bg-[#090909]">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-800 px-4 py-3">
-        <div className="min-w-0"><p className="truncate text-sm text-zinc-200">{subject}</p><p className="mt-1 text-[11px] text-zinc-700">Transient preview</p></div>
+        <div className="min-w-0"><p className="truncate text-sm text-zinc-200">{subject}</p><p
+          className="mt-1 text-[11px] text-zinc-700">Transient preview</p></div>
         <div className="flex items-center gap-1">
           <button type="button" title="Desktop preview" onClick={() => setViewport("desktop")}
-            className={`flex size-8 items-center justify-center rounded-md ${viewport === "desktop" ? "bg-zinc-800 text-white" : "text-zinc-600"}`}><Monitor size={14}/></button>
+                  className={`flex size-8 items-center justify-center rounded-md ${viewport === "desktop" ? "bg-zinc-800 text-white" : "text-zinc-600"}`}>
+            <Monitor size={14}/></button>
           <button type="button" title="Mobile preview" onClick={() => setViewport("mobile")}
-            className={`flex size-8 items-center justify-center rounded-md ${viewport === "mobile" ? "bg-zinc-800 text-white" : "text-zinc-600"}`}><Smartphone size={14}/></button>
+                  className={`flex size-8 items-center justify-center rounded-md ${viewport === "mobile" ? "bg-zinc-800 text-white" : "text-zinc-600"}`}>
+            <Smartphone size={14}/></button>
           <button type="button" title="Toggle source" onClick={() => setSource(!source)}
-            className={`flex size-8 items-center justify-center rounded-md ${source ? "bg-zinc-800 text-white" : "text-zinc-600"}`}><Code2 size={14}/></button>
+                  className={`flex size-8 items-center justify-center rounded-md ${source ? "bg-zinc-800 text-white" : "text-zinc-600"}`}>
+            <Code2 size={14}/></button>
         </div>
       </div>
       <div className="subtle-grid flex min-h-[720px] justify-center bg-[#111] p-4 sm:p-8">
-        {source ? <pre className="w-full overflow-auto whitespace-pre-wrap text-xs leading-5 text-zinc-400">{html}</pre> :
+        {source ?
+          <pre className="w-full overflow-auto whitespace-pre-wrap text-xs leading-5 text-zinc-400">{html}</pre> :
           <iframe title="Message preview" srcDoc={html} sandbox=""
-            className={`min-h-[680px] border-0 bg-white transition-[width] ${viewport === "desktop" ? "w-full max-w-[660px]" : "w-full max-w-[375px]"}`}/>}</div>
+                  className={`min-h-[680px] border-0 bg-white transition-[width] ${viewport === "desktop" ? "w-full max-w-[660px]" : "w-full max-w-[375px]"}`}/>}</div>
     </section>
   </form>
 }

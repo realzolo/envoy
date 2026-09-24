@@ -9,7 +9,11 @@ export async function GET(request: Request) {
     apiVersion: "v1",
     service: { id: identity.serviceId, name: identity.serviceName },
     product: { id: identity.productId, name: identity.product },
-    limits: { recipientsPerMessage: 50, contentBytesPerPart: 2_000_000, requestsPerMinute: identity.rateLimitPerMinute },
+    limits: {
+      recipientsPerMessage: 50,
+      contentBytesPerPart: 2_000_000,
+      requestsPerMinute: identity.rateLimitPerMinute
+    },
     content: { ownership: "caller", formats: ["text/plain", "text/html"], requiresRenderedContent: true },
     senderProfiles: await listSenderProfiles(identity.productId),
     resources: ["messages", "deliveries", "events", "inbound-messages", "suppressions", "senders"],

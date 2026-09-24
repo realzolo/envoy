@@ -37,7 +37,10 @@ export default async function setup() {
   await database.query("INSERT INTO provider_credentials(id,provider_account_id,credential_version,secret_ciphertext,encrypted_dek,key_version,created_by) VALUES ('pc_mock','pa_mock',1,$1,$2,$3,'test')", [providerSecret.secretCiphertext, providerSecret.encryptedDek, providerSecret.keyVersion]);
   await database.query("INSERT INTO provider_webhook_endpoints(id,provider_account_id,opaque_token,security_config_ciphertext,security_encrypted_dek,key_version) VALUES ('pwe_mock','pa_mock','test-endpoint',$1,$2,$3)", [webhookSecret.secretCiphertext, webhookSecret.encryptedDek, webhookSecret.keyVersion]);
   await database.query("INSERT INTO sending_domains(id,domain,region,inbound_enabled) VALUES ('sd_atlas','mail.atlas.test','local',true)");
-  await database.query("INSERT INTO provider_identities(id,sending_domain_id,provider_account_id,external_identity_id,status,capabilities) VALUES ('pi_atlas_mock','sd_atlas','pa_mock','test_identity','verified',$1)", [{ outbound: true, inbound: true }]);
+  await database.query("INSERT INTO provider_identities(id,sending_domain_id,provider_account_id,external_identity_id,status,capabilities) VALUES ('pi_atlas_mock','sd_atlas','pa_mock','test_identity','verified',$1)", [{
+    outbound: true,
+    inbound: true
+  }]);
   await database.query("INSERT INTO sender_profiles(id,product_id,sending_domain_id,name,from_name,from_local_part,message_category) VALUES ('sp_atlas_security','prd_atlas','sd_atlas','Atlas Security','Atlas','security','security')");
   await database.query("INSERT INTO routing_policies(id,name,product_id,message_category,priority) VALUES ('rp_atlas_security','Test routing','prd_atlas','security',10)");
   await database.query("INSERT INTO routing_targets(id,policy_id,provider_account_id,provider_identity_id,priority,weight) VALUES ('rt_atlas_security','rp_atlas_security','pa_mock','pi_atlas_mock',10,100)");

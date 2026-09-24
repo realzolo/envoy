@@ -18,7 +18,8 @@ cp deploy/env.production.example .env.production
 vi .env.production
 ```
 
-Replace every active `replace_with_*` value. Ensure the database, authenticated Redis, R2 credentials, KEK, administrator
+Replace every active `replace_with_*` value. Ensure the database, authenticated Redis, R2 credentials, KEK,
+administrator
 credentials and session secret are correct. ClamAV is optional; without it, attachments skip scanning and receive the
 `skipped` status. `.env.production` is ignored by Git and excluded from the Docker build context.
 
