@@ -51,6 +51,6 @@ if [[ -d public ]]; then
 fi
 
 mkdir -p "$OUTPUT_DIR"
-tar --exclude='.next/cache' --exclude='.next/dev' -czf "$archive" "${paths[@]}"
+COPYFILE_DISABLE=1 tar --no-xattrs --exclude='.next/cache' --exclude='.next/dev' -czf "$archive" "${paths[@]}"
 
 echo "Release artifact: $archive"
