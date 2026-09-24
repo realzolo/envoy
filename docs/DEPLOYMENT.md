@@ -1,7 +1,8 @@
 # Envoy Docker Deployment
 
 The production server checks out the source and builds one Docker image. Docker Compose runs the Web and Worker as
-separate containers and executes database migration as a one-off task. PostgreSQL, Redis, and R2 remain external.
+separate containers, executes database migration as a one-off task, and attaches all three services to the explicit
+`envoy-network` bridge network. PostgreSQL, Redis, and R2 remain external.
 
 ## Requirements
 

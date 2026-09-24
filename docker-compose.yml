@@ -5,6 +5,8 @@ x-envoy-service: &envoy-service
   env_file:
     - .env.production
   init: true
+  networks:
+    - envoy-network
   security_opt:
     - no-new-privileges:true
 
@@ -40,3 +42,8 @@ services:
     <<: *envoy-service
     command: [ "node", "node_modules/tsx/dist/cli.mjs", "scripts/migrate.ts" ]
     restart: "no"
+
+networks:
+  envoy-network:
+    name: envoy-network
+    driver: bridge
