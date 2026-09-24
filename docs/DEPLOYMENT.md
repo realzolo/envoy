@@ -39,6 +39,9 @@ docker compose ps
 curl --fail http://127.0.0.1:6178/api/health
 ```
 
+The session cookie follows the browser-facing protocol. HTTPS reverse proxies must forward `X-Forwarded-Proto`.
+Use HTTPS for public deployments; direct HTTP access is intended only for trusted networks.
+
 ## Update
 
 ```bash

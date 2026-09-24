@@ -10,7 +10,7 @@ export async function POST(request: Request) {
   if (!body.email || !body.password || !validAdminCredentials(body.email, body.password)) {
     return Response.json({ title: "Unauthorized" }, { status: 401 });
   }
-  await createAdminSession(body.email);
+  await createAdminSession(body.email, request);
   return Response.json({ email: body.email });
 }
 

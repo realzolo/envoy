@@ -75,6 +75,9 @@ docker compose up -d web worker
 http://SERVER_IP:6178
 ```
 
+会话 Cookie 会按浏览器访问协议自动设置；通过 HTTPS 反向代理部署时，请转发 `X-Forwarded-Proto`。公网环境应使用
+HTTPS，直接 HTTP 访问仅适用于受信网络。
+
 查看状态和健康检查：
 
 ```bash

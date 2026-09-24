@@ -12,7 +12,13 @@ function secret() {
   return new TextEncoder().encode(value ?? "envoy-local-session-secret-change-before-production");
 }
 
-export async function createAdminSession(email: string) {
+export function sessionCookieIsSecure(request: Request) {
+  const forwardedProtocol = request.headers.get("x-forwarded-proto")?.split(",", 1)[0]?.trim().toLowerCase();
+  if (forwardedProtocol) return forwardedProtocol === "https";
+  return new URL(request.url).protocol === "https:";
+}
+
+export async function createAdminSession(email: string, request: Request) {
   const token = await new SignJWT({ role: "admin" })
     .setProtectedHeader({ alg: "HS256" })
     .setSubject(email)
@@ -23,7 +29,7 @@ export async function createAdminSession(email: string) {
   store.set(COOKIE_NAME, token, {
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    secure: sessionCookieIsSecure(request),
     path: "/",
     maxAge: MAX_AGE,
   });
@@ -49,4 +55,3 @@ export function validAdminCredentials(email: string, password: string) {
   return email === (process.env.ENVOY_ADMIN_EMAIL ?? "admin@envoy.local")
     && password === (process.env.ENVOY_ADMIN_PASSWORD ?? "envoy");
 }
-
