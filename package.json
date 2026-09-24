@@ -15,14 +15,8 @@
     "lint": "eslint",
     "typecheck": "next typegen && tsc --noEmit",
     "test": "vitest run",
-    "infra:up": "docker compose up -d --wait",
-    "infra:down": "docker compose down",
     "db:migrate": "tsx scripts/migrate.ts",
-    "db:setup": "pnpm db:migrate",
-    "pm2:start": "pm2 start ecosystem.config.cjs",
-    "pm2:reload": "pm2 startOrReload ecosystem.config.cjs --update-env",
-    "deploy:pm2": "bash scripts/deploy-pm2.sh",
-    "release:build": "bash scripts/build-release.sh"
+    "db:setup": "pnpm db:migrate"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1136.0",
@@ -42,6 +36,7 @@
     "resend": "^6.28.1",
     "sanitize-html": "^2.17.7",
     "svix": "^2.5.0",
+    "tsx": "^4.23.13",
     "zod": "^4.6.5"
   },
   "devDependencies": {
@@ -57,7 +52,6 @@
     "eslint": "^9",
     "eslint-config-next": "16.3.5",
     "tailwindcss": "^4",
-    "tsx": "^4.23.13",
     "typescript": "^5",
     "vitest": "^5.0.1"
   },

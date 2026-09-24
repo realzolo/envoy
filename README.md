@@ -23,11 +23,10 @@ pipeline, and security model.
 
 ## Local setup
 
-Requirements: Node.js, pnpm, and Docker.
+Requirements: Node.js, pnpm, and configured PostgreSQL and Redis connections in `.env.local`.
 
 ```bash
 pnpm install
-pnpm infra:up
 pnpm db:setup
 pnpm dev:all
 ```
@@ -41,9 +40,9 @@ The database starts with no products, services, domains, providers, messages, or
 under **Service Credentials**, then configure real provider accounts and their write-only credentials under
 **Provider Accounts**. No provider key belongs in an environment file.
 
-The web process and worker are intentionally separate. In production, run `pnpm start` and `pnpm worker` as
-independently scalable processes. Both require PostgreSQL and Redis; only the worker performs provider sends, event
-application, callbacks, and reconciliation.
+The web process and worker are intentionally separate. The production Compose file runs them as independently
+restartable containers from one image. Both require PostgreSQL and Redis; only the worker performs provider sends,
+event application, callbacks, and reconciliation.
 
 ## Message API
 
@@ -106,10 +105,10 @@ to verify signed business callbacks.
 
 ## Production deployment
 
-The supported PM2 deployment uses a prebuilt release artifact and runs the Next.js Web process and asynchronous Worker
-independently behind Nginx. The default application port is `6178`. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the
-build, upload, production environment, migration, PM2 startup, TLS proxy, health check, and rollback procedure.
-Chinese documentation is available at [docs/DEPLOYMENT.zh-CN.md](docs/DEPLOYMENT.zh-CN.md).
+Production deployment builds the Docker image from a server-side Git checkout and runs separate Web and Worker
+containers with Docker Compose. The application is published on port `6178`; PostgreSQL, Redis, R2, and secrets are
+provided through `.env.production`. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) or the
+[Chinese guide](docs/DEPLOYMENT.zh-CN.md).
 
 ## Commands
 
@@ -119,7 +118,6 @@ pnpm lint
 pnpm test
 pnpm build
 pnpm worker
-pnpm infra:down
 ```
 
 All provider credentials, webhook secrets, and callback signing secrets live in encrypted database envelopes. The
