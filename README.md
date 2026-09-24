@@ -109,6 +109,7 @@ to verify signed business callbacks.
 The supported PM2 deployment uses a prebuilt release artifact and runs the Next.js Web process and asynchronous Worker
 independently behind Nginx. The default application port is `6178`. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the
 build, upload, production environment, migration, PM2 startup, TLS proxy, health check, and rollback procedure.
+Chinese documentation is available at [docs/DEPLOYMENT.zh-CN.md](docs/DEPLOYMENT.zh-CN.md).
 
 ## Commands
 

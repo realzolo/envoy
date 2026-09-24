@@ -33,6 +33,7 @@ paths=(
   db
   deploy
   docs/DEPLOYMENT.md
+  docs/DEPLOYMENT.zh-CN.md
   scripts/deploy-pm2.sh
   scripts/migrate.ts
   src
