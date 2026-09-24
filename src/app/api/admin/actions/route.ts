@@ -47,12 +47,8 @@ export async function POST(request: Request) {
         result = await actions.createProviderAccount({
           type,
           name: text(body, "name"),
-          region: text(body, "region"),
-          publicConfig: object(body, "publicConfig"),
-          secret: object(body, "secret"),
-          webhookSecurity: object(body, "webhookSecurity"),
-          expectedTopicArn: typeof body.expectedTopicArn === "string" ? body.expectedTopicArn : undefined,
-          ipAllowlist: strings(body.ipAllowlist)
+          configuration: object(body, "configuration"),
+          credentials: object(body, "credentials")
         }, session.email);
         status = 201;
         break
@@ -70,7 +66,7 @@ export async function POST(request: Request) {
         result = await actions.rotateProviderCredential(text(body, "id"), object(body, "secret"), session.email);
         break;
       case"webhook.rotate_security":
-        result = await actions.rotateWebhookSecurity(text(body, "id"), object(body, "security"), typeof body.expectedTopicArn === "string" ? body.expectedTopicArn : undefined, Array.isArray(body.ipAllowlist) ? strings(body.ipAllowlist) : undefined, session.email);
+        result = await actions.configureProviderWebhook(text(body, "id"), object(body, "settings"), session.email);
         break;
       case"webhook.toggle":
         await actions.toggleWebhookEndpoint(text(body, "id"), body.enabled === true, session.email);

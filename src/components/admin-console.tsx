@@ -3,7 +3,6 @@
 import {
   Check,
   Clipboard,
-  FlaskConical,
   LoaderCircle,
   Plus,
   RefreshCw,
@@ -12,8 +11,10 @@ import {
   ShieldAlert,
   Trash2
 } from "lucide-react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { type FormEvent, type ReactNode, useState } from "react";
+import { ProviderAccounts } from "@/components/provider-accounts";
 
 type Row = Record<string, unknown>;
 type Data = Record<string, unknown>;
@@ -123,152 +124,13 @@ function Cell({ children, mono = false }: { children: ReactNode; mono?: boolean 
 }
 
 function Providers({ data }: { data: Data }) {
-  const action = useAction();
-  const providers = rows(data.providers);
-
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const form = event.currentTarget;
-    const d = new FormData(form);
-    try {
-      await action.run({
-        action: "provider.create",
-        type: d.get("type"),
-        name: d.get("name"),
-        region: d.get("region"),
-        publicConfig: JSON.parse(String(d.get("publicConfig"))),
-        secret: JSON.parse(String(d.get("secret"))),
-        webhookSecurity: JSON.parse(String(d.get("webhookSecurity"))),
-        expectedTopicArn: d.get("expectedTopicArn"),
-        ipAllowlist: String(d.get("ipAllowlist") ?? "").split(",").map(item => item.trim()).filter(Boolean)
-      })
-    } catch {
-    }
-  }
-
-  return <div className="space-y-5"><Panel title="Create provider account"
-                                           description="Secrets are write-only and envelope encrypted">
-    <form onSubmit={submit} className="grid gap-3 md:grid-cols-3"><label className={label}>Provider<select name="type"
-                                                                                                           className={input}>{rows(data.descriptors).map(item =>
-      <option key={value(item, "type")}
-              value={value(item, "type")}>{value(item, "displayName")}</option>)}</select></label><label
-      className={label}>Account name<input name="name" required className={input}/></label><label className={label}>Region<input
-      name="region" required defaultValue="us-east-1" className={input}/></label><label
-      className={`${label} md:col-span-3`}>Public configuration JSON<textarea name="publicConfig" rows={3}
-                                                                              defaultValue="{}"
-                                                                              className={`${input} h-auto py-2 font-mono text-xs`}/></label><label
-      className={`${label} md:col-span-3`}>Credential JSON<textarea name="secret" rows={3}
-                                                                    defaultValue={'{"apiKey":""}'}
-                                                                    className={`${input} h-auto py-2 font-mono text-xs`}/></label><label
-      className={`${label} md:col-span-3`}>Webhook security JSON<textarea name="webhookSecurity" rows={3}
-                                                                          defaultValue={'{"signingSecret":""}'}
-                                                                          className={`${input} h-auto py-2 font-mono text-xs`}/></label><label
-      className={label}>Expected SNS Topic ARN (SES)<input name="expectedTopicArn" className={input}/></label><label
-      className={label}>Webhook IP allowlist<input name="ipAllowlist" placeholder="203.0.113.10, 203.0.113.11"
-                                                   className={input}/></label>
-      <div className="flex items-end"><Submit pending={action.pending} labelText="Create account"/></div>
-    </form>
-    <Notice text={action.notice}/></Panel><ProviderQuotaForm providers={providers}/>{providers.length ?
-    <div className="grid gap-4 lg:grid-cols-2">{providers.map(item => <section key={value(item, "id")}
-                                                                               className="rounded-lg border border-zinc-800 bg-[#090909] p-5">
-      <div className="flex items-start justify-between">
-        <div><h2 className="text-sm font-medium text-zinc-100">{value(item, "name")}</h2><p
-          className="mt-1 font-mono text-xs text-zinc-600">{value(item, "type")} / {value(item, "region")}</p></div>
-        <span
-          className={`text-xs ${item.status === "active" ? "text-emerald-400" : "text-amber-400"}`}>{value(item, "status")}</span>
-      </div>
-      <dl className="mt-4 grid grid-cols-2 gap-3 text-xs">
-        <div>
-          <dt className="text-zinc-700">Health</dt>
-          <dd className="mt-1 text-zinc-400">{value(item, "health")}</dd>
-        </div>
-        <div>
-          <dt className="text-zinc-700">Revision</dt>
-          <dd className="mt-1 text-zinc-400">{value(item, "config_revision")}</dd>
-        </div>
-      </dl>
-      <div className="mt-4 flex flex-wrap gap-2"><Button body={{ action: "provider.test", id: item.id }}><FlaskConical
-        size={13}/>Test connection</Button><Button body={{
-        action: "provider.toggle",
-        id: item.id,
-        enabled: item.status !== "active"
-      }}>{item.status === "active" ? "Disable" : "Enable"}</Button></div>
-      <details className="mt-4 border-t border-zinc-800 pt-3">
-        <summary className="cursor-pointer text-xs text-zinc-500">Rotate credential</summary>
-        <RotateProvider id={value(item, "id")}/></details>
-    </section>)}</div> : <Empty text="No provider accounts have been configured."/>}</div>
+  return <ProviderAccounts data={data}/>
 }
 
-function RotateProvider({ id }: { id: string }) {
-  const action = useAction();
-  const [secret, setSecret] = useState("{}");
-  return <div className="mt-3"><textarea value={secret} onChange={e => setSecret(e.target.value)} rows={3}
-                                         className={`${input} h-auto py-2 font-mono text-xs`}/>
-    <button type="button" onClick={async () => {
-      try {
-        await action.run({ action: "provider.rotate", id, secret: JSON.parse(secret) })
-      } catch {
-      }
-    }}
-            className="mt-2 inline-flex h-8 items-center gap-2 rounded-md border border-zinc-800 px-2.5 text-xs text-zinc-300">
-      <RotateCcw size={13}/>Rotate
-    </button>
-    <Notice text={action.notice}/></div>
-}
-
-function RotateWebhook({ id }: { id: string }) {
-  const action = useAction();
-  const [security, setSecurity] = useState("{}");
-  const [topic, setTopic] = useState("");
-  const [ips, setIps] = useState("");
-  return <details>
-    <summary className="cursor-pointer text-xs text-zinc-500">Security</summary>
-    <div className="mt-2 w-72 space-y-2"><textarea aria-label="Webhook security JSON" value={security}
-                                                   onChange={e => setSecurity(e.target.value)} rows={3}
-                                                   className={`${input} h-auto py-2 font-mono text-xs`}/><input
-      aria-label="Expected SNS Topic ARN" value={topic} onChange={e => setTopic(e.target.value)}
-      placeholder="Expected SNS Topic ARN" className={input}/><input aria-label="Webhook IP allowlist" value={ips}
-                                                                     onChange={e => setIps(e.target.value)}
-                                                                     placeholder="IP allowlist" className={input}/>
-      <button type="button" onClick={async () => {
-        try {
-          await action.run({
-            action: "webhook.rotate_security",
-            id,
-            security: JSON.parse(security),
-            expectedTopicArn: topic || undefined,
-            ipAllowlist: ips ? ips.split(",").map(item => item.trim()).filter(Boolean) : undefined
-          })
-        } catch {
-        }
-      }} className="inline-flex h-8 items-center gap-2 rounded-md border border-zinc-800 px-2.5 text-xs text-zinc-300">
-        <RotateCcw size={13}/>Rotate security
-      </button>
-      <Notice text={action.notice}/></div>
-  </details>
-}
-
-function ProviderQuotaForm({ providers }: { providers: Row[] }) {
-  const action = useAction();
-
-  async function submit(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    const d = new FormData(e.currentTarget);
-    try {
-      await action.run({ action: "provider.update_quota", id: d.get("id"), quota: JSON.parse(String(d.get("quota"))) })
-    } catch {
-    }
-  }
-
-  return <Panel title="Update provider quota" description="Limits are evaluated by the routing engine">
-    <form onSubmit={submit} className="grid gap-3 md:grid-cols-[240px_1fr_auto]"><label className={label}>Account<select
-      name="id" className={input}>{providers.map(p => <option key={value(p, "id")}
-                                                              value={value(p, "id")}>{value(p, "name")}</option>)}</select></label><label
-      className={label}>Quota JSON<input name="quota" defaultValue={'{"monthlyLimit":100000}'}
-                                         className={`${input} font-mono`}/></label>
-      <div className="flex items-end"><Submit pending={action.pending} labelText="Save quota"/></div>
-    </form>
-    <Notice text={action.notice}/></Panel>
+function RotateWebhook() {
+  return <Link href="/providers" className="inline-flex h-8 items-center rounded-md border border-zinc-800 px-2.5 text-xs text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200">
+    Manage security
+  </Link>
 }
 
 function Domains({ data }: { data: Data }) {
@@ -644,7 +506,7 @@ function Callbacks({ data }: { data: Data }) {
         action: "webhook.toggle",
         id: w.id,
         enabled: w.status !== "active"
-      }}>{w.status === "active" ? "Disable" : "Enable"}</Button><RotateWebhook id={value(w, "id")}/></div>
+      }}>{w.status === "active" ? "Disable" : "Enable"}</Button><RotateWebhook/></div>
     </Cell></tr>)}</Table></div>
 }
 

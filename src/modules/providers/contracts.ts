@@ -5,59 +5,78 @@ export type ProviderType = z.infer<typeof providerTypeSchema>;
 
 const baseConfig = { schemaVersion: z.literal(1) };
 export const providerConfigSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("resend"), ...baseConfig, apiBase: z.string().url().default("https://api.resend.com") }),
+  z.object({ type: z.literal("resend"), ...baseConfig }).strict(),
   z.object({
     type: z.literal("ses"), ...baseConfig,
     region: z.string().min(2),
     configurationSet: z.string().optional(),
     roleArn: z.string().optional(),
     externalId: z.string().optional()
-  }),
+  }).strict(),
   z.object({
     type: z.literal("sendgrid"), ...baseConfig,
-    apiBase: z.string().url().default("https://api.sendgrid.com")
-  }),
+    region: z.enum(["global", "eu"]).default("global")
+  }).strict(),
   z.object({
     type: z.literal("mailgun"), ...baseConfig,
     region: z.enum(["us", "eu"]),
     sendingDomain: z.string().min(3)
-  }),
+  }).strict(),
   z.object({
     type: z.literal("postmark"), ...baseConfig,
-    apiBase: z.string().url().default("https://api.postmarkapp.com"),
     messageStream: z.string().default("outbound")
-  }),
+  }).strict(),
   z.object({
     type: z.literal("mock"), ...baseConfig,
     behavior: z.enum(["deliver", "defer", "unknown"]).default("deliver")
-  }),
+  }).strict(),
 ]);
 export type ProviderConfig = z.infer<typeof providerConfigSchema>;
 
 export const providerSecretSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("resend"), apiKey: z.string().min(8) }),
+  z.object({ type: z.literal("resend"), apiKey: z.string().min(8) }).strict(),
   z.object({
     type: z.literal("ses"),
     accessKeyId: z.string().optional(),
     secretAccessKey: z.string().optional(),
     sessionToken: z.string().optional()
-  }).refine((v) => (!v.accessKeyId && !v.secretAccessKey) || (v.accessKeyId && v.secretAccessKey), "Both static AWS credential fields are required"),
+  }).strict().refine((v) => (!v.accessKeyId && !v.secretAccessKey) || (v.accessKeyId && v.secretAccessKey), "Both static AWS credential fields are required"),
   z.object({
     type: z.literal("sendgrid"),
-    apiKey: z.string().min(8),
-    webhookPublicKey: z.string().optional(),
-    oauthClientSecret: z.string().optional()
-  }),
-  z.object({ type: z.literal("mailgun"), apiKey: z.string().min(8), webhookSigningKey: z.string().min(8) }),
+    apiKey: z.string().min(8)
+  }).strict(),
+  z.object({ type: z.literal("mailgun"), apiKey: z.string().min(8) }).strict(),
   z.object({
     type: z.literal("postmark"),
-    serverToken: z.string().min(8),
-    webhookUsername: z.string().optional(),
-    webhookPassword: z.string().optional()
-  }),
-  z.object({ type: z.literal("mock"), token: z.string().default("local-mock") }),
+    serverToken: z.string().min(8)
+  }).strict(),
+  z.object({ type: z.literal("mock"), token: z.string().default("local-mock") }).strict(),
 ]);
 export type ProviderSecret = z.infer<typeof providerSecretSchema>;
+
+export const providerWebhookSettingsSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("resend"), signingSecret: z.string().min(8) }).strict(),
+  z.object({ type: z.literal("sendgrid"), publicKey: z.string().min(32) }).strict(),
+  z.object({ type: z.literal("mailgun"), webhookSigningKey: z.string().min(8) }).strict(),
+  z.object({
+    type: z.literal("postmark"),
+    username: z.string().min(1),
+    password: z.string().min(8),
+    ipAllowlist: z.array(z.string().min(1)).default([])
+  }).strict(),
+  z.object({
+    type: z.literal("ses"),
+    expectedTopicArn: z.string().regex(/^arn:(?:aws|aws-us-gov|aws-cn):sns:[^:]+:\d{12}:[^:]+$/)
+  }).strict(),
+  z.object({ type: z.literal("mock") }).strict()
+]);
+export type ProviderWebhookSettings = z.infer<typeof providerWebhookSettingsSchema>;
+
+export function providerAccountRegion(config: ProviderConfig) {
+  if (config.type === "ses" || config.type === "mailgun" || config.type === "sendgrid") return config.region;
+  if (config.type === "mock") return "local";
+  return "global"
+}
 
 export type ProviderCapabilities = {
   nativeIdempotency: boolean;

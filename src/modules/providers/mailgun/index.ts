@@ -47,8 +47,9 @@ export const mailgunModule: ProviderModule = {
     }
   },
   webhook: {
-    async verify(request, context) {
-      if (context.secret.type !== "mailgun") throw new Error("Invalid Mailgun credential");
+    async verify(request, _context, security) {
+      const signingKey = typeof security.webhookSigningKey === "string" ? security.webhookSigningKey : "";
+      if (!signingKey) return { valid: false, replaySafe: false, nativeType: "unknown", parsed: null };
       const contentType = header(request.headers, "content-type");
       const parsed = contentType.includes("multipart/form-data") ? await parseMultipart(request.rawBody, contentType) : decodeJson(request.rawBody);
       const value = (key: string) => {
@@ -59,7 +60,7 @@ export const mailgunModule: ProviderModule = {
       const timestamp = value("timestamp") || String(signature.timestamp ?? "");
       const token = value("token") || String(signature.token ?? "");
       const actual = value("signature") || String(signature.signature ?? "");
-      const expected = createHmac("sha256", context.secret.webhookSigningKey).update(timestamp + token).digest("hex");
+      const expected = createHmac("sha256", signingKey).update(timestamp + token).digest("hex");
       const valid = actual.length === expected.length && timingSafeEqual(Buffer.from(actual), Buffer.from(expected));
       const data = ((parsed as Record<string, unknown>)["event-data"] ?? {}) as Record<string, unknown>;
       const inbound = contentType.includes("multipart/form-data") && !data.event;

@@ -17,7 +17,7 @@ const message: CanonicalMessage = {
 const contexts: Record<ProviderType, ProviderSendContext> = {
   resend: {
     accountId: "pa_resend",
-    config: { type: "resend", schemaVersion: 1, apiBase: "https://api.resend.com" },
+    config: { type: "resend", schemaVersion: 1 },
     secret: { type: "resend", apiKey: "re_test_key" },
     idempotencyKey: "idem-1"
   },
@@ -28,17 +28,17 @@ const contexts: Record<ProviderType, ProviderSendContext> = {
   },
   sendgrid: {
     accountId: "pa_sendgrid",
-    config: { type: "sendgrid", schemaVersion: 1, apiBase: "https://api.sendgrid.com" },
+    config: { type: "sendgrid", schemaVersion: 1, region: "global" },
     secret: { type: "sendgrid", apiKey: "SG.test-key" }
   },
   mailgun: {
     accountId: "pa_mailgun",
     config: { type: "mailgun", schemaVersion: 1, region: "us", sendingDomain: "mg.example.com" },
-    secret: { type: "mailgun", apiKey: "key-test-mailgun", webhookSigningKey: "signing-test" }
+    secret: { type: "mailgun", apiKey: "key-test-mailgun" }
   },
   postmark: {
     accountId: "pa_postmark",
-    config: { type: "postmark", schemaVersion: 1, apiBase: "https://api.postmarkapp.com", messageStream: "outbound" },
+    config: { type: "postmark", schemaVersion: 1, messageStream: "outbound" },
     secret: { type: "postmark", serverToken: "postmark-test-token" }
   },
   mock: {

@@ -75,24 +75,30 @@ Supported modules:
 |------------|--------------------------------------------------------------|------------------------------------|
 | Resend     | Svix signature and replay window                             | Webhook plus API fetch             |
 | Amazon SES | SNS certificate signature and expected TopicArn              | Receipt Rule plus S3/SNS reference |
-| SendGrid   | ECDSA signed event webhook; token-protected Inbound Parse    | Multipart Inbound Parse            |
+| SendGrid   | ECDSA signed event webhook and Inbound Parse                 | Multipart Inbound Parse            |
 | Mailgun    | Timestamp, token, and HMAC signature                         | Routes multipart payload           |
 | Postmark   | Basic Auth, opaque endpoint, IP allowlist, schema validation | Inbound webhook                    |
 
 Postmark does not advertise a nonexistent HMAC mechanism.
 
-### Provider configuration shapes
+### Provider account setup
 
-The console separates public configuration, write-only provider credentials, and write-only webhook security. These JSON
-shapes are versioned and validated before storage.
+The operations console uses provider-specific fields rather than exposing internal JSON documents. Provider API hosts are
+fixed to their official endpoints; operators can select a documented region where the provider offers regional APIs but
+cannot redirect authenticated requests to an arbitrary host.
 
-| Provider   | Public configuration                                                                                           | Encrypted credential                                                                                   | Webhook security                                             |
-|------------|----------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------|--------------------------------------------------------------|
-| Resend     | `{"apiBase":"https://api.resend.com"}`                                                                         | `{"apiKey":"re_..."}`                                                                                  | `{"signingSecret":"whsec_..."}`                              |
-| Amazon SES | `{"region":"us-east-1","configurationSet":"envoy","roleArn":"arn:aws:iam::...:role/envoy","externalId":"..."}` | `{}` for workload identity, or encrypted `accessKeyId`, `secretAccessKey`, and optional `sessionToken` | Expected SNS Topic ARN in its dedicated field                |
-| SendGrid   | `{"apiBase":"https://api.sendgrid.com"}`                                                                       | `{"apiKey":"SG....","webhookPublicKey":"..."}`                                                         | Optional `publicKey` override and `inboundToken`             |
-| Mailgun    | `{"region":"us","sendingDomain":"mg.example.com"}`                                                             | `{"apiKey":"key-...","webhookSigningKey":"..."}`                                                       | `{}`                                                         |
-| Postmark   | `{"apiBase":"https://api.postmarkapp.com","messageStream":"outbound"}`                                         | `{"serverToken":"...","webhookUsername":"...","webhookPassword":"..."}`                                | Optional Basic Auth override plus the dedicated IP allowlist |
+| Provider   | Connect account with                                            | Optional account settings                         | Configure after creation                              |
+|------------|-----------------------------------------------------------------|---------------------------------------------------|-------------------------------------------------------|
+| Resend     | API key                                                         | None                                              | Webhook signing secret                                |
+| Amazon SES | Runtime IAM credentials, an assumed role, or AWS access keys    | Region and configuration set                      | Expected SNS Topic ARN                                |
+| SendGrid   | API key                                                         | Global or EU API region                           | Signed webhook verification public key                |
+| Mailgun    | API key and sending domain                                      | US or EU region                                   | Account webhook signing key                           |
+| Postmark   | Server API token                                                | Message stream, defaulting to `outbound`           | Basic Auth credentials and optional source allowlist  |
+
+Sending credentials and webhook verification material have separate encrypted lifecycles. Account creation generates the
+opaque callback URL first. The operator then registers that URL in the provider dashboard and saves the verification
+material returned by the provider. This ordering mirrors the provider setup flow and allows sending to be configured
+without inventing webhook values in advance.
 
 After account creation, copy the opaque endpoint displayed under **Callbacks** into the provider console. Never place a
 provider credential in that URL. Envoy redacts authorization headers before raw event persistence and reconstructs the

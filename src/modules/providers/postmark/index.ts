@@ -36,7 +36,7 @@ export const postmarkModule: ProviderModule = {
   sender: {
     async send(message, context) {
       if (context.config.type !== "postmark" || context.secret.type !== "postmark") throw new Error("Invalid Postmark configuration");
-      const response = await fetch(`${context.config.apiBase}/email`, {
+      const response = await fetch("https://api.postmarkapp.com/email", {
         method: "POST",
         headers: { "x-postmark-server-token": context.secret.serverToken, "content-type": "application/json" },
         body: JSON.stringify({
@@ -59,8 +59,8 @@ export const postmarkModule: ProviderModule = {
       if (context.secret.type !== "postmark") throw new Error("Invalid Postmark credential");
       const allowed = Array.isArray(security.ipAllowlist) ? security.ipAllowlist.map(String) : [];
       const ipValid = !allowed.length || Boolean(request.remoteAddress && allowed.includes(request.remoteAddress));
-      const username = typeof security.username === "string" ? security.username : context.secret.webhookUsername;
-      const password = typeof security.password === "string" ? security.password : context.secret.webhookPassword;
+      const username = typeof security.username === "string" ? security.username : "";
+      const password = typeof security.password === "string" ? security.password : "";
       const expected = username && password ? `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}` : "";
       const actual = header(request.headers, "authorization");
       const authValid = Boolean(expected) && actual.length === expected.length && timingSafeEqual(Buffer.from(actual), Buffer.from(expected));
@@ -129,7 +129,7 @@ export const postmarkModule: ProviderModule = {
   health: {
     async check(context) {
       if (context.config.type !== "postmark" || context.secret.type !== "postmark") throw new Error("Invalid Postmark configuration");
-      const response = await fetch(`${context.config.apiBase}/server`, { headers: { "x-postmark-server-token": context.secret.serverToken } });
+      const response = await fetch("https://api.postmarkapp.com/server", { headers: { "x-postmark-server-token": context.secret.serverToken } });
       return { healthy: response.ok, details: { status: response.status } }
     }
   },

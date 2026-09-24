@@ -5,7 +5,7 @@ import { PageHeader } from "@/components/page-header";
 import { adminData } from "@/modules/admin/queries";
 
 const sections = {
-  providers: ["Provider Accounts", "Configure credentials, capabilities, health, quotas, and connectivity."],
+  providers: ["Provider Accounts", "Connect sending providers, verify credentials, and secure delivery event webhooks."],
   domains: ["Domain Matrix", "Track every logical sending domain across provider identities and DNS verification."],
   senders: ["Sender Profiles", "Resolve product and message categories to stable visible From identities."],
   routing: ["Routing Policies", "Control deterministic priority, weighted targets, limits, and failover eligibility."],

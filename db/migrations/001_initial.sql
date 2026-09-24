@@ -78,12 +78,14 @@ CREATE TABLE provider_webhook_endpoints
     security_config_ciphertext text,
     security_encrypted_dek     text,
     key_version                text,
-    security_version           integer     NOT NULL DEFAULT 1,
+    security_version           integer     NOT NULL DEFAULT 0,
+    security_configured        boolean     NOT NULL DEFAULT false,
     status                     text        NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
     expected_topic_arn         text,
     ip_allowlist               text[] NOT NULL DEFAULT '{}',
     created_at                 timestamptz NOT NULL DEFAULT now(),
-    updated_at                 timestamptz NOT NULL DEFAULT now()
+    updated_at                 timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (provider_account_id)
 );
 
 CREATE TABLE sending_domains

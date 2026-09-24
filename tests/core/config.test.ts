@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { providerConfigSchema, providerSecretSchema } from "@/modules/providers/contracts";
+import { providerConfigSchema, providerSecretSchema, providerWebhookSettingsSchema } from "@/modules/providers/contracts";
 import { openSecret, sealSecret } from "@/modules/config/envelope";
 import { objectStorageKey } from "@/modules/config/object-store";
 
@@ -13,6 +13,17 @@ describe("provider configuration", () => {
   });
   it("fails closed when credential type does not match a supported shape", () => {
     expect(providerSecretSchema.safeParse({ type: "sendgrid", apiKey: "" }).success).toBe(false)
+  });
+  it("does not allow provider API endpoints to be overridden", () => {
+    expect(providerConfigSchema.safeParse({
+      type: "resend",
+      schemaVersion: 1,
+      apiBase: "https://example.test"
+    }).success).toBe(false)
+  });
+  it("validates webhook settings for the selected provider", () => {
+    expect(providerWebhookSettingsSchema.safeParse({ type: "resend", signingSecret: "whsec_test_key" }).success).toBe(true);
+    expect(providerWebhookSettingsSchema.safeParse({ type: "resend", publicKey: "not-a-resend-secret" }).success).toBe(false)
   });
   it("uses resource and version as envelope AAD", () => {
     const envelope = sealSecret({ type: "mock", token: "secret" }, "account-a", 1);

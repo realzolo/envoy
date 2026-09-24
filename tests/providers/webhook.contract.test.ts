@@ -19,7 +19,7 @@ describe("provider webhook security and normalization", () => {
     const signature = webhook.sign(id, timestamp, raw);
     const context = {
       accountId: "pa",
-      config: { type: "resend", schemaVersion: 1, apiBase: "https://api.resend.com" },
+      config: { type: "resend", schemaVersion: 1 },
       secret: { type: "resend", apiKey: "re_test_key" }
     } satisfies ProviderSendContext;
     const adapter = providerRegistry("resend");
@@ -89,11 +89,10 @@ describe("provider webhook security and normalization", () => {
     const signature = sign("sha256", Buffer.concat([Buffer.from(timestamp), raw]), privateKey).toString("base64");
     const context = {
       accountId: "pa",
-      config: { type: "sendgrid", schemaVersion: 1, apiBase: "https://api.sendgrid.com" },
+      config: { type: "sendgrid", schemaVersion: 1, region: "global" },
       secret: {
         type: "sendgrid",
-        apiKey: "SG.test-key",
-        webhookPublicKey: publicKey.export({ type: "spki", format: "pem" }).toString()
+        apiKey: "SG.test-key"
       }
     } satisfies ProviderSendContext;
     const adapter = providerRegistry("sendgrid");
@@ -103,7 +102,7 @@ describe("provider webhook security and normalization", () => {
         "x-twilio-email-event-webhook-timestamp": timestamp,
         "x-twilio-email-event-webhook-signature": signature
       }
-    }, context, {});
+    }, context, { publicKey: publicKey.export({ type: "spki", format: "pem" }).toString() });
     expect(verified.valid).toBe(true);
     expect((await adapter.webhook.normalize(verified, context))[0]).toMatchObject({
       type: "delivered",
@@ -117,13 +116,13 @@ describe("provider webhook security and normalization", () => {
     const context = {
       accountId: "pa",
       config: { type: "mailgun", schemaVersion: 1, region: "us", sendingDomain: "mg.example.com" },
-      secret: { type: "mailgun", apiKey: "key-mailgun-test", webhookSigningKey: "mailgun-signing-key" }
+      secret: { type: "mailgun", apiKey: "key-mailgun-test" }
     } satisfies ProviderSendContext;
     const adapter = providerRegistry("mailgun");
     const verified = await adapter.webhook.verify({
       rawBody: new TextEncoder().encode(JSON.stringify(payload)),
       headers: { "content-type": "application/json" }
-    }, context, {});
+    }, context, { webhookSigningKey: "mailgun-signing-key" });
     expect(verified.valid).toBe(true);
     expect((await adapter.webhook.normalize(verified, context))[0]).toMatchObject({
       type: "delivered",
@@ -134,12 +133,10 @@ describe("provider webhook security and normalization", () => {
     const raw = await fixture("postmark-delivered.json");
     const context = {
       accountId: "pa",
-      config: { type: "postmark", schemaVersion: 1, apiBase: "https://api.postmarkapp.com", messageStream: "outbound" },
+      config: { type: "postmark", schemaVersion: 1, messageStream: "outbound" },
       secret: {
         type: "postmark",
-        serverToken: "server-token",
-        webhookUsername: "envoy",
-        webhookPassword: "secret-password"
+        serverToken: "server-token"
       }
     } satisfies ProviderSendContext;
     const adapter = providerRegistry("postmark");
@@ -147,7 +144,7 @@ describe("provider webhook security and normalization", () => {
       rawBody: raw,
       headers: { authorization: `Basic ${Buffer.from("envoy:secret-password").toString("base64")}` },
       remoteAddress: "203.0.113.10"
-    }, context, { ipAllowlist: ["203.0.113.10"] });
+    }, context, { username: "envoy", password: "secret-password", ipAllowlist: ["203.0.113.10"] });
     expect(verified.valid).toBe(true);
     expect((await adapter.webhook.normalize(verified, context))[0]).toMatchObject({
       type: "delivered",
@@ -157,7 +154,7 @@ describe("provider webhook security and normalization", () => {
       rawBody: raw,
       headers: { authorization: "Basic invalid" },
       remoteAddress: "198.51.100.9"
-    }, context, { ipAllowlist: ["203.0.113.10"] });
+    }, context, { username: "envoy", password: "secret-password", ipAllowlist: ["203.0.113.10"] });
     expect(rejected.valid).toBe(false)
   });
 });

@@ -164,9 +164,9 @@ export async function processRawProviderEvent(rawEventId: string) {
     const body = raw.raw_body ? new Uint8Array(raw.raw_body) : await objectStore().get(raw.raw_object_key ?? "");
     const headers = { ...raw.headers };
     if (headers.authorization === "[redacted]") {
-      if (raw.provider_type === "mock" && typeof endpoint.security.token === "string") headers.authorization = `Bearer ${endpoint.security.token}`; else if (raw.provider_type === "sendgrid" && typeof endpoint.security.inboundToken === "string") headers.authorization = `Bearer ${endpoint.security.inboundToken}`; else if (raw.provider_type === "postmark" && endpoint.context.secret.type === "postmark") {
-        const username = typeof endpoint.security.username === "string" ? endpoint.security.username : endpoint.context.secret.webhookUsername;
-        const password = typeof endpoint.security.password === "string" ? endpoint.security.password : endpoint.context.secret.webhookPassword;
+      if (raw.provider_type === "mock" && typeof endpoint.security.token === "string") headers.authorization = `Bearer ${endpoint.security.token}`; else if (raw.provider_type === "postmark") {
+        const username = typeof endpoint.security.username === "string" ? endpoint.security.username : "";
+        const password = typeof endpoint.security.password === "string" ? endpoint.security.password : "";
         if (username && password) headers.authorization = `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`
       }
     }

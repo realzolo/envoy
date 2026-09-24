@@ -13,6 +13,11 @@ const eventMap: Record<string, CanonicalEventType> = {
   spamreport: "complained",
   unsubscribe: "unsubscribed"
 };
+
+function apiBase(region: "global" | "eu") {
+  return region === "eu" ? "https://api.eu.sendgrid.com" : "https://api.sendgrid.com"
+}
+
 export const sendgridModule: ProviderModule = {
   descriptor: {
     type: "sendgrid",
@@ -30,7 +35,7 @@ export const sendgridModule: ProviderModule = {
   sender: {
     async send(message, context) {
       if (context.config.type !== "sendgrid" || context.secret.type !== "sendgrid") throw new Error("Invalid SendGrid configuration");
-      const response = await fetch(`${context.config.apiBase}/v3/mail/send`, {
+      const response = await fetch(`${apiBase(context.config.region)}/v3/mail/send`, {
         method: "POST",
         headers: { authorization: `Bearer ${context.secret.apiKey}`, "content-type": "application/json" },
         body: JSON.stringify({
@@ -49,21 +54,9 @@ export const sendgridModule: ProviderModule = {
     }
   },
   webhook: {
-    async verify(request, context, security) {
-      if (context.secret.type !== "sendgrid") throw new Error("Invalid SendGrid credential");
+    async verify(request, _context, security) {
       const contentType = header(request.headers, "content-type");
-      if (contentType.includes("multipart/form-data")) {
-        const token = typeof security.inboundToken === "string" ? security.inboundToken : "";
-        const parsed = await parseMultipart(request.rawBody, contentType);
-        return {
-          valid: Boolean(token) && header(request.headers, "authorization") === `Bearer ${token}`,
-          replaySafe: true,
-          providerEventId: createHash("sha256").update(request.rawBody).digest("hex"),
-          nativeType: "inbound",
-          parsed
-        }
-      }
-      const publicKey = typeof security.publicKey === "string" ? security.publicKey : context.secret.webhookPublicKey;
+      const publicKey = typeof security.publicKey === "string" ? security.publicKey : "";
       const signature = header(request.headers, "x-twilio-email-event-webhook-signature");
       const timestamp = header(request.headers, "x-twilio-email-event-webhook-timestamp");
       if (!publicKey || !signature || !timestamp) return {
@@ -77,12 +70,23 @@ export const sendgridModule: ProviderModule = {
         valid = verifySignature("sha256", Buffer.concat([Buffer.from(timestamp), Buffer.from(request.rawBody)]), createPublicKey(publicKey), Buffer.from(signature, "base64"))
       } catch {
       }
+      const replaySafe = Math.abs(Date.now() / 1000 - Number(timestamp)) < 300;
+      if (contentType.includes("multipart/form-data")) {
+        const parsed = await parseMultipart(request.rawBody, contentType);
+        return {
+          valid,
+          replaySafe,
+          providerEventId: createHash("sha256").update(request.rawBody).digest("hex"),
+          nativeType: "inbound",
+          parsed
+        }
+      }
       const parsed = JSON.parse(new TextDecoder().decode(request.rawBody)) as unknown;
       const rows = Array.isArray(parsed) ? parsed : [];
       const first = rows[0] as Record<string, unknown> | undefined;
       return {
         valid,
-        replaySafe: Math.abs(Date.now() / 1000 - Number(timestamp)) < 300,
+        replaySafe,
         providerEventId: first?.sg_event_id ? String(first.sg_event_id) : undefined,
         nativeType: first?.event ? String(first.event) : "batch",
         parsed
@@ -144,7 +148,7 @@ export const sendgridModule: ProviderModule = {
   health: {
     async check(context) {
       if (context.config.type !== "sendgrid" || context.secret.type !== "sendgrid") throw new Error("Invalid SendGrid configuration");
-      const response = await fetch(`${context.config.apiBase}/v3/user/profile`, { headers: { authorization: `Bearer ${context.secret.apiKey}` } });
+      const response = await fetch(`${apiBase(context.config.region)}/v3/user/profile`, { headers: { authorization: `Bearer ${context.secret.apiKey}` } });
       return { healthy: response.ok, details: { status: response.status } }
     }
   },

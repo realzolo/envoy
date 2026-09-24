@@ -1,6 +1,12 @@
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
-import { providerConfigSchema, providerSecretSchema, type ProviderType } from "@/modules/providers/contracts";
+import {
+  providerAccountRegion,
+  providerConfigSchema,
+  providerSecretSchema,
+  providerWebhookSettingsSchema,
+  type ProviderType
+} from "@/modules/providers/contracts";
 import { loadProviderAccount } from "@/modules/config/provider-account";
 import { sealSecret } from "@/modules/config/envelope";
 import { acceptMessage } from "@/modules/core/message/service";
@@ -42,32 +48,29 @@ export async function toggleProduct(id: string, enabled: boolean, actor: string)
 export async function createProviderAccount(input: {
   type: ProviderType;
   name: string;
-  region: string;
-  publicConfig: Record<string, unknown>;
-  secret: Record<string, unknown>;
-  webhookSecurity: Record<string, unknown>;
-  expectedTopicArn?: string;
-  ipAllowlist?: string[]
+  configuration: Record<string, unknown>;
+  credentials: Record<string, unknown>;
 }, actor: string) {
   if (input.type === "mock") throw new Error("Mock providers are available only to automated tests");
-  const config = providerConfigSchema.parse({ type: input.type, schemaVersion: 1, ...input.publicConfig });
-  const secret = providerSecretSchema.parse({ type: input.type, ...input.secret });
+  const name = z.string().trim().min(2).max(120).parse(input.name);
+  const config = providerConfigSchema.parse({ ...input.configuration, type: input.type, schemaVersion: 1 });
+  const secret = providerSecretSchema.parse({ ...input.credentials, type: input.type });
+  const region = providerAccountRegion(config);
   const accountId = createId("pa");
   const credential = sealSecret(secret, accountId, 1);
   const endpointId = createId("pwe");
-  const security = sealSecret(input.webhookSecurity, endpointId, 1);
   const opaqueToken = randomBytes(24).toString("base64url");
   const publicConfig = { ...config } as Record<string, unknown>;
   delete publicConfig.type;
   delete publicConfig.schemaVersion;
   await transaction(async client => {
-    await client.query("INSERT INTO provider_accounts(id,type,name,region,public_config) VALUES ($1,$2,$3,$4,$5)", [accountId, input.type, input.name, input.region, publicConfig]);
+    await client.query("INSERT INTO provider_accounts(id,type,name,region,public_config) VALUES ($1,$2,$3,$4,$5)", [accountId, input.type, name, region, publicConfig]);
     await client.query("INSERT INTO provider_credentials(id,provider_account_id,credential_version,secret_ciphertext,encrypted_dek,key_version,created_by) VALUES ($1,$2,1,$3,$4,$5,$6)", [createId("pc"), accountId, credential.secretCiphertext, credential.encryptedDek, credential.keyVersion, actor]);
-    await client.query("INSERT INTO provider_webhook_endpoints(id,provider_account_id,opaque_token,security_config_ciphertext,security_encrypted_dek,key_version,expected_topic_arn,ip_allowlist) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)", [endpointId, accountId, opaqueToken, security.secretCiphertext, security.encryptedDek, security.keyVersion, input.expectedTopicArn ?? null, input.ipAllowlist ?? []]);
+    await client.query("INSERT INTO provider_webhook_endpoints(id,provider_account_id,opaque_token) VALUES ($1,$2,$3)", [endpointId, accountId, opaqueToken]);
     await revision(client, "provider_account", accountId, {
       type: input.type,
-      name: input.name,
-      region: input.region,
+      name,
+      region,
       publicConfig
     }, actor);
     await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES ($1,'provider_account.create','provider_account',$2,$3)", [actor, accountId, { type: input.type }])
@@ -111,7 +114,7 @@ export async function updateProviderQuota(id: string, quota: Record<string, unkn
 export async function rotateProviderCredential(id: string, secretValue: Record<string, unknown>, actor: string) {
   const account = (await query<{ type: ProviderType }>("SELECT type FROM provider_accounts WHERE id=$1", [id])).rows[0];
   if (!account) throw new Error("Provider account not found");
-  const secret = providerSecretSchema.parse({ type: account.type, ...secretValue });
+  const secret = providerSecretSchema.parse({ ...secretValue, type: account.type });
   return transaction(async client => {
     const latest = await client.query<{
       credential_version: number
@@ -126,26 +129,33 @@ export async function rotateProviderCredential(id: string, secretValue: Record<s
   })
 }
 
-export async function rotateWebhookSecurity(id: string, securityValue: Record<string, unknown>, expectedTopicArn: string | undefined, ipAllowlist: string[] | undefined, actor: string) {
+export async function configureProviderWebhook(id: string, settingsValue: Record<string, unknown>, actor: string) {
   return transaction(async client => {
     const current = (await client.query<{
       security_version: number;
-      expected_topic_arn: string | null;
-      ip_allowlist: string[]
-    }>("SELECT security_version,expected_topic_arn,ip_allowlist FROM provider_webhook_endpoints WHERE id=$1 FOR UPDATE", [id])).rows[0];
+      type: ProviderType
+    }>(`SELECT e.security_version,a.type
+      FROM provider_webhook_endpoints e
+      JOIN provider_accounts a ON a.id=e.provider_account_id
+      WHERE e.id=$1 FOR UPDATE`, [id])).rows[0];
     if (!current) throw new Error("Webhook endpoint not found");
+    const settings = providerWebhookSettingsSchema.parse({ ...settingsValue, type: current.type });
     const version = current.security_version + 1;
-    const envelope = sealSecret(securityValue, id, version);
-    const topic = expectedTopicArn === undefined ? current.expected_topic_arn : expectedTopicArn || null;
-    const ips = ipAllowlist ?? current.ip_allowlist;
-    await client.query("UPDATE provider_webhook_endpoints SET security_config_ciphertext=$2,security_encrypted_dek=$3,key_version=$4,security_version=$5,expected_topic_arn=$6,ip_allowlist=$7,updated_at=now() WHERE id=$1", [id, envelope.secretCiphertext, envelope.encryptedDek, envelope.keyVersion, version, topic, ips]);
+    const security = { ...settings } as Record<string, unknown>;
+    delete security.type;
+    const topic = typeof security.expectedTopicArn === "string" ? security.expectedTopicArn : null;
+    const ips = Array.isArray(security.ipAllowlist) ? security.ipAllowlist : [];
+    delete security.expectedTopicArn;
+    delete security.ipAllowlist;
+    const envelope = sealSecret(security, id, version);
+    await client.query("UPDATE provider_webhook_endpoints SET security_config_ciphertext=$2,security_encrypted_dek=$3,key_version=$4,security_version=$5,security_configured=true,expected_topic_arn=$6,ip_allowlist=$7,updated_at=now() WHERE id=$1", [id, envelope.secretCiphertext, envelope.encryptedDek, envelope.keyVersion, version, topic, ips]);
     await revision(client, "provider_webhook_endpoint", id, {
       securityVersion: version,
       expectedTopicArn: topic,
       ipAllowlist: ips
     }, actor);
     await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES ($1,'provider_webhook_endpoint.rotate_security','provider_webhook_endpoint',$2,$3)", [actor, id, { securityVersion: version }]);
-    return { version }
+    return { version, configured: true }
   })
 }
 
