@@ -8,11 +8,21 @@ export interface ObjectStore {
   get(key: string): Promise<Uint8Array>
 }
 
+export function objectStorageKey(key: string, configuredPrefix = process.env.OBJECT_STORAGE_PREFIX) {
+  const logicalKey = key.replace(/^\/+/, "");
+  const prefix = (configuredPrefix?.trim() || "envoy").replace(/^\/+|\/+$/g, "");
+  const segments = [...prefix.split("/"), ...logicalKey.split("/")];
+  if (!logicalKey || segments.some(segment => !segment || segment === "." || segment === "..")) {
+    throw new Error("Invalid object key")
+  }
+  return `${prefix}/${logicalKey}`
+}
+
 class LocalObjectStore implements ObjectStore {
   private root = resolve(join(process.cwd(), "var", "objects"));
 
   private path(key: string) {
-    const target = resolve(join(this.root, key));
+    const target = resolve(join(this.root, objectStorageKey(key)));
     if (!target.startsWith(`${this.root}/`)) throw new Error("Invalid object key");
     return target
   }
@@ -43,7 +53,7 @@ class S3ObjectStore implements ObjectStore {
   async put(key: string, data: Uint8Array, contentType: string) {
     await this.client.send(new PutObjectCommand({
       Bucket: this.bucket,
-      Key: key,
+      Key: objectStorageKey(key),
       Body: data,
       ContentType: contentType,
       ServerSideEncryption: "AES256"
@@ -51,7 +61,7 @@ class S3ObjectStore implements ObjectStore {
   }
 
   async get(key: string) {
-    const result = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: key }));
+    const result = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: objectStorageKey(key) }));
     if (!result.Body) throw new Error("Object body is empty");
     return result.Body.transformToByteArray()
   }

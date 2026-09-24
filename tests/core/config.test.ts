@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { providerConfigSchema, providerSecretSchema } from "@/modules/providers/contracts";
 import { openSecret, sealSecret } from "@/modules/config/envelope";
+import { objectStorageKey } from "@/modules/config/object-store";
 
 describe("provider configuration", () => {
   it("fails closed on an unknown schema version", () => {
@@ -24,5 +25,10 @@ describe("provider configuration", () => {
       ...envelope,
       keyVersion: "missing-version"
     }, "account-a", 1)).toThrow(/No KEK is configured/)
+  });
+  it("scopes every object key under the configured prefix", () => {
+    expect(objectStorageKey("inbound/message/attachments/file", "")).toBe("envoy/inbound/message/attachments/file");
+    expect(objectStorageKey("/provider-events/resend/event.bin", "/custom/")).toBe("custom/provider-events/resend/event.bin");
+    expect(() => objectStorageKey("../outside", "envoy")).toThrow(/Invalid object key/)
   })
 });
