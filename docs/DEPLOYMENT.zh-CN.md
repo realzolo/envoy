@@ -41,7 +41,7 @@ cp deploy/env.production.example .env.production
 vi .env.production
 ```
 
-将所有 `replace_with_*` 替换为真实值，重点确认：
+将所有已启用配置中的 `replace_with_*` 替换为真实值，重点确认：
 
 - `PORT=6178`
 - `DATABASE_URL` 指向生产 PostgreSQL
@@ -49,7 +49,7 @@ vi .env.production
 - `ENVOY_KEK_BASE64`、管理员密码和 `ENVOY_SESSION_SECRET` 已替换
 - R2 Endpoint、存储桶和 S3 凭据正确
 - `OBJECT_STORAGE_PREFIX=envoy`
-- 使用收信或附件时，ClamAV 地址可从 Worker 容器访问
+- ClamAV 为可选配置；不使用时保持 `CLAMAV_HOST` 和 `CLAMAV_PORT` 注释，附件会跳过扫描并标记为 `skipped`
 
 生成 KEK 和 Session Secret：
 

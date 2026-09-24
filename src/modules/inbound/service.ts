@@ -8,12 +8,9 @@ import { query, transaction } from "@/server/database";
 const MAX_MESSAGE_BYTES = 25 * 1024 * 1024;
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 
-async function scan(data: Uint8Array) {
-  const host = process.env.CLAMAV_HOST;
-  if (!host) {
-    if (process.env.NODE_ENV === "production") throw new Error("CLAMAV_HOST is required in production");
-    return "clean" as const
-  }
+export async function scanAttachment(data: Uint8Array) {
+  const host = process.env.CLAMAV_HOST?.trim();
+  if (!host) return "skipped" as const;
   const port = Number(process.env.CLAMAV_PORT ?? 3310);
   return new Promise<"clean" | "infected">((resolve, reject) => {
     const socket = createConnection({ host, port });
@@ -69,7 +66,10 @@ export async function persistInbound(input: {
   }>("SELECT id FROM inbound_messages WHERE provider_account_id=$1 AND external_message_id=$2", [input.providerAccountId, message.externalMessageId])).rows[0].id;
   const prefix = `inbound/${id}`;
   let rawKey: string | null = null;
-  const attachments: Array<(typeof message.attachments)[number] & { objectKey: string; scanStatus: "clean" }> = [];
+  const attachments: Array<(typeof message.attachments)[number] & {
+    objectKey: string;
+    scanStatus: "clean" | "skipped";
+  }> = [];
   try {
     const aggregateBytes = message.rawMime?.byteLength ?? message.attachments.reduce((total, file) => total + file.content.byteLength, 0);
     if (aggregateBytes > MAX_MESSAGE_BYTES) throw new Error("Inbound message exceeds the size limit");
@@ -79,7 +79,7 @@ export async function persistInbound(input: {
       await objectStore().put(rawKey, message.rawMime, "message/rfc822")
     }
     for (const file of message.attachments) {
-      const scanStatus = await scan(file.content);
+      const scanStatus = await scanAttachment(file.content);
       if (scanStatus === "infected") throw new Error(`Malware detected in attachment: ${file.fileName}`);
       const key = `${prefix}/attachments/${createId("file")}`;
       await objectStore().put(key, file.content, file.contentType);

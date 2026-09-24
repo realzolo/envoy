@@ -341,7 +341,7 @@ CREATE TABLE inbound_attachments
     size_bytes         bigint      NOT NULL,
     object_key         text        NOT NULL,
     content_id         text,
-    scan_status        text        NOT NULL DEFAULT 'pending' CHECK (scan_status IN ('pending', 'clean', 'infected', 'failed')),
+    scan_status        text        NOT NULL DEFAULT 'pending' CHECK (scan_status IN ('pending', 'clean', 'infected', 'failed', 'skipped')),
     created_at         timestamptz NOT NULL DEFAULT now()
 );
 

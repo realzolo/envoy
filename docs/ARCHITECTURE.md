@@ -114,7 +114,8 @@ and Envoy fetches the message through the provider API. Postmark posts the full 
 ## Inbound safety
 
 Inbound routes match provider endpoint, recipient domain, and local-part pattern. Raw MIME and attachments are
-size-limited, stored outside PostgreSQL, scanned through ClamAV in production, and HTML is sanitized before persistence.
+size-limited, stored outside PostgreSQL, scanned through ClamAV when configured, and HTML is sanitized before persistence.
+Attachments are stored with `scan_status=skipped` when ClamAV is disabled.
 The business callback receives only canonical metadata and Envoy identifiers.
 
 ## Suppression policy
