@@ -25,11 +25,11 @@ export const sendgridModule: ProviderModule = {
     capabilities: {
       nativeIdempotency: false,
       inboundMode: "multipart",
-      domainManagement: true,
+      domainManagement: false,
       webhookSecurity: "ECDSA signature or OAuth",
       eventTypes: Object.keys(eventMap),
-      attachments: true,
-      scheduling: true
+      attachments: false,
+      scheduling: false
     }
   },
   sender: {
@@ -56,7 +56,10 @@ export const sendgridModule: ProviderModule = {
   webhook: {
     async verify(request, _context, security) {
       const contentType = header(request.headers, "content-type");
-      const publicKey = typeof security.publicKey === "string" ? security.publicKey : "";
+      const inbound = contentType.includes("multipart/form-data");
+      const publicKey = typeof security[inbound ? "inboundParsePublicKey" : "eventWebhookPublicKey"] === "string"
+        ? String(security[inbound ? "inboundParsePublicKey" : "eventWebhookPublicKey"])
+        : "";
       const signature = header(request.headers, "x-twilio-email-event-webhook-signature");
       const timestamp = header(request.headers, "x-twilio-email-event-webhook-timestamp");
       if (!publicKey || !signature || !timestamp) return {
@@ -71,7 +74,7 @@ export const sendgridModule: ProviderModule = {
       } catch {
       }
       const replaySafe = Math.abs(Date.now() / 1000 - Number(timestamp)) < 300;
-      if (contentType.includes("multipart/form-data")) {
+      if (inbound) {
         const parsed = await parseMultipart(request.rawBody, contentType);
         return {
           valid,
@@ -148,8 +151,14 @@ export const sendgridModule: ProviderModule = {
   health: {
     async check(context) {
       if (context.config.type !== "sendgrid" || context.secret.type !== "sendgrid") throw new Error("Invalid SendGrid configuration");
-      const response = await fetch(`${apiBase(context.config.region)}/v3/user/profile`, { headers: { authorization: `Bearer ${context.secret.apiKey}` } });
-      return { healthy: response.ok, details: { status: response.status } }
+      // A deliberately invalid Mail Send request validates the permission Envoy
+      // actually needs without delivering a probe email or requiring profile.read.
+      const response = await fetch(`${apiBase(context.config.region)}/v3/mail/send`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${context.secret.apiKey}`, "content-type": "application/json" },
+        body: "{}"
+      });
+      return { healthy: [400, 202, 429].includes(response.status), details: { status: response.status } }
     }
   },
 };

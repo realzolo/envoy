@@ -7,6 +7,7 @@ import {
   getMessage,
   IdempotencyConflictError,
   listMessages,
+  MessageValidationError,
   retryMessage
 } from "@/modules/core/message/service";
 import { applyCanonicalEvent, processRawProviderEvent } from "@/modules/core/event/service";
@@ -18,9 +19,22 @@ import {
   removeSuppression
 } from "@/modules/core/resources/service";
 import { ingestProviderWebhook } from "@/modules/webhooks/ingress";
-import { manualRetryDelivery, replayDeadLetters } from "@/modules/admin/actions";
+import {
+  addSuppression,
+  createDomain,
+  createInboundRoute,
+  createRoutingPolicy,
+  createSenderProfile,
+  manualRetryDelivery,
+  replayDeadLetters,
+  rotateProviderCredential,
+  simulateRouting
+} from "@/modules/admin/actions";
 import { deadLetterCallback } from "@/modules/callbacks/service";
+import { sealSecret } from "@/modules/config/envelope";
 import { markDeterminateFailure, prepareSubmission } from "@/modules/core/routing/engine";
+import { createMessageSchema, createSuppressionSchema } from "@/lib/contracts";
+import { providerRegistry } from "@/modules/providers/registry";
 import { processDelivery } from "@/worker/delivery";
 import { db, query } from "@/server/database";
 
@@ -65,6 +79,180 @@ afterAll(async () => {
   await db().end()
 });
 describe("durable message pipeline", () => {
+  it("keeps public capabilities and API contracts aligned with implemented behavior", () => {
+    for (const type of ["resend", "ses", "sendgrid", "mailgun", "postmark", "mock"] as const) {
+      const adapter = providerRegistry(type);
+      expect(adapter.descriptor.capabilities.domainManagement).toBe(Boolean(adapter.identity));
+      expect(adapter.descriptor.capabilities.attachments).toBe(false);
+      expect(adapter.descriptor.capabilities.scheduling).toBe(false);
+    }
+    expect(createMessageSchema.safeParse({
+      category: "security",
+      to: [{ email: "Person@example.test" }, { email: "person@example.test" }],
+      subject: "Duplicate recipient",
+      text: "Duplicate recipient"
+    }).success).toBe(false);
+    expect(createSuppressionSchema.safeParse({
+      email: "person@example.test",
+      scope: "product",
+      listId: "newsletter",
+      reason: "manual"
+    }).success).toBe(false);
+  });
+
+  it("applies routing defaults and rejects invalid admin resource relationships before configuration is stored", async () => {
+    const suffix = crypto.randomUUID().replaceAll("-", "").slice(0, 12);
+    const foreignProductId = `prd_integrity_${suffix}`;
+    const foreignServiceId = `svc_integrity_${suffix}`;
+    const manualAccountId = `pa_manual_${suffix}`;
+    const mailgunAccountId = `pa_mailgun_${suffix}`;
+    let manualDomainId: string | undefined;
+    const policyId = await createRoutingPolicy({
+      name: `Integrity policy ${suffix}`,
+      serviceId: "svc_atlas_auth",
+      domainId: "sd_atlas",
+      category: `integrity-${suffix}`,
+      targets: [{ accountId: "pa_mock", identityId: "pi_atlas_mock" }]
+    }, "test-suite");
+    let inboundRouteId: string | undefined;
+    try {
+      expect((await query<{
+        product_id: string;
+        service_id: string;
+        sending_domain_id: string;
+        policy_priority: number;
+        target_priority: number;
+        weight: number;
+        rate_limit_per_minute: number
+      }>(`SELECT rp.product_id,rp.service_id,rp.sending_domain_id,rp.priority AS policy_priority,
+        rt.priority AS target_priority,rt.weight,rt.rate_limit_per_minute
+        FROM routing_policies rp JOIN routing_targets rt ON rt.policy_id=rp.id WHERE rp.id=$1`, [policyId])).rows[0]).toEqual({
+        product_id: "prd_atlas",
+        service_id: "svc_atlas_auth",
+        sending_domain_id: "sd_atlas",
+        policy_priority: 100,
+        target_priority: 100,
+        weight: 100,
+        rate_limit_per_minute: 1000
+      });
+      await expect(createRoutingPolicy({
+        name: `No targets ${suffix}`,
+        productId: "prd_atlas",
+        domainId: "sd_atlas",
+        targets: []
+      }, "test-suite")).rejects.toThrow(/At least one routing target/);
+      await expect(createRoutingPolicy({
+        name: `Wrong account ${suffix}`,
+        productId: "prd_atlas",
+        domainId: "sd_atlas",
+        targets: [{ accountId: "pa_other", identityId: "pi_atlas_mock" }]
+      }, "test-suite")).rejects.toThrow(/identity owned by its provider account/);
+      await expect(createDomain({
+        domain: `missing-account-${suffix}.example.test`,
+        accountIds: []
+      }, "test-suite")).rejects.toThrow(/Select at least one provider account/);
+      const manualCredential = sealSecret({ type: "sendgrid", apiKey: "SG.test-api-key" }, manualAccountId, 1);
+      await query("INSERT INTO provider_accounts(id,type,name,status,public_config) VALUES ($1,'sendgrid',$2,'active',$3)", [manualAccountId, `Manual provider ${suffix}`, { region: "global" }]);
+      await query("INSERT INTO provider_credentials(id,provider_account_id,credential_version,secret_ciphertext,encrypted_dek,key_version,created_by) VALUES ($1,$2,1,$3,$4,$5,'test-suite')", [
+        `pc_manual_${suffix}`, manualAccountId, manualCredential.secretCiphertext, manualCredential.encryptedDek, manualCredential.keyVersion
+      ]);
+      const manualDomain = await createDomain({
+        domain: `verified-${suffix}.example.test`,
+        accountIds: [manualAccountId]
+      }, "test-suite");
+      manualDomainId = manualDomain.domainId;
+      const manualIdentity = (await query<{ id: string; status: string; external_identity_id: string | null }>("SELECT id,status,external_identity_id FROM provider_identities WHERE sending_domain_id=$1", [manualDomainId])).rows[0];
+      expect(manualIdentity).toMatchObject({
+        status: "verified",
+        external_identity_id: null
+      });
+      await expect(createRoutingPolicy({
+        name: `Cross-domain target ${suffix}`,
+        productId: "prd_atlas",
+        domainId: "sd_atlas",
+        targets: [{ accountId: manualAccountId, identityId: manualIdentity.id }]
+      }, "test-suite")).rejects.toThrow(/selected sending domain/);
+      expect((await simulateRouting({ domainId: manualDomainId, productId: "prd_atlas", category: "security" })).candidates).toEqual([]);
+      const mailgunCredential = sealSecret({ type: "mailgun", apiKey: "key-mailgun-test" }, mailgunAccountId, 1);
+      await query("INSERT INTO provider_accounts(id,type,name,status,public_config) VALUES ($1,'mailgun',$2,'active',$3)", [mailgunAccountId, `Mailgun provider ${suffix}`, {
+        region: "us",
+        sendingDomain: `configured-${suffix}.example.test`
+      }]);
+      await query("INSERT INTO provider_credentials(id,provider_account_id,credential_version,secret_ciphertext,encrypted_dek,key_version,created_by) VALUES ($1,$2,1,$3,$4,$5,'test-suite')", [
+        `pc_mailgun_${suffix}`, mailgunAccountId, mailgunCredential.secretCiphertext, mailgunCredential.encryptedDek, mailgunCredential.keyVersion
+      ]);
+      await expect(createDomain({
+        domain: `different-${suffix}.example.test`,
+        accountIds: [mailgunAccountId]
+      }, "test-suite")).rejects.toThrow(/Mailgun account sends through/);
+      await rotateProviderCredential(manualAccountId, { apiKey: "SG.replacement-api-key" }, "test-suite");
+      expect((await query<{ status: string; health: { status: string } }>("SELECT status,health FROM provider_accounts WHERE id=$1", [manualAccountId])).rows[0]).toEqual({
+        status: "degraded",
+        health: expect.objectContaining({ status: "unknown" })
+      });
+      await expect(createSenderProfile({
+        productId: "prd_atlas",
+        domainId: "sd_atlas",
+        name: "Atlas Security",
+        fromName: "Atlas",
+        fromLocalPart: "different-local-part",
+        category: "transactional"
+      }, "test-suite")).rejects.toThrow(/already exists/);
+      await expect(addSuppression({
+        email: `global-${suffix}@example.test`,
+        scope: "global",
+        productId: "prd_atlas",
+        reason: "manual"
+      }, "test-suite")).rejects.toThrow(/Global suppressions cannot target/);
+
+      await query("INSERT INTO products(id,name) VALUES ($1,$2)", [foreignProductId, "Integrity product"]);
+      await query("INSERT INTO services(id,product_id,name) VALUES ($1,$2,$3)", [foreignServiceId, foreignProductId, "Integrity service"]);
+      await expect(createInboundRoute({
+        webhookEndpointId: "pwe_mock",
+        domainId: "sd_atlas",
+        productId: "prd_atlas",
+        serviceId: foreignServiceId,
+        localPartPattern: `integrity-${suffix}`
+      }, "test-suite")).rejects.toThrow(/does not belong to the selected product/);
+      inboundRouteId = await createInboundRoute({
+        webhookEndpointId: "pwe_mock",
+        domainId: "sd_atlas",
+        productId: "prd_atlas",
+        serviceId: "svc_atlas_auth",
+        callbackId: "cb_atlas_local",
+        localPartPattern: `integrity-${suffix}`
+      }, "test-suite");
+      expect((await query<{ service_id: string; callback_endpoint_id: string }>("SELECT service_id,callback_endpoint_id FROM inbound_routes WHERE id=$1", [inboundRouteId])).rows[0]).toEqual({
+        service_id: "svc_atlas_auth",
+        callback_endpoint_id: "cb_atlas_local"
+      });
+      await expect(query("INSERT INTO routing_policies(id,name,product_id,service_id,sending_domain_id) VALUES ($1,$2,$3,$4,$5)", [
+        `rp_cross_${suffix}`, "Cross-product route", "prd_atlas", foreignServiceId, "sd_atlas"
+      ])).rejects.toThrow();
+      await expect(query("INSERT INTO suppressions(id,scope_type,product_id,email_normalized,reason,source) VALUES ($1,'global',$2,$3,'manual','test')", [
+        `sup_cross_${suffix}`, "prd_atlas", `scope-${suffix}@example.test`
+      ])).rejects.toThrow();
+    } finally {
+      if (inboundRouteId) await query("DELETE FROM inbound_routes WHERE id=$1", [inboundRouteId]);
+      if (manualDomainId) await query("DELETE FROM sending_domains WHERE id=$1", [manualDomainId]);
+      await query("DELETE FROM provider_accounts WHERE id=$1", [mailgunAccountId]);
+      await query("DELETE FROM provider_accounts WHERE id=$1", [manualAccountId]);
+      await query("DELETE FROM routing_policies WHERE id=$1", [policyId]);
+      await query("DELETE FROM products WHERE id=$1", [foreignProductId]);
+    }
+  });
+
+  it("defensively rejects duplicated recipients for direct server callers", async () => {
+    await expect(acceptMessage({
+      identity,
+      idempotencyKey: `duplicate-${crypto.randomUUID()}`,
+      input: {
+        ...request,
+        to: [{ email: "Person@example.test" }, { email: "person@example.test" }]
+      }
+    })).rejects.toBeInstanceOf(MessageValidationError);
+  });
+
   it("writes the message, recipient delivery, and outbox atomically and replays idempotently", async () => {
     const key = `pipeline-${crypto.randomUUID()}`;
     const first = await acceptMessage({ identity, idempotencyKey: key, input: request });

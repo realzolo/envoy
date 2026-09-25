@@ -1,5 +1,7 @@
 import { jwtVerify, SignJWT } from "jose";
 import { cookies } from "next/headers";
+import { timingSafeEqual } from "node:crypto";
+import { trustedProxyEnabled } from "@/server/network";
 
 const COOKIE_NAME = "envoy_admin_session";
 const MAX_AGE = 60 * 60 * 12;
@@ -13,8 +15,10 @@ function secret() {
 }
 
 export function sessionCookieIsSecure(request: Request) {
-  const forwardedProtocol = request.headers.get("x-forwarded-proto")?.split(",", 1)[0]?.trim().toLowerCase();
-  if (forwardedProtocol) return forwardedProtocol === "https";
+  if (trustedProxyEnabled()) {
+    const forwardedProtocol = request.headers.get("x-forwarded-proto")?.split(",", 1)[0]?.trim().toLowerCase();
+    if (forwardedProtocol) return forwardedProtocol === "https";
+  }
   return new URL(request.url).protocol === "https:";
 }
 
@@ -52,6 +56,13 @@ export async function getAdminSession() {
 }
 
 export function validAdminCredentials(email: string, password: string) {
-  return email === (process.env.ENVOY_ADMIN_EMAIL ?? "admin@envoy.local")
-    && password === (process.env.ENVOY_ADMIN_PASSWORD ?? "envoy");
+  const configuredEmail = process.env.ENVOY_ADMIN_EMAIL;
+  const configuredPassword = process.env.ENVOY_ADMIN_PASSWORD;
+  if (!configuredEmail || !configuredPassword) return false;
+  const matches = (providedValue: string, expectedValue: string) => {
+    const provided = Buffer.from(providedValue);
+    const expected = Buffer.from(expectedValue);
+    return provided.length === expected.length && timingSafeEqual(provided, expected);
+  };
+  return matches(email.trim().toLowerCase(), configuredEmail.trim().toLowerCase()) && matches(password, configuredPassword);
 }

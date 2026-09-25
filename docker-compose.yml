@@ -18,7 +18,7 @@ services:
       dockerfile: Dockerfile
     command: [ "node", "server.js" ]
     ports:
-      - "6178:6178"
+      - "127.0.0.1:6178:6178"
     restart: unless-stopped
     stop_grace_period: 30s
     healthcheck:

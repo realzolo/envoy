@@ -1,7 +1,7 @@
 import { loadEnvConfig } from "@next/env";
 import { type Job, Worker } from "bullmq";
 import { CALLBACK_QUEUE, closeQueues, DELIVERY_QUEUE, EVENT_QUEUE, RECONCILIATION_QUEUE } from "@/server/queues";
-import { createWorkerRedis } from "@/server/redis";
+import { createWorkerRedis, writeWorkerHeartbeat } from "@/server/redis";
 import { dispatchOutboxBatch } from "@/server/services/outbox";
 import { db } from "@/server/database";
 import { deadLetterCallback } from "@/modules/callbacks/service";
@@ -34,10 +34,15 @@ async function main() {
   });
   for (const worker of workers) worker.on("error", error => console.error("Worker error", error));
   const dispatcher = setInterval(() => void dispatchOutboxBatch(), 500);
+  const workerId = process.env.HOSTNAME || `pid-${process.pid}`;
+  const heartbeat = () => void writeWorkerHeartbeat(connections[0], workerId).catch(error => console.error("Worker heartbeat error", error));
+  heartbeat();
+  const heartbeatTimer = setInterval(heartbeat, 15_000);
   await dispatchOutboxBatch();
   console.log("Envoy workers started");
   const shutdown = async () => {
     clearInterval(dispatcher);
+    clearInterval(heartbeatTimer);
     await Promise.all(workers.map(worker => worker.close()));
     await Promise.all(connections.map(connection => connection.quit()));
     await closeQueues();

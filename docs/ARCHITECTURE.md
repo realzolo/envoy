@@ -7,8 +7,8 @@ request and callback contracts contain no provider-specific fields. Provider SDK
 modules under `src/modules/providers`.
 
 Business services own content definitions, localization, and rendering. They submit the final subject, HTML, and/or
-plain text plus a stable message category. Envoy persists only the resulting delivery payload for operations and
-retention; it has no business content registry, versioning model, or rendering engine.
+plain text plus a stable message category. Envoy persists only the resulting delivery payload needed for operations;
+it has no business content registry, versioning model, or rendering engine.
 
 The core domain imports only `CanonicalMessage`, `CanonicalEvent`, and `CanonicalProviderError`. A provider module
 exposes a descriptor, capabilities, and narrow ports for sending, webhook processing, identity management, inbound mail,
@@ -26,10 +26,10 @@ bucket.
 
 ## Routing
 
-The routing engine evaluates product, service, category, and destination region. It removes targets whose
-provider account is disabled or unhealthy, whose identity is not verified, whose circuit is open, or whose quota or
-account/identity rate limit is exhausted. It then selects the lowest priority tier and performs deterministic weighted
-selection.
+Each routing policy is bound to one sending domain, then evaluated against product, service, and category. It
+removes targets whose provider account is disabled or unhealthy, whose identity is not verified for that same domain,
+whose circuit is open, or whose quota or account/identity rate limit is exhausted. It then selects the lowest priority
+tier and performs deterministic weighted selection.
 
 Every attempt stores:
 
@@ -62,12 +62,14 @@ Event application is idempotent and timestamp-aware, so delayed events cannot ov
 ## Provider setup
 
 Create a provider account in the operations console, enter its public configuration and write-only credential, then test
-connectivity. Credentials are never returned by the API. Rotation creates a new credential version and revokes the prior
-version in one transaction.
+connectivity. Credentials are never returned by the API. Rotation creates a new credential version, disables its routing
+eligibility until a successful fresh connection test, and revokes the prior version in one transaction.
 
-Create a logical domain in **Domain Matrix** and select the provider accounts that should carry it. Envoy calls each
-provider identity port and displays the DNS records returned by that provider. Routing targets become eligible only
-after the relevant provider identity is verified.
+Create a sending domain in **Sending Domains** and select the provider accounts that should carry it. For Resend and
+Amazon SES, Envoy creates the provider identity and displays its DNS records. For SendGrid, Mailgun, and Postmark,
+operators first verify the domain in the provider dashboard, then explicitly associate that existing verification with
+the account. Mailgun can be associated only with the exact sending domain configured on its account. Routing targets
+become eligible only after the relevant identity is verified.
 
 Supported modules:
 
@@ -91,31 +93,41 @@ cannot redirect authenticated requests to an arbitrary host.
 |------------|-----------------------------------------------------------------|---------------------------------------------------|-------------------------------------------------------|
 | Resend     | API key                                                         | None                                              | Webhook signing secret                                |
 | Amazon SES | Runtime IAM credentials, an assumed role, or AWS access keys    | Region and configuration set                      | Expected SNS Topic ARN                                |
-| SendGrid   | API key                                                         | Global or EU API region                           | Signed webhook verification public key                |
+| SendGrid   | API key with Mail Send permission                               | Global or EU API region                           | Event Webhook key; optional separate Inbound Parse key |
 | Mailgun    | API key and sending domain                                      | US or EU region                                   | Account webhook signing key                           |
 | Postmark   | Server API token                                                | Message stream, defaulting to `outbound`           | Basic Auth credentials and optional source allowlist  |
 
-Sending credentials and webhook verification material have separate encrypted lifecycles. Account creation generates the
-opaque callback URL first. The operator then registers that URL in the provider dashboard and saves the verification
-material returned by the provider. This ordering mirrors the provider setup flow and allows sending to be configured
-without inventing webhook values in advance.
+Sending credentials and event-webhook verification material have separate encrypted lifecycles. Provider Accounts
+generates the opaque provider-event URL first. The operator then registers that URL in the provider dashboard and saves
+the verification material returned by the provider. For Postmark, saving Basic Auth generates a one-time,
+credential-bearing provider-event URL to paste into Postmark instead of the bare opaque path. This ordering mirrors the
+provider setup flow and allows sending to be configured without inventing webhook values in advance.
 
-After account creation, copy the opaque endpoint displayed under **Callbacks** into the provider console. Never place a
-provider credential in that URL. Envoy redacts authorization headers before raw event persistence and reconstructs the
-asynchronous verification context from encrypted configuration.
+After account creation, copy the opaque endpoint displayed under **Provider Accounts** into the provider console. Never
+place a provider credential in that URL. **Provider Accounts** owns provider event-webhook setup; **Callbacks** only
+configures outbound canonical callbacks to business services. Envoy redacts authorization headers before raw event
+persistence and reconstructs the asynchronous verification context from encrypted configuration.
 
 ### DNS and identity workflow
 
 1. Create the provider account and run **Test connection**.
-2. Create a logical sending domain and select every provider that may carry it.
-3. Publish the returned DKIM, SPF, return-path, and ownership records at the authoritative DNS provider.
-4. Use **Refresh DNS** until each intended identity is verified.
-5. Create sender profiles and routing targets only for the logical domain. Runtime routing rejects disabled domains,
-   mismatched account/identity pairs, and unverified identities.
+2. Create a sending domain and select every provider that may carry it.
+3. For Resend and SES, publish the returned DKIM, SPF, return-path, and ownership records at the authoritative DNS
+   provider, then use **Refresh DNS** until each intended identity is verified.
+4. For SendGrid, Mailgun, and Postmark, complete the provider's domain-verification workflow first; Sending Domains
+   records the operator-confirmed association and does not invent DNS records or a verification API. A Mailgun
+   association must exactly match that account's configured sending domain.
+5. Create sender profiles and routing policies for the same sending domain. Runtime routing rejects disabled domains,
+   mismatched policy/account/identity domains, mismatched account/identity pairs, and unverified identities.
 
 SES inbound requires a Receipt Rule that stores MIME in S3 and publishes the receipt event to the configured SNS topic.
 SendGrid Inbound Parse and Mailgun Routes post multipart payloads to the opaque endpoint. Resend posts the receive event
 and Envoy fetches the message through the provider API. Postmark posts the full inbound payload.
+
+For SendGrid, Event Webhook and Inbound Parse use independently configured signature-verification keys. Inbound Parse
+also requires its receiving domain, MX record, and security policy to be configured in the SendGrid dashboard.
+The connection test makes a deliberately invalid Mail Send request, so it verifies the permission Envoy actually uses
+without delivering a probe email or requiring unrelated profile permissions.
 
 ## Inbound safety
 
@@ -148,6 +160,9 @@ supported only as an encrypted fallback.
 
 ## Canonical callbacks
 
+The **Callbacks** page configures outbound canonical callbacks to business services. Provider event-webhook setup lives
+under **Provider Accounts**.
+
 Callbacks contain Envoy message, delivery, inbound, product, category, and recipient identifiers. They never expose
 provider account IDs, native event names, or provider payloads. Requests are signed as
 `HMAC-SHA256(timestamp + "." + body)` and retried with exponential backoff. Exhausted callbacks enter the dead-letter
@@ -162,9 +177,12 @@ The versioned service API is discovered at `/api/v1` and described by `/api/v1/o
 scoped to one product and service. Ownership filters are applied to every message, delivery, event, inbound message,
 and suppression operation.
 
+Every service uses the fixed `SERVICE_REQUESTS_PER_MINUTE` request limit. The effective value is returned by
+`/api/v1/capabilities`; it is not a per-service administrator setting.
+
 Message acceptance is asynchronous and idempotent. A successful request commits the message, one delivery per
 recipient, and durable outbox work before returning `202`. The API also exposes cursor-paginated message, delivery,
-event, and inbound collections; logical sender discovery; product suppression management; pre-provider cancellation;
+event, and inbound collections; sender profile discovery; product suppression management; pre-provider cancellation;
 and controlled retry. An `unknown` delivery can only be retried when the caller explicitly acknowledges duplicate risk.
 
 ## Operational recovery

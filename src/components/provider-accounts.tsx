@@ -18,7 +18,7 @@ import {
   X
 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { type FormEvent, type ReactNode, useState } from "react";
+import { type FormEvent, type ReactNode, useId, useState } from "react";
 import type { ProviderType } from "@/modules/providers/contracts";
 
 type Row = Record<string, unknown>;
@@ -71,7 +71,7 @@ const providerMeta: Record<Exclude<ProviderType, "mock">, {
     requirement: "API key",
     credentialPath: "Settings > API Keys",
     credentialDocs: "https://www.twilio.com/docs/sendgrid/api-reference/how-to-use-the-sendgrid-v3-api/authentication",
-    webhookPath: "Settings > Mail Settings > Event Webhooks > Verification key",
+    webhookPath: "Event Webhooks and Inbound Parse each have a separate verification key",
     webhookDocs: "https://www.twilio.com/docs/sendgrid/for-developers/tracking-events/getting-started-event-webhook-security-features"
   },
   mailgun: {
@@ -121,6 +121,13 @@ function required(form: FormData, name: string) {
   return String(form.get(name) ?? "").trim()
 }
 
+export function postmarkWebhookUrl(path: string, username: string, password: string, origin: string) {
+  const url = new URL(path, origin);
+  url.username = username;
+  url.password = password;
+  return url.toString();
+}
+
 async function mutate(body: Row) {
   const response = await fetch("/api/admin/actions", {
     method: "POST",
@@ -137,12 +144,12 @@ function useProviderAction() {
   const [pending, setPending] = useState(false);
   const [notice, setNotice] = useState<Notice>(null);
 
-  async function run(body: Row, success: string) {
+  async function run(body: Row, success: string | ((result: unknown) => Notice)) {
     setPending(true);
     setNotice(null);
     try {
       const result = await mutate(body);
-      setNotice({ kind: "success", text: success });
+      setNotice(typeof success === "function" ? success(result) : { kind: "success", text: success });
       router.refresh();
       return result
     } catch (error) {
@@ -185,9 +192,11 @@ function SecretField({ name, label, placeholder, required: isRequired = true, hi
   hint?: string
 }) {
   const [visible, setVisible] = useState(false);
-  return <Field label={label} hint={hint}>
+  const id = useId();
+  return <div className="block space-y-1.5">
+    <label htmlFor={id} className="text-xs font-medium text-zinc-400">{label}</label>
     <span className="relative block">
-      <input name={name} type={visible ? "text" : "password"} required={isRequired} placeholder={placeholder}
+      <input id={id} name={name} type={visible ? "text" : "password"} required={isRequired} placeholder={placeholder}
              autoComplete="new-password" className={`${input} pr-10 font-mono`}/>
       <button type="button" onClick={() => setVisible(current => !current)}
               className="absolute inset-y-0 right-0 flex w-10 items-center justify-center text-zinc-600 hover:text-zinc-300"
@@ -195,7 +204,8 @@ function SecretField({ name, label, placeholder, required: isRequired = true, hi
         {visible ? <EyeOff size={15}/> : <Eye size={15}/>} 
       </button>
     </span>
-  </Field>
+    {hint && <span className="block text-[11px] leading-4 text-zinc-600">{hint}</span>}
+  </div>
 }
 
 function SubmitButton({ pending, children, icon = <Check size={14}/> }: {
@@ -274,12 +284,12 @@ function SesFields() {
 function CreateProvider({ onClose, alwaysOpen = false }: { onClose: () => void; alwaysOpen?: boolean }) {
   const action = useProviderAction();
   const [type, setType] = useState<ProviderType>("resend");
-  const [accountName, setAccountName] = useState("Resend production");
+  const [accountName, setAccountName] = useState("Resend");
   const selected = meta(type);
 
   function choose(next: ProviderType) {
-    const previousDefault = `${meta(type).name} production`;
-    if (!accountName || accountName === previousDefault) setAccountName(`${meta(next).name} production`);
+    const previousDefault = meta(type).name;
+    if (!accountName || accountName === previousDefault) setAccountName(meta(next).name);
     setType(next)
   }
 
@@ -318,7 +328,7 @@ function CreateProvider({ onClose, alwaysOpen = false }: { onClose: () => void; 
       } : {}
     }
     try {
-      await action.run({ action: "provider.create", type, name: accountName, configuration, credentials }, `${selected.name} account connected. Test the connection, then configure its webhook.`);
+      await action.run({ action: "provider.create", type, name: accountName, configuration, credentials }, `${selected.name} account connected. Test sending, then configure its event webhook.`);
       if (!alwaysOpen) onClose()
     } catch {
     }
@@ -351,7 +361,7 @@ function CreateProvider({ onClose, alwaysOpen = false }: { onClose: () => void; 
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Account name" hint="A label for your team; it is not sent to the provider." className="sm:col-span-2">
             <input value={accountName} onChange={event => setAccountName(event.target.value)} required maxLength={120}
-                   placeholder={`${selected.name} production`} className={input}/>
+                   placeholder={selected.name} className={input}/>
           </Field>
           <ProviderFields key={type} type={type}/>
         </div>
@@ -369,7 +379,7 @@ function CreateProvider({ onClose, alwaysOpen = false }: { onClose: () => void; 
           Open official documentation <ExternalLink size={12}/>
         </a>
         <div className="mt-5 border-t border-zinc-800 pt-4">
-          <p className="text-xs leading-5 text-zinc-500">Webhook verification is configured after this account is created, when its unique callback URL is available.</p>
+          <p className="text-xs leading-5 text-zinc-500">Event verification is configured after this account is created, when its unique provider webhook URL is available.</p>
         </div>
       </aside>
     </form>
@@ -378,7 +388,7 @@ function CreateProvider({ onClose, alwaysOpen = false }: { onClose: () => void; 
 
 function ActionButton({ body, success, children, danger = false }: {
   body: Row;
-  success: string;
+  success: string | ((result: unknown) => Notice);
   children: ReactNode;
   danger?: boolean
 }) {
@@ -397,6 +407,20 @@ function ActionButton({ body, success, children, danger = false }: {
   </span>
 }
 
+function CopyText({ text, label }: { text: string; label: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button type="button" onClick={async () => {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1600)
+    }} className="flex size-8 shrink-0 items-center justify-center rounded-md border border-zinc-800 text-zinc-500 hover:bg-zinc-900 hover:text-zinc-200"
+                    title={label} aria-label={label}>
+      {copied ? <Check size={13}/> : <Clipboard size={13}/>}
+    </button>
+  )
+}
+
 function CopyEndpoint({ path }: { path: string }) {
   const [copied, setCopied] = useState(false);
   return <button type="button" onClick={async () => {
@@ -404,8 +428,8 @@ function CopyEndpoint({ path }: { path: string }) {
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1600)
   }} className="flex size-8 shrink-0 items-center justify-center rounded-md border border-zinc-800 text-zinc-500 hover:bg-zinc-900 hover:text-zinc-200"
-                 title="Copy full callback URL" aria-label="Copy full callback URL">
-    {copied ? <Check size={13}/> : <Clipboard size={13}/>} 
+                 title="Copy full provider webhook URL" aria-label="Copy full provider webhook URL">
+    {copied ? <Check size={13}/> : <Clipboard size={13}/>}
   </button>
 }
 
@@ -413,22 +437,30 @@ function WebhookForm({ account }: { account: Row }) {
   const action = useProviderAction();
   const type = value(account, "type") as ProviderType;
   const selected = meta(type);
+  const endpointPath = `/api/provider-events/${type}/${value(account, "opaque_token")}`;
+  const [postmarkUrl, setPostmarkUrl] = useState("");
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     let settings: Row = {};
     if (type === "resend") settings = { signingSecret: required(form, "signingSecret") };
-    if (type === "sendgrid") settings = { publicKey: required(form, "publicKey") };
+    if (type === "sendgrid") settings = {
+      eventWebhookPublicKey: required(form, "eventWebhookPublicKey"),
+      ...(optional(form, "inboundParsePublicKey") ? { inboundParsePublicKey: optional(form, "inboundParsePublicKey") } : {})
+    };
     if (type === "mailgun") settings = { webhookSigningKey: required(form, "webhookSigningKey") };
+    const postmarkUsername = type === "postmark" ? required(form, "username") : "";
+    const postmarkPassword = type === "postmark" ? required(form, "password") : "";
     if (type === "postmark") settings = {
-      username: required(form, "username"),
-      password: required(form, "password"),
+      username: postmarkUsername,
+      password: postmarkPassword,
       ipAllowlist: required(form, "ipAllowlist").split(/[\s,]+/).filter(Boolean)
     };
     if (type === "ses") settings = { expectedTopicArn: required(form, "expectedTopicArn") };
     try {
-      await action.run({ action: "webhook.rotate_security", id: account.webhook_endpoint_id, settings }, "Webhook verification saved")
+      await action.run({ action: "webhook.rotate_security", id: account.webhook_endpoint_id, settings }, "Event verification saved");
+      if (type === "postmark") setPostmarkUrl(postmarkWebhookUrl(endpointPath, postmarkUsername, postmarkPassword, window.location.origin));
     } catch {
     }
   }
@@ -436,15 +468,21 @@ function WebhookForm({ account }: { account: Row }) {
   return <form onSubmit={submit} className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_260px]">
     <div className="grid gap-3 sm:grid-cols-2">
       {type === "resend" && <SecretField name="signingSecret" label="Signing secret" placeholder="whsec_..."/>}
-      {type === "sendgrid" && <Field label="Verification public key" className="sm:col-span-2">
-        <textarea name="publicKey" required rows={5} placeholder="-----BEGIN PUBLIC KEY-----"
-                  className={`${input} h-auto py-2 font-mono text-xs`}/>
-      </Field>}
+      {type === "sendgrid" && <>
+        <Field label="Event Webhook public key" hint="Required for delivery and engagement events." className="sm:col-span-2">
+          <textarea name="eventWebhookPublicKey" required rows={5} placeholder="-----BEGIN PUBLIC KEY-----"
+                    className={`${input} h-auto py-2 font-mono text-xs`}/>
+        </Field>
+        <Field label="Inbound Parse public key" hint="Add the separate Parse security-policy key only when receiving inbound email." className="sm:col-span-2">
+          <textarea name="inboundParsePublicKey" rows={5} placeholder="-----BEGIN PUBLIC KEY-----"
+                    className={`${input} h-auto py-2 font-mono text-xs`}/>
+        </Field>
+      </>}
       {type === "mailgun" && <SecretField name="webhookSigningKey" label="Webhook signing key"/>}
       {type === "postmark" && <>
-        <Field label="Basic Auth username"><input name="username" defaultValue="envoy" required autoComplete="off" className={input}/></Field>
-        <SecretField name="password" label="Basic Auth password"/>
-        <Field label="Postmark source IPs" hint="Optional. Separate IP addresses or CIDR ranges with commas." className="sm:col-span-2">
+        <Field label="Basic Auth username" hint="Included in the generated Postmark provider webhook URL after saving."><input name="username" defaultValue="envoy" required autoComplete="off" className={input}/></Field>
+        <SecretField name="password" label="Basic Auth password" hint="Use a new random value; it is encoded into the one-time provider webhook URL."/>
+        <Field label="Postmark source IPs" hint="Optional. Separate exact IP addresses with commas." className="sm:col-span-2">
           <input name="ipAllowlist" placeholder="3.134.147.250, 50.31.156.6" className={`${input} font-mono`}/>
         </Field>
       </>}
@@ -454,12 +492,15 @@ function WebhookForm({ account }: { account: Row }) {
       </Field>}
       <div className="sm:col-span-2"><SubmitButton pending={action.pending} icon={<ShieldCheck size={14}/>}>Save verification</SubmitButton>
         <InlineNotice notice={action.notice}/></div>
+      {postmarkUrl && <div className="sm:col-span-2 rounded-md border border-amber-900/50 bg-amber-950/20 p-3"><p className="mb-2 text-[11px] text-amber-300">Copy this Postmark provider webhook URL now. It includes the Basic Auth credentials; Envoy does not display the full URL again.</p><div className="flex items-center"><code className="min-w-0 flex-1 break-all text-xs text-amber-200">{postmarkUrl}</code><CopyText text={postmarkUrl} label="Copy Postmark provider webhook URL"/></div></div>}
     </div>
     <aside className="border-t border-zinc-800 pt-4 lg:border-t-0 lg:border-l lg:pt-0 lg:pl-5">
       <p className="text-[11px] font-medium uppercase text-zinc-600">Find this in {selected.name}</p>
       <p className="mt-2 text-xs leading-5 text-zinc-400">{selected.webhookPath}</p>
       <a href={selected.webhookDocs} target="_blank" rel="noreferrer"
          className="mt-3 inline-flex items-center gap-1.5 text-xs text-zinc-500 hover:text-zinc-200">Official webhook guide <ExternalLink size={12}/></a>
+      {type === "sendgrid" && <a href="https://www.twilio.com/docs/sendgrid/for-developers/parsing-email/securing-your-parse-webhooks" target="_blank" rel="noreferrer"
+                                   className="mt-2 inline-flex items-center gap-1.5 text-xs text-zinc-500 hover:text-zinc-200">Inbound Parse security guide <ExternalLink size={12}/></a>}
     </aside>
   </form>
 }
@@ -480,7 +521,7 @@ function CredentialForm({ account }: { account: Row }) {
       ...(optional(form, "sessionToken") ? { sessionToken: optional(form, "sessionToken") } : {})
     };
     try {
-      await action.run({ action: "provider.rotate", id: account.id, secret }, "Credential rotated")
+      await action.run({ action: "provider.rotate", id: account.id, secret }, "Credential rotated. Test the new credential before routing resumes.")
     } catch {
     }
   }
@@ -545,12 +586,17 @@ function Account({ account }: { account: Row }) {
   const selected = meta(type);
   const endpointPath = `/api/provider-events/${type}/${value(account, "opaque_token")}`;
   const active = account.status === "active";
+  const waitingForTest = account.status === "degraded";
   const health = value(account, "health") || "unknown";
   const configured = account.security_configured === true;
+  const webhookActive = account.webhook_status === "active";
   const publicConfig = record(account.public_config);
-  const detail = type === "mailgun" ? String(publicConfig.sendingDomain ?? account.region) :
-    type === "postmark" ? String(publicConfig.messageStream ?? "outbound") :
-      type === "ses" ? value(account, "region") : type === "sendgrid" && account.region === "eu" ? "EU region" : "Global";
+  const configRegion = value(publicConfig, "region");
+  const detail = type === "mailgun" ? String(publicConfig.sendingDomain ?? "") :
+    type === "postmark" ? `Stream: ${String(publicConfig.messageStream ?? "outbound")}` :
+      type === "ses" ? configRegion : type === "sendgrid" ? configRegion === "eu" ? "EU region" : "Global region" : "";
+  const sending = active && health === "healthy" ? { value: "Ready", tone: "good" as const } : active || waitingForTest ? { value: "Needs test", tone: "warn" as const } : { value: "Disabled", tone: "muted" as const };
+  const eventWebhook = !webhookActive ? { value: "Disabled", tone: "muted" as const } : !configured ? { value: "Verification needed", tone: "warn" as const } : { value: "Ready to receive", tone: "good" as const };
 
   return <article className="overflow-hidden rounded-lg border border-zinc-800 bg-[#090909]">
     <header className="flex flex-col gap-4 px-5 py-4 md:flex-row md:items-center">
@@ -560,39 +606,44 @@ function Account({ account }: { account: Row }) {
           <h2 className="truncate text-sm font-medium text-zinc-100">{value(account, "name")}</h2>
           <span className="text-xs text-zinc-600">{selected.name}</span>
         </div>
-        <p className="mt-1 truncate text-xs text-zinc-600">{detail}</p>
+        {detail && <p className="mt-1 truncate text-xs text-zinc-600">{detail}</p>}
       </div>
-      <dl className="grid grid-cols-3 gap-x-8">
-        <Status label="Account" value={active ? "Enabled" : "Disabled"} tone={active ? "good" : "muted"}/>
-        <Status label="Connection" value={health === "healthy" ? "Healthy" : health === "unhealthy" ? "Failed" : "Not tested"}
-                tone={health === "healthy" ? "good" : health === "unhealthy" ? "warn" : "muted"}/>
-        <Status label="Webhook" value={configured ? "Verified" : "Needs setup"} tone={configured ? "good" : "warn"}/>
+      <dl className="grid grid-cols-2 gap-x-8">
+        <Status label="Sending" value={sending.value} tone={sending.tone}/>
+        <Status label="Event webhook" value={eventWebhook.value} tone={eventWebhook.tone}/>
       </dl>
     </header>
 
     <div className="grid gap-4 border-t border-zinc-800 px-5 py-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
       <div className="min-w-0">
-        <p className="text-[11px] text-zinc-600">Callback URL</p>
+        <p className="text-[11px] text-zinc-600">Provider webhook URL</p>
         <div className="mt-1.5 flex items-center gap-2">
           <code className="min-w-0 truncate text-xs text-zinc-400">{endpointPath}</code>
-          <CopyEndpoint path={endpointPath}/>
+          {type === "postmark" ? <span className="text-[11px] text-zinc-600">Save event verification below to generate its Basic Auth URL.</span> : <CopyEndpoint path={endpointPath}/>}
         </div>
       </div>
       <div className="flex flex-wrap gap-2">
-        <ActionButton body={{ action: "provider.test", id: account.id }} success="Connection check completed">
+        <ActionButton body={{ action: "provider.test", id: account.id }} success={result => {
+          const healthy = (result as { healthy?: boolean }).healthy === true;
+          return healthy ? { kind: "success", text: "Connection verified. Account is ready for domain setup." } : { kind: "error", text: "Connection failed. Review the provider credential and account settings." }
+        }}>
           <FlaskConical size={13}/>Test connection
         </ActionButton>
-        <ActionButton body={{ action: "provider.toggle", id: account.id, enabled: !active }}
-                      success={active ? "Account disabled" : "Account enabled"} danger={active}>
-          <Power size={13}/>{active ? "Disable" : "Enable"}
+        <ActionButton body={{ action: "webhook.toggle", id: account.webhook_endpoint_id, enabled: !webhookActive }}
+                      success={webhookActive ? "Event webhook disabled" : "Event webhook enabled"} danger={webhookActive}>
+          <Webhook size={13}/>{webhookActive ? "Disable event webhook" : "Enable event webhook"}
         </ActionButton>
+        {!waitingForTest && <ActionButton body={{ action: "provider.toggle", id: account.id, enabled: !active }}
+                                            success={active ? "Account disabled" : "Account enabled for testing"} danger={active}>
+          <Power size={13}/>{active ? "Disable" : "Enable for test"}
+        </ActionButton>}
       </div>
     </div>
 
     <div className="border-t border-zinc-800">
       <details className="group px-5">
         <summary className="flex cursor-pointer list-none items-center gap-2 py-3 text-xs text-zinc-400 hover:text-zinc-200">
-          <Webhook size={14}/>{configured ? "Update webhook verification" : "Configure webhook"}
+          <Webhook size={14}/>{configured ? "Update event verification" : "Configure event verification"}
           <ChevronDown size={13} className="ml-auto transition-transform group-open:rotate-180"/>
         </summary>
         <div className="border-t border-zinc-900 pb-5"><WebhookForm account={account}/></div>

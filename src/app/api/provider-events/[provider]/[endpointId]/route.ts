@@ -1,5 +1,6 @@
 import { providerTypeSchema } from "@/modules/providers/contracts";
 import { ingestProviderWebhook } from "@/modules/webhooks/ingress";
+import { clientIpFromTrustedProxy } from "@/server/network";
 import { recordRequest } from "@/server/request-log";
 
 export const runtime = "nodejs";
@@ -25,7 +26,7 @@ export async function POST(request: Request, { params }: {
   const result = await ingestProviderWebhook(provider.data, values.endpointId, {
     rawBody,
     headers,
-    remoteAddress: request.headers.get("x-forwarded-for")?.split(",")[0]?.trim()
+    remoteAddress: clientIpFromTrustedProxy(request)
   });
   await recordRequest({
     method: "POST",

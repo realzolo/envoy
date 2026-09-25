@@ -1,0 +1,26 @@
+name: Feature request
+description: Propose a focused improvement to Envoy's self-hosted email control plane.
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem to solve
+      description: Describe the operator or service-user problem, not only a proposed implementation.
+    validations:
+      required: true
+
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Proposed outcome
+      description: Explain the smallest useful user-visible result.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives and constraints
+      description: Include operational, compatibility, or provider constraints when relevant.

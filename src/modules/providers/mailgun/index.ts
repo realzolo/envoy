@@ -19,11 +19,11 @@ export const mailgunModule: ProviderModule = {
     capabilities: {
       nativeIdempotency: false,
       inboundMode: "route",
-      domainManagement: true,
+      domainManagement: false,
       webhookSecurity: "Timestamp token HMAC",
       eventTypes: Object.keys(eventMap),
-      attachments: true,
-      scheduling: true
+      attachments: false,
+      scheduling: false
     }
   },
   sender: {

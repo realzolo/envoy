@@ -1,5 +1,6 @@
 import { hashApiKey } from "@/server/crypto";
 import { query } from "@/server/database";
+import { SERVICE_REQUESTS_PER_MINUTE } from "@/server/service-limits";
 
 export type ServiceIdentity = {
   serviceId: string;
@@ -22,14 +23,13 @@ export async function authenticateService(request: Request): Promise<ServiceIden
     name: string;
     product_id: string;
     product_name: string;
-    rate_limit_per_minute: number;
   }>(
-    `SELECT c.id AS credential_id, s.id, s.name, s.product_id, p.name AS product_name, s.rate_limit_per_minute
+    `SELECT c.id AS credential_id, s.id, s.name, s.product_id, p.name AS product_name
      FROM service_credentials c
      JOIN services s ON s.id = c.service_id
      JOIN products p ON p.id = s.product_id
      WHERE c.key_hash = $1 AND c.status = 'active' AND c.valid_from <= now()
-       AND (c.valid_to IS NULL OR c.valid_to > now()) AND s.status = 'active' AND p.status = 'active'`,
+       AND (c.valid_to IS NULL OR c.valid_to > now()) AND p.status = 'active'`,
     [hashApiKey(suppliedKey)],
   );
 
@@ -43,6 +43,6 @@ export async function authenticateService(request: Request): Promise<ServiceIden
     serviceName: service.name,
     productId: service.product_id,
     product: service.product_name,
-    rateLimitPerMinute: service.rate_limit_per_minute,
+    rateLimitPerMinute: SERVICE_REQUESTS_PER_MINUTE,
   };
 }

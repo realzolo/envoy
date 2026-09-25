@@ -33,8 +33,7 @@ export async function POST(request: Request) {
       case"product.create":
         result = {
           id: await actions.createProduct({
-            name: text(body, "name"),
-            slug: text(body, "slug")
+            name: text(body, "name")
           }, session.email)
         };
         status = 201;
@@ -74,8 +73,6 @@ export async function POST(request: Request) {
       case"domain.create":
         result = await actions.createDomain({
           domain: text(body, "domain"),
-          region: text(body, "region"),
-          inboundEnabled: body.inboundEnabled === true,
           accountIds: strings(body.accountIds)
         }, session.email);
         status = 201;
@@ -112,8 +109,8 @@ export async function POST(request: Request) {
             name: text(body, "name"),
             productId: typeof body.productId === "string" ? body.productId : undefined,
             serviceId: typeof body.serviceId === "string" ? body.serviceId : undefined,
+            domainId: text(body, "domainId"),
             category: typeof body.category === "string" ? body.category : undefined,
-            region: typeof body.region === "string" ? body.region : undefined,
             priority: Number(body.priority ?? 100),
             targets: Array.isArray(body.targets) ? body.targets as Array<{
               accountId: string;
@@ -128,10 +125,10 @@ export async function POST(request: Request) {
         break;
       case"routing.simulate":
         result = await actions.simulateRouting({
+          domainId: text(body, "domainId"),
           productId: typeof body.productId === "string" ? body.productId : undefined,
           serviceId: typeof body.serviceId === "string" ? body.serviceId : undefined,
-          category: typeof body.category === "string" ? body.category : undefined,
-          region: typeof body.region === "string" ? body.region : undefined
+          category: typeof body.category === "string" ? body.category : undefined
         });
         break;
       case"routing.toggle":
@@ -187,22 +184,20 @@ export async function POST(request: Request) {
         await actions.revokeServiceCredential(text(body, "id"), session.email);
         break;
       case"callback.create":
-        result = {
-          id: await actions.createCallback({
-            serviceId: text(body, "serviceId"),
-            name: text(body, "name"),
-            url: text(body, "url"),
-            secret: text(body, "secret"),
-            events: strings(body.events)
-          }, session.email)
-        };
+        result = await actions.createCallback({
+          serviceId: text(body, "serviceId"),
+          name: text(body, "name"),
+          url: text(body, "url"),
+          secret: typeof body.secret === "string" && body.secret.trim() ? body.secret : undefined,
+          events: strings(body.events)
+        }, session.email);
         status = 201;
         break;
       case"callback.toggle":
         await actions.toggleCallback(text(body, "id"), body.enabled === true, session.email);
         break;
       case"callback.rotate_secret":
-        result = await actions.rotateCallbackSecret(text(body, "id"), text(body, "secret"), session.email);
+        result = await actions.rotateCallbackSecret(text(body, "id"), typeof body.secret === "string" && body.secret.trim() ? body.secret : undefined, session.email);
         break;
       case"callback.test":
         result = { deliveryId: await actions.testCallback(text(body, "id"), session.email) };
@@ -227,9 +222,6 @@ export async function POST(request: Request) {
         break;
       case"inbound_route.toggle":
         await actions.toggleInboundRoute(text(body, "id"), body.enabled === true, session.email);
-        break;
-      case"settings.update":
-        await actions.updateSettings(object(body, "settings"), session.email);
         break;
       default:
         throw new Error("Unknown admin action");

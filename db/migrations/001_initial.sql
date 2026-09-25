@@ -4,8 +4,7 @@ EXTENSION IF NOT EXISTS pgcrypto;
 CREATE TABLE products
 (
     id         text PRIMARY KEY,
-    slug       text        NOT NULL UNIQUE,
-    name       text        NOT NULL,
+    name       text        NOT NULL UNIQUE,
     status     text        NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'suspended')),
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now()
@@ -16,10 +15,10 @@ CREATE TABLE services
     id                    text PRIMARY KEY,
     product_id            text        NOT NULL REFERENCES products (id) ON DELETE CASCADE,
     name                  text        NOT NULL,
-    status                text        NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'suspended')),
-    rate_limit_per_minute integer     NOT NULL DEFAULT 600 CHECK (rate_limit_per_minute > 0),
     created_at            timestamptz NOT NULL DEFAULT now(),
-    updated_at            timestamptz NOT NULL DEFAULT now()
+    updated_at            timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (product_id, name),
+    UNIQUE (id, product_id)
 );
 
 CREATE TABLE service_credentials
@@ -40,11 +39,9 @@ CREATE TABLE provider_accounts
     id                    text PRIMARY KEY,
     type                  text        NOT NULL CHECK (type IN ('resend', 'ses', 'sendgrid', 'mailgun', 'postmark', 'mock')),
     name                  text        NOT NULL UNIQUE,
-    status                text        NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled', 'degraded')),
-    region                text        NOT NULL,
+    status                text        NOT NULL DEFAULT 'degraded' CHECK (status IN ('active', 'disabled', 'degraded')),
     public_config         jsonb       NOT NULL,
     config_schema_version integer     NOT NULL DEFAULT 1,
-    config_revision       integer     NOT NULL DEFAULT 1,
     health                jsonb       NOT NULL DEFAULT '{
       "status": "unknown"
     }'::jsonb,
@@ -61,7 +58,7 @@ CREATE TABLE provider_credentials
     secret_ciphertext   text        NOT NULL,
     encrypted_dek       text        NOT NULL,
     key_version         text        NOT NULL,
-    status              text        NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'revoked', 'expired')),
+    status              text        NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'revoked')),
     valid_from          timestamptz NOT NULL DEFAULT now(),
     valid_to            timestamptz,
     created_at          timestamptz NOT NULL DEFAULT now(),
@@ -90,13 +87,11 @@ CREATE TABLE provider_webhook_endpoints
 
 CREATE TABLE sending_domains
 (
-    id              text PRIMARY KEY,
-    domain          text        NOT NULL UNIQUE,
-    region          text        NOT NULL,
-    inbound_enabled boolean     NOT NULL DEFAULT false,
-    status          text        NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
-    created_at      timestamptz NOT NULL DEFAULT now(),
-    updated_at      timestamptz NOT NULL DEFAULT now()
+    id         text PRIMARY KEY,
+    domain     text        NOT NULL UNIQUE,
+    status     text        NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE TABLE provider_identities
@@ -108,7 +103,6 @@ CREATE TABLE provider_identities
     status               text        NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'verified', 'failed', 'disabled')),
     dns_records          jsonb       NOT NULL DEFAULT '[]'::jsonb,
     last_checked_at      timestamptz,
-    capabilities         jsonb       NOT NULL DEFAULT '{}'::jsonb,
     created_at           timestamptz NOT NULL DEFAULT now(),
     updated_at           timestamptz NOT NULL DEFAULT now(),
     UNIQUE (sending_domain_id, provider_account_id),
@@ -128,7 +122,8 @@ CREATE TABLE sender_profiles
     status            text        NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
     created_at        timestamptz NOT NULL DEFAULT now(),
     updated_at        timestamptz NOT NULL DEFAULT now(),
-    UNIQUE (product_id, message_category, from_local_part)
+    UNIQUE (product_id, message_category, from_local_part),
+    UNIQUE (product_id, name)
 );
 
 CREATE TABLE routing_policies
@@ -136,13 +131,15 @@ CREATE TABLE routing_policies
     id                 text PRIMARY KEY,
     name               text        NOT NULL,
     product_id         text REFERENCES products (id) ON DELETE CASCADE,
-    service_id         text REFERENCES services (id) ON DELETE CASCADE,
+    service_id         text,
+    sending_domain_id  text        NOT NULL REFERENCES sending_domains (id) ON DELETE RESTRICT,
     message_category   text,
-    destination_region text,
     priority           integer     NOT NULL DEFAULT 100,
     status             text        NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
     created_at         timestamptz NOT NULL DEFAULT now(),
-    updated_at         timestamptz NOT NULL DEFAULT now()
+    updated_at         timestamptz NOT NULL DEFAULT now(),
+    CHECK (service_id IS NULL OR product_id IS NOT NULL),
+    FOREIGN KEY (service_id, product_id) REFERENCES services (id, product_id) ON DELETE CASCADE
 );
 
 CREATE TABLE routing_targets
@@ -154,11 +151,12 @@ CREATE TABLE routing_targets
     priority              integer     NOT NULL DEFAULT 100,
     weight                integer     NOT NULL DEFAULT 100 CHECK (weight > 0),
     rate_limit_per_minute integer     NOT NULL DEFAULT 1000 CHECK (rate_limit_per_minute > 0),
-    status                text        NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled', 'circuit_open')),
+    status                text        NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'circuit_open')),
     circuit_open_until    timestamptz,
     created_at            timestamptz NOT NULL DEFAULT now(),
     updated_at            timestamptz NOT NULL DEFAULT now(),
-    FOREIGN KEY (provider_identity_id, provider_account_id) REFERENCES provider_identities (id, provider_account_id) ON DELETE RESTRICT
+    FOREIGN KEY (provider_identity_id, provider_account_id) REFERENCES provider_identities (id, provider_account_id) ON DELETE RESTRICT,
+    UNIQUE (policy_id, provider_identity_id)
 );
 
 CREATE TABLE messages
@@ -203,6 +201,7 @@ CREATE TABLE deliveries
     accepted_at        timestamptz,
     delivered_at       timestamptz,
     updated_at         timestamptz NOT NULL DEFAULT now(),
+    CHECK (recipient_email = lower(recipient_email)),
     UNIQUE (message_id, recipient_email)
 );
 
@@ -276,7 +275,11 @@ CREATE TABLE suppressions
     active           boolean     NOT NULL DEFAULT true,
     expires_at       timestamptz,
     created_at       timestamptz NOT NULL DEFAULT now(),
-    updated_at       timestamptz NOT NULL DEFAULT now()
+    updated_at       timestamptz NOT NULL DEFAULT now(),
+    CHECK ((scope_type = 'global' AND product_id IS NULL AND list_id IS NULL)
+        OR (scope_type = 'product' AND product_id IS NOT NULL AND list_id IS NULL)
+        OR (scope_type = 'list' AND product_id IS NOT NULL AND list_id IS NOT NULL)),
+    CHECK (email_normalized = lower(email_normalized))
 );
 CREATE UNIQUE INDEX suppressions_active_scope ON suppressions (scope_type, COALESCE(product_id, '*'), COALESCE(list_id, '*'), email_normalized) WHERE active = true;
 
@@ -306,7 +309,9 @@ CREATE TABLE inbound_routes
     service_id                   text REFERENCES services (id) ON DELETE CASCADE,
     callback_endpoint_id         text        REFERENCES callback_endpoints (id) ON DELETE SET NULL,
     status                       text        NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
-    created_at                   timestamptz NOT NULL DEFAULT now()
+    created_at                   timestamptz NOT NULL DEFAULT now(),
+    FOREIGN KEY (service_id, product_id) REFERENCES services (id, product_id) ON DELETE CASCADE,
+    UNIQUE (provider_webhook_endpoint_id, sending_domain_id, local_part_pattern)
 );
 
 CREATE TABLE inbound_messages
@@ -327,7 +332,7 @@ CREATE TABLE inbound_messages
     sanitized_html        text,
     text_body             text,
     raw_mime_object_key   text,
-    status                text        NOT NULL DEFAULT 'received' CHECK (status IN ('received', 'scanning', 'ready', 'rejected', 'delivered')),
+    status                text        NOT NULL DEFAULT 'scanning' CHECK (status IN ('scanning', 'ready', 'rejected')),
     rejection_reason      text,
     received_at           timestamptz NOT NULL,
     created_at            timestamptz NOT NULL DEFAULT now(),
@@ -343,7 +348,7 @@ CREATE TABLE inbound_attachments
     size_bytes         bigint      NOT NULL,
     object_key         text        NOT NULL,
     content_id         text,
-    scan_status        text        NOT NULL DEFAULT 'pending' CHECK (scan_status IN ('pending', 'clean', 'infected', 'failed', 'skipped')),
+    scan_status        text        NOT NULL CHECK (scan_status IN ('clean', 'skipped')),
     created_at         timestamptz NOT NULL DEFAULT now()
 );
 
@@ -391,30 +396,6 @@ CREATE TABLE audit_logs
     details       jsonb       NOT NULL DEFAULT '{}'::jsonb,
     created_at    timestamptz NOT NULL DEFAULT now()
 );
-
-CREATE TABLE config_revisions
-(
-    id            bigserial PRIMARY KEY,
-    resource_type text        NOT NULL,
-    resource_id   text        NOT NULL,
-    revision      integer     NOT NULL,
-    config        jsonb       NOT NULL,
-    actor         text        NOT NULL,
-    created_at    timestamptz NOT NULL DEFAULT now(),
-    UNIQUE (resource_type, resource_id, revision)
-);
-
-CREATE TABLE workspace_settings
-(
-    key        text PRIMARY KEY,
-    value      jsonb       NOT NULL,
-    updated_at timestamptz NOT NULL DEFAULT now()
-);
-INSERT INTO workspace_settings (key, value)
-VALUES ('workspace_name', '"Envoy"'),
-       ('default_environment', '"Production"'),
-       ('event_retention_days', '90'),
-       ('content_retention_days', '30');
 
 CREATE TABLE request_logs
 (

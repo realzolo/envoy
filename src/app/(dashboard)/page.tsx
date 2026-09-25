@@ -1,11 +1,14 @@
 import Link from "next/link";
+import { connection } from "next/server";
 import { ArrowRight, CheckCircle2, Clock3, MailCheck, ShieldCheck, TriangleAlert } from "lucide-react";
 import { DeliveryChart } from "@/components/delivery-chart";
 import { EmailTable } from "@/components/email-table";
 import { PageHeader } from "@/components/page-header";
+import { SetupChecklist } from "@/components/setup-checklist";
 import { dashboardData } from "@/modules/admin/queries";
 
 export default async function OverviewPage() {
+  await connection();
   const data = await dashboardData();
   const stats = [{
     label: "Accepted",
@@ -28,8 +31,9 @@ export default async function OverviewPage() {
     context: "Awaiting reconciliation",
     icon: Clock3
   }];
-  return <div className="space-y-8"><PageHeader title="Overview"
+  return <div className="space-y-8"><PageHeader title="Delivery pipeline"
                                                 description="Monitor delivery, routing, callbacks, and provider health across every product."/>
+    <SetupChecklist state={data.setup}/>
     <section
       className="grid gap-px overflow-hidden rounded-lg border border-zinc-800 bg-zinc-800 sm:grid-cols-2 xl:grid-cols-4">{stats.map(stat => {
       const Icon = stat.icon;
@@ -44,11 +48,11 @@ export default async function OverviewPage() {
       </div>
       <div className="rounded-lg border border-zinc-800 bg-[#090909] p-5">
         <div className="flex items-center justify-between">
-          <div><h2 className="text-sm font-medium text-zinc-100">System health</h2><p
-            className="mt-1 text-xs text-zinc-600">Live durable pipeline state</p></div>
-          <ShieldCheck size={17} className="text-emerald-400"/></div>
+          <div><h2 className="text-sm font-medium text-zinc-100">Pipeline health</h2><p
+            className="mt-1 text-xs text-zinc-600">Worker and durable delivery state</p></div>
+          <ShieldCheck size={17} className={data.health.workerAlive ? "text-emerald-400" : "text-amber-400"}/></div>
         <div
-          className="mt-5 divide-y divide-zinc-900">{[["Message API", "Healthy", "PostgreSQL"], ["Outbox backlog", data.health.outbox ? "Attention" : "Healthy", String(data.health.outbox)], ["Unknown outcomes", data.health.unknown ? "Reconciling" : "Healthy", String(data.health.unknown)], ["Callback dead letters", data.health.deadLetters ? "Attention" : "Healthy", String(data.health.deadLetters)]].map(([name, status, detail]) =>
+          className="mt-5 divide-y divide-zinc-900">{[["Delivery worker", data.health.workerAlive ? "Healthy" : "Attention", data.health.workerAlive ? "Online" : "No recent heartbeat"], ["Outbox backlog", data.health.outbox ? "Attention" : "Healthy", String(data.health.outbox)], ["Outbox failures", data.health.outboxFailed ? "Attention" : "Healthy", String(data.health.outboxFailed)], ["Unknown outcomes", data.health.unknown ? "Reconciling" : "Healthy", String(data.health.unknown)], ["Callback dead letters", data.health.deadLetters ? "Attention" : "Healthy", String(data.health.deadLetters)]].map(([name, status, detail]) =>
           <div key={String(name)} className="flex items-center gap-3 py-3"><span
             className={`size-1.5 rounded-full ${status === "Healthy" ? "bg-emerald-400" : "bg-amber-400"}`}/><span
             className="flex-1 text-xs text-zinc-400">{name}</span><span

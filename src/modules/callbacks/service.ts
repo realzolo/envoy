@@ -1,5 +1,6 @@
 import { createHmac } from "node:crypto";
 import { openSecret } from "@/modules/config/envelope";
+import { CallbackUrlPolicyError, postCallback, resolveCallbackTarget } from "@/modules/callbacks/url-policy";
 import { query } from "@/server/database";
 
 export async function deliverCallback(callbackDeliveryId: string) {
@@ -11,10 +12,26 @@ export async function deliverCallback(callbackDeliveryId: string) {
     encrypted_dek: string;
     key_version: string;
     secret_version: number;
+    endpoint_status: string;
     payload: Record<string, unknown>;
     attempt_count: number
-  }>(`SELECT d.id,e.url,d.status,e.secret_ciphertext,e.encrypted_dek,e.key_version,e.secret_version,d.payload,d.attempt_count FROM callback_deliveries d JOIN callback_endpoints e ON e.id=d.endpoint_id WHERE d.id=$1 AND e.status='active' AND d.status<>'delivered'`, [callbackDeliveryId])).rows[0];
+  }>(`SELECT d.id,e.url,d.status,e.status AS endpoint_status,e.secret_ciphertext,e.encrypted_dek,e.key_version,e.secret_version,d.payload,d.attempt_count FROM callback_deliveries d JOIN callback_endpoints e ON e.id=d.endpoint_id WHERE d.id=$1 AND d.status IN ('pending','retrying','delivering')`, [callbackDeliveryId])).rows[0];
   if (!row) return;
+  if (row.endpoint_status !== "active") {
+    await deadLetterCallback(row.id, "Callback endpoint is disabled");
+    return;
+  }
+  let target;
+  try {
+    target = await resolveCallbackTarget(row.url);
+  } catch (error) {
+    if (error instanceof CallbackUrlPolicyError) {
+      await deadLetterCallback(row.id, error.message);
+      return;
+    }
+    await query("UPDATE callback_deliveries SET status='retrying',last_error=$2,next_attempt_at=now()+interval '1 minute',updated_at=now() WHERE id=$1", [row.id, error instanceof Error ? error.message : "Network error"]);
+    throw error;
+  }
   const secret = openSecret<{ secret: string }>({
     secretCiphertext: row.secret_ciphertext,
     encryptedDek: row.encrypted_dek,
@@ -26,26 +43,20 @@ export async function deliverCallback(callbackDeliveryId: string) {
   const timestamp = Math.floor(Date.now() / 1000).toString();
   const signature = createHmac("sha256", secret).update(`${timestamp}.${body}`).digest("hex");
   await query("UPDATE callback_deliveries SET status='delivering',attempt_count=attempt_count+1,updated_at=now() WHERE id=$1", [row.id]);
-  let response: Response;
+  let response: { status: number; statusText: string; body: string };
   try {
-    response = await fetch(row.url, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-envoy-id": String(row.payload.id),
-        "x-envoy-timestamp": timestamp,
-        "x-envoy-signature": `v1=${signature}`
-      },
-      body,
-      signal: AbortSignal.timeout(10_000)
-    })
+    response = await postCallback(target, body, {
+      "content-type": "application/json",
+      "x-envoy-id": String(row.payload.id),
+      "x-envoy-timestamp": timestamp,
+      "x-envoy-signature": `v1=${signature}`
+    });
   } catch (error) {
     await query("UPDATE callback_deliveries SET status='retrying',last_error=$2,next_attempt_at=now()+interval '1 minute',updated_at=now() WHERE id=$1", [row.id, error instanceof Error ? error.message : "Network error"]);
     throw error
   }
-  if (!response.ok) {
-    const text = (await response.text()).slice(0, 500);
-    await query("UPDATE callback_deliveries SET status='retrying',response_code=$2,last_error=$3,next_attempt_at=now()+interval '1 minute',updated_at=now() WHERE id=$1", [row.id, response.status, text || response.statusText]);
+  if (response.status < 200 || response.status >= 300) {
+    await query("UPDATE callback_deliveries SET status='retrying',response_code=$2,last_error=$3,next_attempt_at=now()+interval '1 minute',updated_at=now() WHERE id=$1", [row.id, response.status, response.body || response.statusText]);
     throw new Error(`Callback returned HTTP ${response.status}`)
   }
   await query("UPDATE callback_deliveries SET status='delivered',response_code=$2,last_error=NULL,delivered_at=now(),updated_at=now() WHERE id=$1", [row.id, response.status])

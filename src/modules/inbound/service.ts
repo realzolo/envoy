@@ -8,6 +8,14 @@ import { query, transaction } from "@/server/database";
 const MAX_MESSAGE_BYTES = 25 * 1024 * 1024;
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 
+/** Errors caused by the message or routing policy should not consume worker retries. */
+export class InboundTerminalError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "InboundTerminalError";
+  }
+}
+
 export async function scanAttachment(data: Uint8Array) {
   const host = process.env.CLAMAV_HOST?.trim();
   if (!host) return "skipped" as const;
@@ -29,7 +37,16 @@ export async function scanAttachment(data: Uint8Array) {
       socket.write(Buffer.alloc(4))
     });
     socket.on("data", chunk => chunks.push(chunk));
-    socket.on("end", () => resolve(Buffer.concat(chunks).toString().includes("FOUND") ? "infected" : "clean"));
+    socket.on("end", () => {
+      const response = Buffer.concat(chunks).toString();
+      if (response.includes("FOUND")) {
+        resolve("infected");
+      } else if (response.includes("OK")) {
+        resolve("clean");
+      } else {
+        reject(new Error("ClamAV scan did not return a valid result"));
+      }
+    });
     socket.on("error", reject)
   })
 }
@@ -47,9 +64,11 @@ export async function persistInbound(input: {
 }) {
   const message = input.message;
   const duplicate = (await query<{
-    id: string
-  }>("SELECT id FROM inbound_messages WHERE provider_account_id=$1 AND external_message_id=$2", [input.providerAccountId, message.externalMessageId])).rows[0];
-  if (duplicate) return duplicate.id;
+    id: string;
+    status: string
+  }>("SELECT id,status FROM inbound_messages WHERE provider_account_id=$1 AND external_message_id=$2", [input.providerAccountId, message.externalMessageId])).rows[0];
+  if (duplicate && duplicate.status !== "scanning") return duplicate.id;
+  let id = duplicate?.id ?? createId("inb");
   const recipients = message.to.map(address);
   const route = await transaction(async client => (await client.query<{
     id: string;
@@ -62,25 +81,36 @@ export async function persistInbound(input: {
       WHERE r.provider_webhook_endpoint_id = $1
         AND r.status = 'active'
         AND d.status = 'active'
-        AND d.inbound_enabled = true
         AND EXISTS (SELECT 1
                     FROM unnest($2::text[]) recipient
                     WHERE split_part(recipient, '@', 2) = d.domain
                       AND (r.local_part_pattern = '*' OR
-                           split_part(recipient, '@', 1) LIKE replace(r.local_part_pattern, '*', '%')))
-      ORDER BY (r.local_part_pattern <> '*') DESC LIMIT 1`, [input.webhookEndpointId, recipients])).rows[0] ?? null);
-  if (!route) throw new Error("No inbound route matched the recipients");
-  const id = createId("inb");
-  const inserted = await query(`INSERT INTO inbound_messages(id, inbound_route_id, product_id, service_id,
+                           split_part(recipient, '@', 1) LIKE replace(replace(r.local_part_pattern, '_', '~_'), '*', '%') ESCAPE '~'))
+                      ORDER BY (r.local_part_pattern <> '*') DESC LIMIT 1`, [input.webhookEndpointId, recipients])).rows[0] ?? null);
+  if (!route) {
+    const error = new InboundTerminalError("No inbound route matched the recipients");
+    if (duplicate) {
+      await query("UPDATE inbound_messages SET status='rejected',rejection_reason=$2 WHERE id=$1", [id, error.message]);
+      return id;
+    }
+    throw error;
+  }
+  const inserted = duplicate ? null : await query(`INSERT INTO inbound_messages(id, inbound_route_id, product_id, service_id,
                                                              provider_account_id, raw_provider_event_id,
                                                              external_message_id, message_id, from_email, to_emails,
                                                              cc_emails, bcc_emails, subject, sanitized_html, text_body,
                                                              status, received_at)
                                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 'scanning',
                                         $16) ON CONFLICT(provider_account_id,external_message_id) DO NOTHING RETURNING id`, [id, route.id, route.product_id, route.service_id, input.providerAccountId, input.rawEventId, message.externalMessageId, message.messageId ?? null, address(message.from), recipients, message.cc.map(address), message.bcc.map(address), message.subject, message.html ? sanitizeHtml(message.html) : null, message.text ?? null, message.receivedAt]);
-  if (!inserted.rowCount) return (await query<{
-    id: string
-  }>("SELECT id FROM inbound_messages WHERE provider_account_id=$1 AND external_message_id=$2", [input.providerAccountId, message.externalMessageId])).rows[0].id;
+  if (inserted && !inserted.rowCount) {
+    const existing = (await query<{
+      id: string;
+      status: string
+    }>("SELECT id,status FROM inbound_messages WHERE provider_account_id=$1 AND external_message_id=$2", [input.providerAccountId, message.externalMessageId])).rows[0];
+    if (!existing) throw new Error("Inbound message was not persisted");
+    if (existing.status !== "scanning") return existing.id;
+    id = existing.id;
+  }
   const prefix = `inbound/${id}`;
   let rawKey: string | null = null;
   const attachments: Array<(typeof message.attachments)[number] & {
@@ -89,15 +119,15 @@ export async function persistInbound(input: {
   }> = [];
   try {
     const aggregateBytes = message.rawMime?.byteLength ?? message.attachments.reduce((total, file) => total + file.content.byteLength, 0);
-    if (aggregateBytes > MAX_MESSAGE_BYTES) throw new Error("Inbound message exceeds the size limit");
-    for (const file of message.attachments) if (file.content.byteLength > MAX_ATTACHMENT_BYTES) throw new Error(`Attachment exceeds the size limit: ${file.fileName}`);
+    if (aggregateBytes > MAX_MESSAGE_BYTES) throw new InboundTerminalError("Inbound message exceeds the size limit");
+    for (const file of message.attachments) if (file.content.byteLength > MAX_ATTACHMENT_BYTES) throw new InboundTerminalError(`Attachment exceeds the size limit: ${file.fileName}`);
     if (message.rawMime) {
       rawKey = `${prefix}/raw.eml`;
       await objectStore().put(rawKey, message.rawMime, "message/rfc822")
     }
     for (const file of message.attachments) {
       const scanStatus = await scanAttachment(file.content);
-      if (scanStatus === "infected") throw new Error(`Malware detected in attachment: ${file.fileName}`);
+      if (scanStatus === "infected") throw new InboundTerminalError(`Malware detected in attachment: ${file.fileName}`);
       const key = `${prefix}/attachments/${createId("file")}`;
       await objectStore().put(key, file.content, file.contentType);
       attachments.push({ ...file, objectKey: key, scanStatus })
@@ -106,6 +136,8 @@ export async function persistInbound(input: {
       await client.query("UPDATE inbound_messages SET raw_mime_object_key=$2,status='ready',rejection_reason=NULL WHERE id=$1", [id, rawKey]);
       for (const file of attachments) await client.query("INSERT INTO inbound_attachments(id,inbound_message_id,file_name,content_type,size_bytes,object_key,content_id,scan_status) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)", [createId("ina"), id, file.fileName, file.contentType, file.content.byteLength, file.objectKey, file.contentId ?? null, file.scanStatus]);
       if (route.callback_endpoint_id) {
+        const callback = await client.query<{ id: string }>("SELECT id FROM callback_endpoints WHERE id=$1 AND status='active' AND 'inbound.received'=ANY(subscribed_events)", [route.callback_endpoint_id]);
+        if (!callback.rows[0]) return;
         const callbackId = createId("cbx");
         const payload = {
           id: createId("event"),
@@ -130,7 +162,11 @@ export async function persistInbound(input: {
       }
     })
   } catch (error) {
-    await query("UPDATE inbound_messages SET status='rejected',rejection_reason=$2 WHERE id=$1", [id, error instanceof Error ? error.message : "Inbound processing failed"])
+    if (error instanceof InboundTerminalError) {
+      await query("UPDATE inbound_messages SET status='rejected',rejection_reason=$2 WHERE id=$1", [id, error.message]);
+      return id;
+    }
+    throw error;
   }
   return id;
 }

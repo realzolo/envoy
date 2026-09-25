@@ -2,9 +2,10 @@ import type { PoolClient } from "pg";
 import type { CanonicalEvent, ProviderType, WebhookVerification } from "@/modules/providers/contracts";
 import { loadWebhookEndpoint } from "@/modules/config/webhook-endpoint";
 import { objectStore } from "@/modules/config/object-store";
+import { isTrustedSnsSubscribeUrl } from "@/modules/providers/ses/sns-security";
 import { createId } from "@/server/ids";
 import { query, transaction } from "@/server/database";
-import { processInboundEvent } from "@/modules/inbound/service";
+import { InboundTerminalError, processInboundEvent } from "@/modules/inbound/service";
 
 const lifecycleTypes = new Set(["accepted", "deferred", "delivered", "bounced", "failed"]);
 
@@ -178,9 +179,13 @@ export async function processRawProviderEvent(rawEventId: string) {
     if (!verified.valid) throw new Error("Persisted webhook no longer verifies");
     if (raw.provider_type === "ses") {
       const p = verified.parsed as Record<string, unknown>;
-      if (p.Type === "SubscriptionConfirmation" && typeof p.SubscribeURL === "string") {
-        const u = new URL(p.SubscribeURL);
-        if (u.protocol === "https:" && /(^|\.)amazonaws\.com$/.test(u.hostname)) await fetch(u)
+      const expectedTopicArn = typeof endpoint.security.expectedTopicArn === "string" ? endpoint.security.expectedTopicArn : "";
+      if (
+        p.Type === "SubscriptionConfirmation"
+        && typeof p.SubscribeURL === "string"
+        && isTrustedSnsSubscribeUrl(p.SubscribeURL, expectedTopicArn)
+      ) {
+        await fetch(p.SubscribeURL, { redirect: "error", signal: AbortSignal.timeout(5_000) })
       }
     }
     const events = await endpoint.module.webhook.normalize(verified as WebhookVerification, endpoint.context);
@@ -195,7 +200,12 @@ export async function processRawProviderEvent(rawEventId: string) {
     }
     await query("UPDATE raw_provider_events SET processed_at=now(),processing_error=NULL WHERE id=$1", [raw.id]);
   } catch (error) {
-    await query("UPDATE raw_provider_events SET processing_error=$2 WHERE id=$1", [raw.id, error instanceof Error ? error.message : "Unknown event error"]);
+    const message = error instanceof Error ? error.message : "Unknown event error";
+    if (error instanceof InboundTerminalError) {
+      await query("UPDATE raw_provider_events SET processed_at=now(),processing_error=$2 WHERE id=$1", [raw.id, message]);
+      return;
+    }
+    await query("UPDATE raw_provider_events SET processing_error=$2 WHERE id=$1", [raw.id, message]);
     throw error
   }
 }

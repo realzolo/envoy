@@ -156,7 +156,7 @@ export function GET(request: Request) {
       },
       "/capabilities": {
         get: {
-          summary: "Discover service limits and available senders",
+          summary: "Discover fixed service limits and available senders",
           responses: { "200": { description: "Capabilities" } }
         }
       },

@@ -1,6 +1,6 @@
 import { Resend } from "resend";
 import { Webhook } from "svix";
-import { type CanonicalEventType, CanonicalProviderError, type ProviderModule } from "../contracts";
+import { type CanonicalEventType, CanonicalProviderError, type ManagedIdentityStatus, type ProviderModule } from "../contracts";
 import { accepted, event, header } from "../shared";
 
 function client(secret: { type: string; apiKey?: string }) {
@@ -15,6 +15,14 @@ const eventMap: Record<string, CanonicalEventType> = {
   "email.received": "inbound.received",
 };
 
+// Resend exposes richer domain states than Envoy's routing model. A partially
+// verified domain must remain ineligible for sending until all required DNS is ready.
+export function resendIdentityStatus(status: string): ManagedIdentityStatus {
+  if (status === "verified") return "verified";
+  if (status === "failed") return "failed";
+  return "pending";
+}
+
 export const resendModule: ProviderModule = {
   descriptor: {
     type: "resend",
@@ -25,8 +33,8 @@ export const resendModule: ProviderModule = {
       domainManagement: true,
       webhookSecurity: "Svix HMAC",
       eventTypes: Object.keys(eventMap),
-      attachments: true,
-      scheduling: true
+      attachments: false,
+      scheduling: false
     }
   },
   sender: {
@@ -99,12 +107,12 @@ export const resendModule: ProviderModule = {
     async createIdentity(domain, context) {
       const result = await client(context.secret).domains.create({ name: domain, region: "us-east-1" });
       if (result.error || !result.data) throw new Error(result.error?.message ?? "Identity creation failed");
-      return { externalIdentityId: result.data.id, status: result.data.status, dnsRecords: result.data.records ?? [] };
+      return { externalIdentityId: result.data.id, status: resendIdentityStatus(result.data.status), dnsRecords: result.data.records ?? [] };
     },
     async checkIdentity(id, context) {
       const result = await client(context.secret).domains.get(id);
       if (result.error || !result.data) throw new Error(result.error?.message ?? "Identity lookup failed");
-      return { status: result.data.status, dnsRecords: result.data.records ?? [] };
+      return { status: resendIdentityStatus(result.data.status), dnsRecords: result.data.records ?? [] };
     },
   },
   inbound: {

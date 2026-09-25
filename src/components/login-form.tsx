@@ -3,6 +3,17 @@
 import { LogIn } from "lucide-react";
 import { useState } from "react";
 
+export function localRedirect(next?: string, origin = window.location.origin) {
+  if (!next) return "/";
+  try {
+    const current = new URL(origin);
+    const destination = new URL(next, current);
+    return destination.origin === current.origin ? `${destination.pathname}${destination.search}${destination.hash}` : "/";
+  } catch {
+    return "/"
+  }
+}
+
 export function LoginForm({ next }: { next?: string }) {
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
@@ -19,20 +30,20 @@ export function LoginForm({ next }: { next?: string }) {
     });
     setPending(false);
     if (!response.ok) {
-      setError("The email or password is incorrect.");
+      setError(response.status === 429 ? "Too many sign-in attempts. Try again in a few minutes." : "The email or password is incorrect.");
       return;
     }
-    window.location.href = next?.startsWith("/") ? next : "/";
+    window.location.href = localRedirect(next);
   }
 
   return (
     <form className="mt-6 space-y-4" onSubmit={submit}>
       <label className="block text-xs text-zinc-400">Email
-        <input name="email" type="email" required defaultValue="admin@envoy.local"
+        <input name="email" type="email" required autoComplete="username"
                className="mt-2 h-10 w-full rounded-md border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-200 outline-none focus:border-zinc-600"/>
       </label>
       <label className="block text-xs text-zinc-400">Password
-        <input name="password" type="password" required defaultValue="envoy"
+        <input name="password" type="password" required autoComplete="current-password"
                className="mt-2 h-10 w-full rounded-md border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-200 outline-none focus:border-zinc-600"/>
       </label>
       {error && <p role="alert" className="text-xs text-red-400">{error}</p>}

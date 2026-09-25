@@ -14,16 +14,29 @@ localization, and rendering remain in the calling service.
 - Provider credentials are stored as envelope-encrypted database records. Every secret has an independent AES-256-GCM
   data key wrapped by the configured root KEK.
 - Envoy never stores or renders business content definitions. Persisted content is the immutable send payload needed for
-  delivery, support, callbacks, and configured retention.
+  delivery, support, and callbacks.
 - One logical delivery is created per recipient. Every provider call creates an immutable attempt with a complete
   routing decision snapshot.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the domain model, failure semantics, provider setup, inbound
 pipeline, and security model.
 
+## Project Documentation
+
+- [Deployment guide](docs/DEPLOYMENT.md)
+- [Release and operations guide](docs/OPERATIONS.md)
+- [Contributing guide](CONTRIBUTING.md)
+- [Security policy](SECURITY.md)
+
 ## Local setup
 
 Requirements: Node.js, pnpm, and configured PostgreSQL and Redis connections in `.env.local`.
+
+Create `.env.local` from `.env.example` and set an explicit administrator email, password, session secret, and KEK before
+starting the application.
+
+> **Fresh database required:** this baseline-schema release initializes a new, empty database only. It has no in-place
+> upgrade compatibility with earlier Envoy schemas.
 
 ```bash
 pnpm install
@@ -31,10 +44,8 @@ pnpm db:setup
 pnpm dev:all
 ```
 
-Open [http://localhost:6178](http://localhost:6178) and sign in with the development credentials from `.env.local`:
-
-- Email: `admin@envoy.local`
-- Password: `envoy`
+Open [http://localhost:6178](http://localhost:6178) and sign in with the `ENVOY_ADMIN_EMAIL` and
+`ENVOY_ADMIN_PASSWORD` values from `.env.local`.
 
 The database starts with no products, services, domains, providers, messages, or inbound mail. Create the first product
 under **Service Credentials**, then configure real provider accounts and their write-only credentials under **Provider
@@ -79,7 +90,7 @@ The service API is self-describing at `GET /api/v1` and `GET /api/v1/openapi.jso
 | `/events`               | Read normalized delivery events                                                  |
 | `/inbound-messages`     | List and inspect sanitized inbound mail                                          |
 | `/suppressions`         | Check, create, and remove product-owned suppressions                             |
-| `/senders`              | Discover logical sender profiles available to the product                        |
+| `/senders`              | Discover sender profiles available to the product                                |
 | `/capabilities`         | Discover limits, content rules, and available senders                            |
 
 Query status with the same service credential:
@@ -97,17 +108,20 @@ Each provider account receives an opaque endpoint:
 POST /api/provider-events/{provider}/{opaqueEndpointId}
 ```
 
+Configure this provider event URL and its verification material under **Provider Accounts**. The **Callbacks** page is
+reserved for outbound canonical callbacks to business services.
+
 The HTTP path verifies the provider signature and replay window, stores the immutable raw event plus an outbox record in
 one transaction, and returns immediately. Workers normalize and apply canonical events asynchronously.
 
-Open **Inbound** to inspect sanitized messages received from configured production providers and **Audit & Revisions**
-to verify signed business callbacks.
+Open **Inbound** to inspect sanitized messages received through configured provider accounts, **Callbacks** to monitor
+signed business callback delivery, and **Audit Log** to review administrator actions.
 
 ## Production deployment
 
 Production deployment builds the Docker image from a server-side Git checkout and runs separate Web and Worker
-containers with Docker Compose. The application is published on port `6178`; PostgreSQL, Redis, R2, and secrets are
-provided through `.env.production`. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) or the
+containers with Docker Compose. The application binds to loopback port `6178`; an HTTPS reverse proxy on the same host
+publishes it. PostgreSQL, Redis, R2, and secrets are provided through `.env.production`. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) or the
 [Chinese guide](docs/DEPLOYMENT.zh-CN.md).
 
 ## Commands

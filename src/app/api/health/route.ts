@@ -6,23 +6,19 @@ export const runtime = "nodejs";
 
 export async function GET() {
   try {
-    const [databaseTime, redisStatus, pendingOutbox] = await Promise.all([
+    await Promise.all([
       databaseHealth(),
       redisHealth(),
       outboxBacklog(),
     ]);
     return Response.json({
       name: "envoy",
-      status: "ok",
-      version: process.env.npm_package_version ?? "0.1.0",
-      time: new Date().toISOString(),
-      dependencies: { database: databaseTime.toISOString(), redis: redisStatus, pendingOutbox },
+      status: "ok"
     });
-  } catch (error) {
+  } catch {
     return Response.json({
       name: "envoy",
-      status: "degraded",
-      error: error instanceof Error ? error.message : "Unknown dependency error"
+      status: "degraded"
     }, { status: 503 });
   }
 }

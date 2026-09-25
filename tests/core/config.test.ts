@@ -23,6 +23,14 @@ describe("provider configuration", () => {
   });
   it("validates webhook settings for the selected provider", () => {
     expect(providerWebhookSettingsSchema.safeParse({ type: "resend", signingSecret: "whsec_test_key" }).success).toBe(true);
+    expect(providerWebhookSettingsSchema.safeParse({
+      type: "sendgrid",
+      eventWebhookPublicKey: "event-public-key-that-is-long-enough"
+    }).success).toBe(true);
+    expect(providerWebhookSettingsSchema.safeParse({
+      type: "sendgrid",
+      publicKey: "legacy-public-key-that-is-long-enough"
+    }).success).toBe(false);
     expect(providerWebhookSettingsSchema.safeParse({ type: "resend", publicKey: "not-a-resend-secret" }).success).toBe(false)
   });
   it("uses resource and version as envelope AAD", () => {

@@ -1,40 +1,158 @@
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
 import {
-  providerAccountRegion,
   providerConfigSchema,
+  domainNameSchema,
   providerSecretSchema,
   providerWebhookSettingsSchema,
   type ProviderType
 } from "@/modules/providers/contracts";
 import { loadProviderAccount } from "@/modules/config/provider-account";
 import { sealSecret } from "@/modules/config/envelope";
+import { resolveCallbackTarget } from "@/modules/callbacks/url-policy";
 import { acceptMessage } from "@/modules/core/message/service";
 import { choosePolicyTarget } from "@/modules/core/routing/engine";
+import { providerRegistry } from "@/modules/providers/registry";
 import { createId } from "@/server/ids";
 import { hashApiKey } from "@/server/crypto";
 import { query, transaction } from "@/server/database";
 import { PROVIDER_EVENT_RECEIVED } from "@/server/outbox-events";
+import { SERVICE_REQUESTS_PER_MINUTE } from "@/server/service-limits";
+
+const identifierSchema = z.string().trim().min(1).max(160);
+const categorySchema = z.string().trim().min(2).max(80).regex(/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/, "category must be a stable lowercase key");
+const optionalIdentifierSchema = z.preprocess(
+  value => typeof value === "string" && value.trim() === "" ? undefined : value,
+  identifierSchema.optional(),
+);
+const optionalEmailSchema = z.preprocess(
+  value => typeof value === "string" && value.trim() === "" ? undefined : value,
+  z.string().trim().email().max(320).optional(),
+);
+const optionalDateTimeSchema = z.preprocess(
+  value => typeof value === "string" && value.trim() === "" ? undefined : value,
+  z.string().datetime({ offset: true }).optional(),
+);
+
+const senderProfileInputSchema = z.object({
+  productId: identifierSchema,
+  domainId: identifierSchema,
+  name: z.string().trim().min(2).max(120),
+  fromName: z.string().trim().min(1).max(120),
+  fromLocalPart: z.string().trim().min(1).max(64).regex(/^[^@\s]+$/, "fromLocalPart must not contain whitespace or @"),
+  replyTo: optionalEmailSchema,
+  category: categorySchema,
+}).strict();
+
+const routingTargetSchema = z.object({
+  accountId: identifierSchema,
+  identityId: identifierSchema,
+  priority: z.coerce.number().int().min(0).max(1_000_000).default(100),
+  weight: z.coerce.number().int().min(1).max(1_000_000).default(100),
+  rateLimit: z.coerce.number().int().min(1).max(1_000_000).default(1_000),
+}).strict();
+
+const routingPolicyInputSchema = z.object({
+  name: z.string().trim().min(2).max(120),
+  productId: optionalIdentifierSchema,
+  serviceId: optionalIdentifierSchema,
+  domainId: identifierSchema,
+  category: z.preprocess(value => typeof value === "string" && value.trim() === "" ? undefined : value, categorySchema.optional()),
+  priority: z.coerce.number().int().min(0).max(1_000_000).default(100),
+  targets: z.array(routingTargetSchema).min(1, "At least one routing target is required").max(20),
+}).strict().superRefine((input, context) => {
+  const identities = new Set<string>();
+  input.targets.forEach((target, index) => {
+    if (identities.has(target.identityId)) context.addIssue({
+      code: "custom",
+      path: ["targets", index, "identityId"],
+      message: "An identity can appear only once in a routing policy",
+    });
+    identities.add(target.identityId);
+  });
+});
+
+const adminSuppressionInputSchema = z.object({
+  email: z.string().trim().email().max(320),
+  scope: z.enum(["global", "product", "list"]),
+  productId: optionalIdentifierSchema,
+  listId: optionalIdentifierSchema,
+  reason: z.string().trim().min(1).max(240),
+  expiresAt: optionalDateTimeSchema,
+}).strict().superRefine((input, context) => {
+  if (input.scope === "global" && (input.productId || input.listId)) context.addIssue({
+    code: "custom", path: ["scope"], message: "Global suppressions cannot target a product or list",
+  });
+  if (input.scope === "product" && (!input.productId || input.listId)) context.addIssue({
+    code: "custom", path: ["scope"], message: "Product suppressions require a product and cannot target a list",
+  });
+  if (input.scope === "list" && (!input.productId || !input.listId)) context.addIssue({
+    code: "custom", path: ["scope"], message: "List suppressions require both a product and list ID",
+  });
+});
+
+const inboundRouteInputSchema = z.object({
+  webhookEndpointId: identifierSchema,
+  domainId: identifierSchema,
+  productId: identifierSchema,
+  serviceId: optionalIdentifierSchema,
+  callbackId: optionalIdentifierSchema,
+  localPartPattern: z.string().trim().min(1).max(64).regex(/^[a-z0-9._+*-]+$/i, "localPartPattern may contain letters, numbers, ., _, +, -, and one * wildcard").refine(
+    value => (value.match(/\*/g) ?? []).length <= 1,
+    "localPartPattern can contain at most one * wildcard",
+  ).transform(value => value.toLowerCase()),
+}).strict().superRefine((input, context) => {
+  if (input.callbackId && !input.serviceId) context.addIssue({
+    code: "custom", path: ["serviceId"], message: "A callback endpoint requires a service",
+  });
+});
+
+const serviceCredentialInputSchema = z.object({
+  productId: identifierSchema,
+  serviceName: z.string().trim().min(2).max(120),
+}).strict();
+
+const callbackEventSchema = z.enum([
+  "email.accepted",
+  "email.delivered",
+  "email.bounced",
+  "email.failed",
+  "email.suppressed",
+  "inbound.received",
+]);
+
+const callbackInputSchema = z.object({
+  serviceId: identifierSchema,
+  name: z.string().trim().min(2).max(120),
+  url: z.string().trim().url().max(2_048),
+  secret: z.string().min(16).max(512).optional(),
+  events: z.array(callbackEventSchema).min(1, "Select at least one callback event").max(6),
+}).strict();
+
+const domainInputSchema = z.object({
+  domain: domainNameSchema,
+  accountIds: z.array(identifierSchema).min(1, "Select at least one provider account").max(20),
+}).strict().superRefine((input, context) => {
+  const accounts = new Set<string>();
+  input.accountIds.forEach((accountId, index) => {
+    if (accounts.has(accountId)) context.addIssue({
+      code: "custom", path: ["accountIds", index], message: "A provider account can be selected only once",
+    });
+    accounts.add(accountId);
+  });
+});
 
 async function audit(actor: string, action: string, type: string, id: string | null, details: Record<string, unknown> = {}) {
   await query("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES ($1,$2,$3,$4,$5)", [actor, action, type, id, details])
 }
 
-async function revision(client: import("pg").PoolClient, type: string, id: string, config: unknown, actor: string) {
-  const current = await client.query<{
-    revision: number
-  }>("SELECT revision FROM config_revisions WHERE resource_type=$1 AND resource_id=$2 ORDER BY revision DESC LIMIT 1", [type, id]);
-  await client.query("INSERT INTO config_revisions(resource_type,resource_id,revision,config,actor) VALUES ($1,$2,$3,$4,$5)", [type, id, (current.rows[0]?.revision ?? 0) + 1, config, actor])
-}
-
-export async function createProduct(input: { name: string; slug: string }, actor: string) {
+export async function createProduct(input: { name: string }, actor: string) {
   const validated = z.object({
-    name: z.string().trim().min(2).max(120),
-    slug: z.string().trim().min(2).max(80).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/)
+    name: z.string().trim().min(2).max(120)
   }).parse(input);
   const id = createId("prd");
   await transaction(async client => {
-    await client.query("INSERT INTO products(id,slug,name) VALUES ($1,$2,$3)", [id, validated.slug, validated.name]);
+    await client.query("INSERT INTO products(id,name) VALUES ($1,$2)", [id, validated.name]);
     await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES ($1,'product.create','product',$2,$3)", [actor, id, validated])
   });
   return id
@@ -55,7 +173,6 @@ export async function createProviderAccount(input: {
   const name = z.string().trim().min(2).max(120).parse(input.name);
   const config = providerConfigSchema.parse({ ...input.configuration, type: input.type, schemaVersion: 1 });
   const secret = providerSecretSchema.parse({ ...input.credentials, type: input.type });
-  const region = providerAccountRegion(config);
   const accountId = createId("pa");
   const credential = sealSecret(secret, accountId, 1);
   const endpointId = createId("pwe");
@@ -64,16 +181,14 @@ export async function createProviderAccount(input: {
   delete publicConfig.type;
   delete publicConfig.schemaVersion;
   await transaction(async client => {
-    await client.query("INSERT INTO provider_accounts(id,type,name,region,public_config) VALUES ($1,$2,$3,$4,$5)", [accountId, input.type, name, region, publicConfig]);
+    await client.query("INSERT INTO provider_accounts(id,type,name,public_config) VALUES ($1,$2,$3,$4)", [accountId, input.type, name, publicConfig]);
     await client.query("INSERT INTO provider_credentials(id,provider_account_id,credential_version,secret_ciphertext,encrypted_dek,key_version,created_by) VALUES ($1,$2,1,$3,$4,$5,$6)", [createId("pc"), accountId, credential.secretCiphertext, credential.encryptedDek, credential.keyVersion, actor]);
     await client.query("INSERT INTO provider_webhook_endpoints(id,provider_account_id,opaque_token) VALUES ($1,$2,$3)", [endpointId, accountId, opaqueToken]);
-    await revision(client, "provider_account", accountId, {
+    await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES ($1,'provider_account.create','provider_account',$2,$3)", [actor, accountId, {
       type: input.type,
       name,
-      region,
-      publicConfig
-    }, actor);
-    await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES ($1,'provider_account.create','provider_account',$2,$3)", [actor, accountId, { type: input.type }])
+      configuration: publicConfig
+    }])
   });
   return { accountId, webhookPath: `/api/provider-events/${input.type}/${opaqueToken}` }
 }
@@ -95,7 +210,7 @@ export async function testProviderAccount(id: string, actor: string) {
 }
 
 export async function toggleProvider(id: string, enabled: boolean, actor: string) {
-  await query("UPDATE provider_accounts SET status=$2,updated_at=now() WHERE id=$1", [id, enabled ? "active" : "disabled"]);
+  await query("UPDATE provider_accounts SET status=$2,updated_at=now() WHERE id=$1", [id, enabled ? "degraded" : "disabled"]);
   await audit(actor, "provider_account.toggle", "provider_account", id, { enabled })
 }
 
@@ -105,8 +220,7 @@ export async function updateProviderQuota(id: string, quota: Record<string, unkn
     dailyLimit: z.number().int().nonnegative().optional()
   }).strict().parse(quota);
   await transaction(async client => {
-    await client.query("UPDATE provider_accounts SET quota=$2,config_revision=config_revision+1,updated_at=now() WHERE id=$1", [id, validated]);
-    await revision(client, "provider_account", id, { quota: validated }, actor);
+    await client.query("UPDATE provider_accounts SET quota=$2,updated_at=now() WHERE id=$1", [id, validated]);
     await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES ($1,'provider_account.quota_update','provider_account',$2,$3)", [actor, id, { quota: validated }])
   })
 }
@@ -123,9 +237,12 @@ export async function rotateProviderCredential(id: string, secretValue: Record<s
     const envelope = sealSecret(secret, id, version);
     await client.query("UPDATE provider_credentials SET status='revoked',valid_to=now() WHERE provider_account_id=$1 AND status='active'", [id]);
     await client.query("INSERT INTO provider_credentials(id,provider_account_id,credential_version,secret_ciphertext,encrypted_dek,key_version,created_by) VALUES ($1,$2,$3,$4,$5,$6,$7)", [createId("pc"), id, version, envelope.secretCiphertext, envelope.encryptedDek, envelope.keyVersion, actor]);
-    await revision(client, "provider_credential", id, { credentialVersion: version, status: "active" }, actor);
-    await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES ($1,'provider_credential.rotate','provider_account',$2,$3)", [actor, id, { credentialVersion: version }]);
-    return { version }
+    await client.query("UPDATE provider_accounts SET status=CASE WHEN status='disabled' THEN 'disabled' ELSE 'degraded' END,health=$2,updated_at=now() WHERE id=$1", [id, {
+      status: "unknown",
+      credentialRotatedAt: new Date().toISOString()
+    }]);
+    await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES ($1,'provider_credential.rotate','provider_account',$2,$3)", [actor, id, { credentialVersion: version, requiresTest: true }]);
+    return { version, requiresTest: true }
   })
 }
 
@@ -149,12 +266,11 @@ export async function configureProviderWebhook(id: string, settingsValue: Record
     delete security.ipAllowlist;
     const envelope = sealSecret(security, id, version);
     await client.query("UPDATE provider_webhook_endpoints SET security_config_ciphertext=$2,security_encrypted_dek=$3,key_version=$4,security_version=$5,security_configured=true,expected_topic_arn=$6,ip_allowlist=$7,updated_at=now() WHERE id=$1", [id, envelope.secretCiphertext, envelope.encryptedDek, envelope.keyVersion, version, topic, ips]);
-    await revision(client, "provider_webhook_endpoint", id, {
+    await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES ($1,'provider_webhook_endpoint.rotate_security','provider_webhook_endpoint',$2,$3)", [actor, id, {
       securityVersion: version,
       expectedTopicArn: topic,
       ipAllowlist: ips
-    }, actor);
-    await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES ($1,'provider_webhook_endpoint.rotate_security','provider_webhook_endpoint',$2,$3)", [actor, id, { securityVersion: version }]);
+    }]);
     return { version, configured: true }
   })
 }
@@ -166,28 +282,40 @@ export async function toggleWebhookEndpoint(id: string, enabled: boolean, actor:
 
 export async function createDomain(input: {
   domain: string;
-  region: string;
-  inboundEnabled: boolean;
   accountIds: string[]
 }, actor: string) {
+  const validated = domainInputSchema.parse(input);
+  const domain = validated.domain;
+  const accounts = await Promise.all(validated.accountIds.map(async accountId => {
+    const account = await loadProviderAccount(accountId);
+    return { accountId, account, identity: account.module.identity }
+  }));
+  for (const { account } of accounts) {
+    if (account.context.config.type === "mailgun" && account.context.config.sendingDomain !== domain) {
+      throw new Error(`This Mailgun account sends through ${account.context.config.sendingDomain}. Associate it only with that exact sending domain.`);
+    }
+  }
   const domainId = createId("sd");
-  await query("INSERT INTO sending_domains(id,domain,region,inbound_enabled) VALUES ($1,$2,$3,$4)", [domainId, input.domain.toLowerCase(), input.region, input.inboundEnabled]);
+  await query("INSERT INTO sending_domains(id,domain) VALUES ($1,$2)", [domainId, domain]);
   const results = [];
-  for (const accountId of input.accountIds) {
+  for (const { accountId, account, identity } of accounts) {
     const identityId = createId("pi");
+    if (!identity) {
+      await query("INSERT INTO provider_identities(id,sending_domain_id,provider_account_id,status,dns_records,last_checked_at) VALUES ($1,$2,$3,'verified','[]',now())", [identityId, domainId, accountId]);
+      results.push({ accountId, status: "verified", verification: "provider_dashboard" });
+      continue
+    }
     try {
-      const account = await loadProviderAccount(accountId);
-      if (!account.module.identity) throw new Error("Provider does not support domain management");
-      const identity = await account.module.identity.createIdentity(input.domain, account.context);
-      await query("INSERT INTO provider_identities(id,sending_domain_id,provider_account_id,external_identity_id,status,dns_records,last_checked_at,capabilities) VALUES ($1,$2,$3,$4,$5,$6,now(),$7)", [identityId, domainId, accountId, identity.externalIdentityId, identity.status, identity.dnsRecords, account.module.descriptor.capabilities]);
-      results.push({ accountId, status: identity.status })
-    } catch (error) {
-      await query("INSERT INTO provider_identities(id,sending_domain_id,provider_account_id,status,dns_records,last_checked_at,capabilities) VALUES ($1,$2,$3,'failed','[]',now(),$4)", [identityId, domainId, accountId, { error: error instanceof Error ? error.message : "Identity creation failed" }]);
+      const created = await identity.createIdentity(domain, account.context);
+      await query("INSERT INTO provider_identities(id,sending_domain_id,provider_account_id,external_identity_id,status,dns_records,last_checked_at) VALUES ($1,$2,$3,$4,$5,$6,now())", [identityId, domainId, accountId, created.externalIdentityId, created.status, created.dnsRecords]);
+      results.push({ accountId, status: created.status })
+    } catch {
+      await query("INSERT INTO provider_identities(id,sending_domain_id,provider_account_id,status,dns_records,last_checked_at) VALUES ($1,$2,$3,'failed','[]',now())", [identityId, domainId, accountId]);
       results.push({ accountId, status: "failed" })
     }
   }
   await audit(actor, "sending_domain.create", "sending_domain", domainId, {
-    domain: input.domain,
+    domain,
     identities: results
   });
   return { domainId, identities: results }
@@ -201,11 +329,20 @@ export async function toggleDomain(id: string, enabled: boolean, actor: string) 
 export async function refreshIdentity(id: string, actor: string) {
   const row = (await query<{
     provider_account_id: string;
-    external_identity_id: string | null
-  }>("SELECT provider_account_id,external_identity_id FROM provider_identities WHERE id=$1", [id])).rows[0];
-  if (!row?.external_identity_id) throw new Error("Provider identity is not initialized");
+    external_identity_id: string | null;
+    domain: string;
+  }>(`SELECT pi.provider_account_id,pi.external_identity_id,sd.domain
+      FROM provider_identities pi JOIN sending_domains sd ON sd.id=pi.sending_domain_id
+      WHERE pi.id=$1`, [id])).rows[0];
+  if (!row) throw new Error("Provider identity not found");
   const account = await loadProviderAccount(row.provider_account_id);
-  if (!account.module.identity) throw new Error("Provider does not support domain management");
+  if (!account.module.identity) throw new Error("This domain is verified in the provider dashboard and cannot be refreshed by Envoy");
+  if (!row.external_identity_id) {
+    const result = await account.module.identity.createIdentity(row.domain, account.context);
+    await query("UPDATE provider_identities SET external_identity_id=$2,status=$3,dns_records=$4,last_checked_at=now(),updated_at=now() WHERE id=$1", [id, result.externalIdentityId, result.status, result.dnsRecords]);
+    await audit(actor, "provider_identity.refresh", "provider_identity", id, { status: result.status });
+    return result
+  }
   const result = await account.module.identity.checkIdentity(row.external_identity_id, account.context);
   await query("UPDATE provider_identities SET status=$2,dns_records=$3,last_checked_at=now(),updated_at=now() WHERE id=$1", [id, result.status, result.dnsRecords]);
   await audit(actor, "provider_identity.refresh", "provider_identity", id, { status: result.status });
@@ -213,7 +350,10 @@ export async function refreshIdentity(id: string, actor: string) {
 }
 
 export async function toggleIdentity(id: string, enabled: boolean, actor: string) {
-  await query("UPDATE provider_identities SET status=$2,updated_at=now() WHERE id=$1", [id, enabled ? "pending" : "disabled"]);
+  const identity = (await query<{ type: ProviderType }>(`SELECT pa.type FROM provider_identities pi
+    JOIN provider_accounts pa ON pa.id=pi.provider_account_id WHERE pi.id=$1`, [id])).rows[0];
+  if (!identity) throw new Error("Provider identity not found");
+  await query("UPDATE provider_identities SET status=$2,updated_at=now() WHERE id=$1", [id, enabled ? providerRegistry(identity.type).identity ? "pending" : "verified" : "disabled"]);
   await audit(actor, "provider_identity.toggle", "provider_identity", id, { enabled })
 }
 
@@ -226,9 +366,22 @@ export async function createSenderProfile(input: {
   replyTo?: string;
   category: string
 }, actor: string) {
+  const validated = senderProfileInputSchema.parse(input);
   const id = createId("sp");
-  await query("INSERT INTO sender_profiles(id,product_id,sending_domain_id,name,from_name,from_local_part,reply_to,message_category) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)", [id, input.productId, input.domainId, input.name, input.fromName, input.fromLocalPart, input.replyTo || null, input.category]);
-  await audit(actor, "sender_profile.create", "sender_profile", id);
+  await transaction(async client => {
+    const product = await client.query<{ id: string }>("SELECT id FROM products WHERE id=$1", [validated.productId]);
+    const domain = await client.query<{ id: string; status: string }>("SELECT id,status FROM sending_domains WHERE id=$1", [validated.domainId]);
+    const verifiedIdentity = await client.query<{ id: string }>(`SELECT pi.id FROM provider_identities pi
+      JOIN provider_accounts pa ON pa.id=pi.provider_account_id
+      WHERE pi.sending_domain_id=$1 AND pi.status='verified' AND pa.status='active' LIMIT 1`, [validated.domainId]);
+    const existing = await client.query<{ id: string }>("SELECT id FROM sender_profiles WHERE product_id=$1 AND name=$2", [validated.productId, validated.name]);
+    if (!product.rows[0]) throw new Error("Product not found");
+    if (!domain.rows[0]) throw new Error("Sending domain not found");
+    if (domain.rows[0].status !== "active" || !verifiedIdentity.rows[0]) throw new Error("An active sending domain with a verified provider identity is required");
+    if (existing.rows[0]) throw new Error("A sender profile with this name already exists for the product");
+    await client.query("INSERT INTO sender_profiles(id,product_id,sending_domain_id,name,from_name,from_local_part,reply_to,message_category) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)", [id, validated.productId, validated.domainId, validated.name, validated.fromName, validated.fromLocalPart, validated.replyTo ?? null, validated.category]);
+    await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id) VALUES ($1,'sender_profile.create','sender_profile',$2)", [actor, id]);
+  });
   return id
 }
 
@@ -241,17 +394,48 @@ export async function createRoutingPolicy(input: {
   name: string;
   productId?: string;
   serviceId?: string;
+  domainId: string;
   category?: string;
-  region?: string;
-  priority: number;
-  targets: Array<{ accountId: string; identityId: string; priority: number; weight: number; rateLimit: number }>
+  priority?: number;
+  targets: Array<{ accountId: string; identityId: string; priority?: number; weight?: number; rateLimit?: number }>
 }, actor: string) {
+  const validated = routingPolicyInputSchema.parse(input);
   const id = createId("rp");
   await transaction(async client => {
-    await client.query("INSERT INTO routing_policies(id,name,product_id,service_id,message_category,destination_region,priority) VALUES ($1,$2,$3,$4,$5,$6,$7)", [id, input.name, input.productId || null, input.serviceId || null, input.category || null, input.region || null, input.priority]);
-    for (const target of input.targets) await client.query("INSERT INTO routing_targets(id,policy_id,provider_account_id,provider_identity_id,priority,weight,rate_limit_per_minute) VALUES ($1,$2,$3,$4,$5,$6,$7)", [createId("rt"), id, target.accountId, target.identityId, target.priority, target.weight, target.rateLimit]);
-    await revision(client, "routing_policy", id, input, actor);
-    await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES ($1,'routing_policy.create','routing_policy',$2,$3)", [actor, id, { targetCount: input.targets.length }])
+    let productId = validated.productId;
+    if (validated.serviceId) {
+      const service = (await client.query<{ product_id: string }>("SELECT product_id FROM services WHERE id=$1", [validated.serviceId])).rows[0];
+      if (!service) throw new Error("Service not found");
+      if (productId && productId !== service.product_id) throw new Error("The selected service does not belong to the selected product");
+      productId = service.product_id;
+    }
+    if (productId) {
+      const product = await client.query<{ id: string }>("SELECT id FROM products WHERE id=$1", [productId]);
+      if (!product.rows[0]) throw new Error("Product not found");
+    }
+    const domain = await client.query<{ id: string; status: string }>("SELECT id,status FROM sending_domains WHERE id=$1", [validated.domainId]);
+    if (!domain.rows[0]) throw new Error("Sending domain not found");
+    if (domain.rows[0].status !== "active") throw new Error("Routing policies require an active sending domain");
+    const identities = await client.query<{ id: string; sending_domain_id: string; provider_account_id: string; status: string; account_status: string }>(`SELECT pi.id,pi.sending_domain_id,pi.provider_account_id,pi.status,pa.status AS account_status
+      FROM provider_identities pi JOIN provider_accounts pa ON pa.id=pi.provider_account_id
+      WHERE pi.id=ANY($1::text[])`, [validated.targets.map(target => target.identityId)]);
+    if (identities.rows.length !== validated.targets.length) throw new Error("One or more provider identities were not found");
+    const accountByIdentity = new Map(identities.rows.map(identity => [identity.id, identity.provider_account_id]));
+    for (const target of validated.targets) {
+      if (accountByIdentity.get(target.identityId) !== target.accountId) throw new Error("Each routing target must use an identity owned by its provider account");
+      const identity = identities.rows.find(item => item.id === target.identityId);
+      if (identity?.sending_domain_id !== validated.domainId || identity.status !== "verified" || identity.account_status !== "active") throw new Error("Routing targets must be verified identities for the selected sending domain on active provider accounts");
+    }
+    await client.query("INSERT INTO routing_policies(id,name,product_id,service_id,sending_domain_id,message_category,priority) VALUES ($1,$2,$3,$4,$5,$6,$7)", [id, validated.name, productId ?? null, validated.serviceId ?? null, validated.domainId, validated.category ?? null, validated.priority]);
+    for (const target of validated.targets) await client.query("INSERT INTO routing_targets(id,policy_id,provider_account_id,provider_identity_id,priority,weight,rate_limit_per_minute) VALUES ($1,$2,$3,$4,$5,$6,$7)", [createId("rt"), id, target.accountId, target.identityId, target.priority, target.weight, target.rateLimit]);
+    await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES ($1,'routing_policy.create','routing_policy',$2,$3)", [actor, id, {
+      productId: productId ?? null,
+      serviceId: validated.serviceId ?? null,
+      domainId: validated.domainId,
+      category: validated.category ?? null,
+      priority: validated.priority,
+      targetCount: validated.targets.length
+    }])
   });
   return id
 }
@@ -262,11 +446,12 @@ export async function toggleRoutingPolicy(id: string, enabled: boolean, actor: s
 }
 
 export async function simulateRouting(input: {
+  domainId: string;
   productId?: string;
   serviceId?: string;
-  category?: string;
-  region?: string
+  category?: string
 }) {
+  const domainId = identifierSchema.parse(input.domainId);
   type SimulationRow = {
     policy_id: string;
     policy_name: string;
@@ -295,10 +480,9 @@ export async function simulateRouting(input: {
     FROM routing_policies rp JOIN routing_targets rt ON rt.policy_id=rp.id JOIN provider_accounts pa ON pa.id=rt.provider_account_id
     JOIN provider_identities pi ON pi.id=rt.provider_identity_id AND pi.provider_account_id=pa.id JOIN sending_domains sd ON sd.id=pi.sending_domain_id
     CROSS JOIN LATERAL(SELECT count(*)FILTER(WHERE da.started_at>=date_trunc('month',now())AND da.status IN('submitting','accepted','reconciled'))monthly_usage,count(*)FILTER(WHERE da.started_at>=date_trunc('day',now())AND da.status IN('submitting','accepted','reconciled'))daily_usage FROM delivery_attempts da WHERE da.provider_account_id=pa.id)usage
-    WHERE rp.status='active' AND ($1::text IS NULL OR rp.product_id IS NULL OR rp.product_id=$1) AND ($2::text IS NULL OR rp.service_id IS NULL OR rp.service_id=$2) AND ($3::text IS NULL OR rp.message_category IS NULL OR rp.message_category=$3) AND ($4::text IS NULL OR rp.destination_region IS NULL OR rp.destination_region=$4) ORDER BY rp.priority,rt.priority,rt.id`, [input.productId || null, input.serviceId || null, input.category || null, input.region || null]);
+    WHERE rp.status='active' AND rp.sending_domain_id=$1 AND pi.sending_domain_id=$1 AND ($2::text IS NULL OR rp.product_id IS NULL OR rp.product_id=$2) AND ($3::text IS NULL OR rp.service_id IS NULL OR rp.service_id=$3) AND ($4::text IS NULL OR rp.message_category IS NULL OR rp.message_category=$4) ORDER BY rp.priority,rt.priority,rt.id`, [domainId, input.productId || null, input.serviceId || null, input.category || null]);
   const candidates = result.rows.map(row => {
     const reasons: string[] = [];
-    if (row.status === "disabled") reasons.push("target_disabled");
     if (row.status === "circuit_open" && (!row.circuit_open_until || row.circuit_open_until > new Date())) reasons.push("circuit_open");
     if (row.account_status !== "active") reasons.push("account_unavailable");
     if (["unhealthy", "offline"].includes(String(row.health.status))) reasons.push("account_unhealthy");
@@ -358,9 +542,16 @@ export async function addSuppression(input: {
   reason: string;
   expiresAt?: string
 }, actor: string) {
+  const validated = adminSuppressionInputSchema.parse(input);
+  if (validated.productId) {
+    const product = await query<{ id: string }>("SELECT id FROM products WHERE id=$1", [validated.productId]);
+    if (!product.rows[0]) throw new Error("Product not found");
+  }
   const id = createId("sup");
-  await query("INSERT INTO suppressions(id,scope_type,product_id,list_id,email_normalized,reason,source,expires_at) VALUES ($1,$2,$3,$4,$5,$6,'admin',$7)", [id, input.scope, input.productId || null, input.listId || null, input.email.toLowerCase(), input.reason, input.expiresAt || null]);
-  await audit(actor, "suppression.create", "suppression", id, { email: input.email });
+  await transaction(async client => {
+    await client.query("INSERT INTO suppressions(id,scope_type,product_id,list_id,email_normalized,reason,source,expires_at) VALUES ($1,$2,$3,$4,$5,$6,'admin',$7)", [id, validated.scope, validated.productId ?? null, validated.listId ?? null, validated.email.toLowerCase(), validated.reason, validated.expiresAt ?? null]);
+    await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES ($1,'suppression.create','suppression',$2,$3)", [actor, id, { email: validated.email }]);
+  });
   return id
 }
 
@@ -382,11 +573,10 @@ export async function sendTestMessage(input: {
     service_id: string;
     service_name: string;
     product_id: string;
-    product_name: string;
-    rate_limit_per_minute: number
-  }>(`SELECT s.id AS service_id,s.name AS service_name,p.id AS product_id,p.name AS product_name,s.rate_limit_per_minute
+    product_name: string
+  }>(`SELECT s.id AS service_id,s.name AS service_name,p.id AS product_id,p.name AS product_name
       FROM services s JOIN products p ON p.id=s.product_id
-      WHERE s.id=$1 AND s.status='active' AND p.status='active'`, [input.serviceId])).rows[0];
+      WHERE s.id=$1 AND p.status='active'`, [input.serviceId])).rows[0];
   if (!row) throw new Error("The selected service is unavailable");
   const result = await acceptMessage({
     identity: {
@@ -394,7 +584,7 @@ export async function sendTestMessage(input: {
       serviceName: row.service_name,
       productId: row.product_id,
       product: row.product_name,
-      rateLimitPerMinute: row.rate_limit_per_minute
+      rateLimitPerMinute: SERVICE_REQUESTS_PER_MINUTE
     },
     idempotencyKey: `admin-test-${crypto.randomUUID()}`,
     input: {
@@ -415,13 +605,16 @@ export async function sendTestMessage(input: {
 }
 
 export async function createServiceCredential(input: { productId: string; serviceName: string }, actor: string) {
+  const validated = serviceCredentialInputSchema.parse(input);
   return transaction(async client => {
+    const product = await client.query<{ id: string }>("SELECT id FROM products WHERE id=$1", [validated.productId]);
+    if (!product.rows[0]) throw new Error("Product not found");
     let service = (await client.query<{
       id: string
-    }>("SELECT id FROM services WHERE product_id=$1 AND name=$2", [input.productId, input.serviceName])).rows[0];
+    }>("SELECT id FROM services WHERE product_id=$1 AND name=$2", [validated.productId, validated.serviceName])).rows[0];
     if (!service) {
       service = { id: createId("svc") };
-      await client.query("INSERT INTO services(id,product_id,name) VALUES ($1,$2,$3)", [service.id, input.productId, input.serviceName])
+      await client.query("INSERT INTO services(id,product_id,name) VALUES ($1,$2,$3)", [service.id, validated.productId, validated.serviceName])
     }
     const raw = `ev_live_${randomBytes(24).toString("base64url")}`;
     const id = createId("cred");
@@ -447,23 +640,37 @@ export async function createCallback(input: {
   serviceId: string;
   name: string;
   url: string;
-  secret: string;
+  secret?: string;
   events: string[]
 }, actor: string) {
+  const validated = callbackInputSchema.parse(input);
+  const target = await resolveCallbackTarget(validated.url);
   const id = createId("cb");
-  const envelope = sealSecret({ secret: input.secret }, id, 1);
-  await query("INSERT INTO callback_endpoints(id,service_id,name,url,secret_ciphertext,encrypted_dek,key_version,subscribed_events) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)", [id, input.serviceId, input.name, input.url, envelope.secretCiphertext, envelope.encryptedDek, envelope.keyVersion, input.events]);
-  await audit(actor, "callback_endpoint.create", "callback_endpoint", id);
-  return id
+  const secret = validated.secret ?? `ev_cb_${randomBytes(24).toString("base64url")}`;
+  const envelope = sealSecret({ secret }, id, 1);
+  await transaction(async client => {
+    const service = await client.query<{ id: string }>(`SELECT s.id FROM services s
+      JOIN products p ON p.id=s.product_id WHERE s.id=$1 AND p.status='active'`, [validated.serviceId]);
+    if (!service.rows[0]) throw new Error("An active service is required for a callback endpoint");
+    await client.query("INSERT INTO callback_endpoints(id,service_id,name,url,secret_ciphertext,encrypted_dek,key_version,subscribed_events) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)", [id, validated.serviceId, validated.name, target.url.toString(), envelope.secretCiphertext, envelope.encryptedDek, envelope.keyVersion, validated.events]);
+    await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES ($1,'callback_endpoint.create','callback_endpoint',$2,$3)", [actor, id, { events: validated.events }]);
+  });
+  return { id, secret }
 }
 
 export async function toggleCallback(id: string, enabled: boolean, actor: string) {
-  await query("UPDATE callback_endpoints SET status=$2,updated_at=now() WHERE id=$1", [id, enabled ? "active" : "disabled"]);
-  await audit(actor, "callback_endpoint.toggle", "callback_endpoint", id, { enabled })
+  await transaction(async client => {
+    const endpoint = await client.query("UPDATE callback_endpoints SET status=$2,updated_at=now() WHERE id=$1 RETURNING id", [id, enabled ? "active" : "disabled"]);
+    if (!endpoint.rows[0]) throw new Error("Callback endpoint not found");
+    if (!enabled) await client.query(`UPDATE callback_deliveries SET status='dead_letter',last_error='Callback endpoint disabled by operator',updated_at=now()
+      WHERE endpoint_id=$1 AND status IN ('pending','retrying','delivering')`, [id]);
+    await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES ($1,'callback_endpoint.toggle','callback_endpoint',$2,$3)", [actor, id, { enabled }]);
+  })
 }
 
-export async function rotateCallbackSecret(id: string, secret: string, actor: string) {
-  if (secret.length < 16) throw new Error("Callback signing secret must contain at least 16 characters");
+export async function rotateCallbackSecret(id: string, requestedSecret: string | undefined, actor: string) {
+  const secret = requestedSecret?.trim() || `ev_cb_${randomBytes(24).toString("base64url")}`;
+  if (secret.length < 16 || secret.length > 512) throw new Error("Callback signing secret must contain 16 to 512 characters");
   return transaction(async client => {
     const current = (await client.query<{
       secret_version: number
@@ -472,19 +679,22 @@ export async function rotateCallbackSecret(id: string, secret: string, actor: st
     const version = current.secret_version + 1;
     const envelope = sealSecret({ secret }, id, version);
     await client.query("UPDATE callback_endpoints SET secret_ciphertext=$2,encrypted_dek=$3,key_version=$4,secret_version=$5,updated_at=now() WHERE id=$1", [id, envelope.secretCiphertext, envelope.encryptedDek, envelope.keyVersion, version]);
-    await revision(client, "callback_endpoint", id, { secretVersion: version }, actor);
     await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES ($1,'callback_endpoint.rotate_secret','callback_endpoint',$2,$3)", [actor, id, { secretVersion: version }]);
-    return { version }
+    return { version, secret }
   })
 }
 
 export async function replayDeadLetters(actor: string) {
-  const rows = (await query<{
-    id: string
-  }>("UPDATE callback_deliveries SET status='pending',next_attempt_at=now(),updated_at=now() WHERE status='dead_letter' RETURNING id")).rows;
-  for (const row of rows) await query("INSERT INTO outbox_events(id,aggregate_type,aggregate_id,event_type,payload) VALUES ($1,'callback',$2,'callback.requested',$3)", [createId("out"), row.id, { callbackDeliveryId: row.id }]);
-  await audit(actor, "callback_delivery.replay_dead_letters", "callback_delivery", null, { count: rows.length });
-  return rows.length
+  return transaction(async client => {
+    const rows = (await client.query<{
+      id: string
+    }>(`UPDATE callback_deliveries d SET status='pending',next_attempt_at=now(),updated_at=now()
+        FROM callback_endpoints e WHERE d.endpoint_id=e.id AND d.status='dead_letter' AND e.status='active'
+        RETURNING d.id`)).rows;
+    for (const row of rows) await client.query("INSERT INTO outbox_events(id,aggregate_type,aggregate_id,event_type,payload) VALUES ($1,'callback',$2,'callback.requested',$3)", [createId("out"), row.id, { callbackDeliveryId: row.id }]);
+    await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES ($1,'callback_delivery.replay_dead_letters','callback_delivery',NULL,$2)", [actor, { count: rows.length }]);
+    return rows.length
+  })
 }
 
 export async function testCallback(id: string, actor: string) {
@@ -497,10 +707,12 @@ export async function testCallback(id: string, actor: string) {
     data: { message: "Envoy callback endpoint test" }
   };
   await transaction(async client => {
+    const endpoint = await client.query<{ id: string }>("SELECT id FROM callback_endpoints WHERE id=$1 AND status='active'", [id]);
+    if (!endpoint.rows[0]) throw new Error("An active callback endpoint is required for a test delivery");
     await client.query("INSERT INTO callback_deliveries(id,endpoint_id,event_type,payload) VALUES ($1,$2,'endpoint.test',$3)", [deliveryId, id, payload]);
-    await client.query("INSERT INTO outbox_events(id,aggregate_type,aggregate_id,event_type,payload) VALUES ($1,'callback',$2,'callback.requested',$3)", [createId("out"), deliveryId, { callbackDeliveryId: deliveryId }])
+    await client.query("INSERT INTO outbox_events(id,aggregate_type,aggregate_id,event_type,payload) VALUES ($1,'callback',$2,'callback.requested',$3)", [createId("out"), deliveryId, { callbackDeliveryId: deliveryId }]);
+    await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id) VALUES ($1,'callback_endpoint.test','callback_endpoint',$2)", [actor, id]);
   });
-  await audit(actor, "callback_endpoint.test", "callback_endpoint", id);
   return deliveryId
 }
 
@@ -512,18 +724,46 @@ export async function createInboundRoute(input: {
   callbackId?: string;
   localPartPattern: string
 }, actor: string) {
+  const validated = inboundRouteInputSchema.parse(input);
   const id = createId("ir");
-  await query("INSERT INTO inbound_routes(id,provider_webhook_endpoint_id,sending_domain_id,local_part_pattern,product_id,service_id,callback_endpoint_id) VALUES ($1,$2,$3,$4,$5,$6,$7)", [id, input.webhookEndpointId, input.domainId, input.localPartPattern, input.productId, input.serviceId || null, input.callbackId || null]);
-  await audit(actor, "inbound_route.create", "inbound_route", id);
+  await transaction(async client => {
+    const endpoint = (await client.query<{ provider_account_id: string; type: ProviderType; status: string; security_configured: boolean }>(`SELECT e.provider_account_id,a.type,e.status,e.security_configured
+      FROM provider_webhook_endpoints e JOIN provider_accounts a ON a.id=e.provider_account_id
+      WHERE e.id=$1`, [validated.webhookEndpointId])).rows[0];
+    if (!endpoint) throw new Error("Provider webhook endpoint not found");
+    if (endpoint.status !== "active") throw new Error("Provider webhook endpoint is disabled");
+    if (!endpoint.security_configured) throw new Error("Provider webhook security must be configured before inbound routing");
+    if (!providerRegistry(endpoint.type).inbound) throw new Error("This provider does not support inbound routes");
+
+    const domain = await client.query<{ id: string; status: string }>("SELECT id,status FROM sending_domains WHERE id=$1", [validated.domainId]);
+    const product = await client.query<{ id: string }>("SELECT id FROM products WHERE id=$1 AND status='active'", [validated.productId]);
+    const identity = await client.query<{ id: string }>(`SELECT id FROM provider_identities
+      WHERE sending_domain_id=$1 AND provider_account_id=$2 AND status='verified'`, [validated.domainId, endpoint.provider_account_id]);
+    if (!domain.rows[0]) throw new Error("Inbound domain not found");
+    if (domain.rows[0].status !== "active") throw new Error("Inbound routes require an active sending domain");
+    if (!product.rows[0]) throw new Error("Product not found");
+    if (!identity.rows[0]) throw new Error("The selected provider endpoint has no usable identity for this domain");
+
+    if (validated.serviceId) {
+      const service = (await client.query<{ product_id: string }>("SELECT product_id FROM services WHERE id=$1", [validated.serviceId])).rows[0];
+      if (!service) throw new Error("Service not found");
+      if (service.product_id !== validated.productId) throw new Error("The selected service does not belong to the selected product");
+    }
+    if (validated.callbackId) {
+      const callback = (await client.query<{ service_id: string; product_id: string; subscribed_events: string[] }>(`SELECT ce.service_id,s.product_id,ce.subscribed_events
+        FROM callback_endpoints ce JOIN services s ON s.id=ce.service_id WHERE ce.id=$1 AND ce.status='active'`, [validated.callbackId])).rows[0];
+      if (!callback) throw new Error("Callback endpoint not found");
+      if (callback.product_id !== validated.productId) throw new Error("The selected callback endpoint does not belong to the selected product");
+      if (callback.service_id !== validated.serviceId) throw new Error("The selected callback endpoint does not belong to the selected service");
+      if (!callback.subscribed_events.includes("inbound.received")) throw new Error("The selected callback endpoint must subscribe to inbound.received");
+    }
+    await client.query("INSERT INTO inbound_routes(id,provider_webhook_endpoint_id,sending_domain_id,local_part_pattern,product_id,service_id,callback_endpoint_id) VALUES ($1,$2,$3,$4,$5,$6,$7)", [id, validated.webhookEndpointId, validated.domainId, validated.localPartPattern, validated.productId, validated.serviceId ?? null, validated.callbackId ?? null]);
+    await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id) VALUES ($1,'inbound_route.create','inbound_route',$2)", [actor, id]);
+  });
   return id
 }
 
 export async function toggleInboundRoute(id: string, enabled: boolean, actor: string) {
   await query("UPDATE inbound_routes SET status=$2 WHERE id=$1", [id, enabled ? "active" : "disabled"]);
   await audit(actor, "inbound_route.toggle", "inbound_route", id, { enabled })
-}
-
-export async function updateSettings(settings: Record<string, unknown>, actor: string) {
-  for (const [key, value] of Object.entries(settings)) await query("INSERT INTO workspace_settings(key,value,updated_at) VALUES ($1,$2,now()) ON CONFLICT(key) DO UPDATE SET value=$2,updated_at=now()", [key, value]);
-  await audit(actor, "workspace_settings.update", "workspace", null, { keys: Object.keys(settings) })
 }

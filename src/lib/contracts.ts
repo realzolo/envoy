@@ -29,6 +29,17 @@ export const createMessageSchema = z.object({
 }).strict().refine(input => Boolean(input.html || input.text), {
   message: "At least one of html or text is required",
   path: ["html"]
+}).superRefine((input, context) => {
+  const recipients = new Set<string>();
+  input.to.forEach((recipient, index) => {
+    const normalized = recipient.email.trim().toLowerCase();
+    if (recipients.has(normalized)) context.addIssue({
+      code: "custom",
+      path: ["to", index, "email"],
+      message: "Each recipient email can appear only once",
+    });
+    recipients.add(normalized);
+  });
 });
 
 export type CreateMessageInput = z.infer<typeof createMessageSchema>;
@@ -45,6 +56,9 @@ export const createSuppressionSchema = z.object({
   expiresAt: z.string().datetime({ offset: true }).optional(),
 }).strict().refine(input => input.scope !== "list" || Boolean(input.listId), {
   message: "listId is required for list suppressions",
+  path: ["listId"],
+}).refine(input => input.scope !== "product" || !input.listId, {
+  message: "listId is allowed only for list suppressions",
   path: ["listId"],
 });
 

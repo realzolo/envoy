@@ -16,6 +16,7 @@ import {
   type ProviderSendContext
 } from "../contracts";
 import { accepted, decodeJson, event } from "../shared";
+import { isTrustedSnsSigningCertificateUrl, snsSignatureAlgorithm } from "./sns-security";
 
 function credentials(context: ProviderSendContext) {
   if (context.config.type !== "ses" || context.secret.type !== "ses") throw new Error("Invalid SES configuration");
@@ -50,13 +51,20 @@ function snsString(payload: Record<string, unknown>) {
 
 async function verifySns(payload: Record<string, unknown>, expectedTopicArn: string) {
   const url = String(payload.SigningCertURL ?? "");
-  const parsed = new URL(url);
-  if (parsed.protocol !== "https:" || !/(^|\.)amazonaws\.com$/.test(parsed.hostname) || String(payload.TopicArn) !== expectedTopicArn) return false;
-  const certificate = await fetch(url).then(r => {
+  const algorithm = snsSignatureAlgorithm(payload.SignatureVersion);
+  if (!algorithm || !isTrustedSnsSigningCertificateUrl(url, expectedTopicArn) || String(payload.TopicArn) !== expectedTopicArn) return false;
+  const certificate = await fetch(url, {
+    redirect: "error",
+    signal: AbortSignal.timeout(5_000)
+  }).then(async r => {
     if (!r.ok) throw new Error("SNS certificate fetch failed");
-    return r.text()
+    const contentLength = Number(r.headers.get("content-length") ?? 0);
+    if (contentLength > 64 * 1024) throw new Error("SNS certificate is too large");
+    const text = await r.text();
+    if (text.length > 64 * 1024) throw new Error("SNS certificate is too large");
+    return text
   });
-  const verifier = createVerify(payload.SignatureVersion === "2" ? "RSA-SHA256" : "RSA-SHA1");
+  const verifier = createVerify(algorithm);
   verifier.update(snsString(payload));
   verifier.end();
   return verifier.verify(certificate, String(payload.Signature), "base64")
@@ -86,7 +94,7 @@ export const sesModule: ProviderModule = {
       domainManagement: true,
       webhookSecurity: "SNS certificate signature and TopicArn",
       eventTypes: Object.keys(eventMap),
-      attachments: true,
+      attachments: false,
       scheduling: false
     }
   },

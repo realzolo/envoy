@@ -1,0 +1,1 @@
+export const SERVICE_REQUESTS_PER_MINUTE = 600;

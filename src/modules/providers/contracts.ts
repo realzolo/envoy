@@ -3,6 +3,9 @@ import { z } from "zod";
 export const providerTypeSchema = z.enum(["resend", "ses", "sendgrid", "mailgun", "postmark", "mock"]);
 export type ProviderType = z.infer<typeof providerTypeSchema>;
 
+export const domainNameSchema = z.string().trim().toLowerCase().min(3).max(253)
+  .regex(/^(?=.{3,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i, "domain must be a valid hostname");
+
 const baseConfig = { schemaVersion: z.literal(1) };
 export const providerConfigSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("resend"), ...baseConfig }).strict(),
@@ -20,7 +23,7 @@ export const providerConfigSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("mailgun"), ...baseConfig,
     region: z.enum(["us", "eu"]),
-    sendingDomain: z.string().min(3)
+    sendingDomain: domainNameSchema
   }).strict(),
   z.object({
     type: z.literal("postmark"), ...baseConfig,
@@ -56,7 +59,11 @@ export type ProviderSecret = z.infer<typeof providerSecretSchema>;
 
 export const providerWebhookSettingsSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("resend"), signingSecret: z.string().min(8) }).strict(),
-  z.object({ type: z.literal("sendgrid"), publicKey: z.string().min(32) }).strict(),
+  z.object({
+    type: z.literal("sendgrid"),
+    eventWebhookPublicKey: z.string().min(32),
+    inboundParsePublicKey: z.string().min(32).optional()
+  }).strict(),
   z.object({ type: z.literal("mailgun"), webhookSigningKey: z.string().min(8) }).strict(),
   z.object({
     type: z.literal("postmark"),
@@ -71,12 +78,6 @@ export const providerWebhookSettingsSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("mock") }).strict()
 ]);
 export type ProviderWebhookSettings = z.infer<typeof providerWebhookSettingsSchema>;
-
-export function providerAccountRegion(config: ProviderConfig) {
-  if (config.type === "ses" || config.type === "mailgun" || config.type === "sendgrid") return config.region;
-  if (config.type === "mock") return "local";
-  return "global"
-}
 
 export type ProviderCapabilities = {
   nativeIdempotency: boolean;
@@ -151,6 +152,14 @@ export type CanonicalEvent = {
   metadata: Record<string, unknown>;
 };
 
+export type ManagedIdentityStatus = "pending" | "verified" | "failed";
+export type DnsRecord = {
+  type: string;
+  name: string;
+  value: string;
+  status?: string
+};
+
 export type WebhookRequest = { rawBody: Uint8Array; headers: Record<string, string>; remoteAddress?: string };
 export type WebhookVerification = {
   valid: boolean;
@@ -188,13 +197,13 @@ export interface WebhookPort {
 export interface IdentityPort {
   createIdentity(domain: string, context: ProviderSendContext): Promise<{
     externalIdentityId: string;
-    status: string;
-    dnsRecords: unknown[]
+    status: ManagedIdentityStatus;
+    dnsRecords: DnsRecord[]
   }>;
 
   checkIdentity(externalIdentityId: string, context: ProviderSendContext): Promise<{
-    status: string;
-    dnsRecords: unknown[]
+    status: ManagedIdentityStatus;
+    dnsRecords: DnsRecord[]
   }>;
 }
 

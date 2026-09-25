@@ -10,6 +10,12 @@ separate containers, executes database migration as a one-off task, and attaches
 - Docker Engine
 - Docker Compose v2
 
+## Baseline Schema Release
+
+This release requires a new, empty PostgreSQL database. It changes the baseline schema and does not provide an in-place
+upgrade path from an earlier Envoy database. Export or retain any required data separately, provision the new database,
+then run the normal migration task during initial deployment.
+
 ## Checkout And Configure
 
 ```bash
@@ -32,7 +38,8 @@ docker compose run --rm migrate
 docker compose up -d web worker
 ```
 
-Envoy is published on port `6178`. Verify the deployment:
+Envoy binds port `6178` to `127.0.0.1` only. Put an HTTPS reverse proxy on the same host in front of it; do not expose
+the Compose port directly to the internet. Verify the deployment:
 
 ```bash
 docker compose ps
@@ -40,9 +47,17 @@ curl --fail http://127.0.0.1:6178/api/health
 ```
 
 The session cookie follows the browser-facing protocol. HTTPS reverse proxies must forward `X-Forwarded-Proto`.
-Use HTTPS for public deployments; direct HTTP access is intended only for trusted networks.
+Set `ENVOY_TRUST_PROXY=true` only when that proxy overwrites client-supplied `X-Forwarded-*` headers and the Envoy
+port is not directly reachable by untrusted clients. This is required when provider IP allowlists are used behind a
+reverse proxy. Use HTTPS for public deployments.
+
+Outbound callback endpoints must be public HTTPS addresses by default. For trusted private-network consumers, set
+`ENVOY_ALLOW_PRIVATE_CALLBACKS=true`; this also permits HTTP only for private outbound callback addresses.
 
 ## Update
+
+Do not use this update procedure to upgrade an existing database to the baseline-schema release above. It applies after
+that release has been initialized on a fresh database.
 
 ```bash
 cd /data/envoy

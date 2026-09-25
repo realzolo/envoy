@@ -24,13 +24,3 @@ export type EmailRecord = {
   providerId?: string;
   referenceId?: string;
 };
-
-export type DomainRecord = {
-  id: string;
-  name: string;
-  product: string;
-  sender: string;
-  region: string;
-  status: "verified" | "pending" | "failed";
-  volume: string;
-};

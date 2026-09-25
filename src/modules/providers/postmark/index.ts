@@ -26,10 +26,10 @@ export const postmarkModule: ProviderModule = {
     capabilities: {
       nativeIdempotency: false,
       inboundMode: "webhook-fetch",
-      domainManagement: true,
+      domainManagement: false,
       webhookSecurity: "Basic Auth, opaque URL, IP allowlist, schema validation",
       eventTypes: Object.keys(eventMap),
-      attachments: true,
+      attachments: false,
       scheduling: false
     }
   },

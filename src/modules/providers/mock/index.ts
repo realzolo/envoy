@@ -11,7 +11,7 @@ export const mockModule: ProviderModule = {
       domainManagement: true,
       webhookSecurity: "Shared token",
       eventTypes: ["accepted", "delivered", "bounced", "complained", "inbound.received"],
-      attachments: true,
+      attachments: false,
       scheduling: false
     }
   },

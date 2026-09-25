@@ -33,6 +33,15 @@ function hashPayload(input: CreateMessageInput) {
   return createHash("sha256").update(JSON.stringify(stable(input))).digest("hex");
 }
 
+function ensureUniqueRecipients(input: CreateMessageInput) {
+  const recipients = new Set<string>();
+  for (const recipient of input.to) {
+    const normalized = recipient.email.trim().toLowerCase();
+    if (recipients.has(normalized)) throw new MessageValidationError([`Recipient ${recipient.email} is duplicated.`]);
+    recipients.add(normalized);
+  }
+}
+
 export function encodeCursor(row: { accepted_at: Date; id: string }) {
   return Buffer.from(JSON.stringify({ at: row.accepted_at.toISOString(), id: row.id })).toString("base64url");
 }
@@ -64,6 +73,7 @@ export async function acceptMessage(args: {
   idempotencyKey: string;
   input: CreateMessageInput
 }) {
+  ensureUniqueRecipients(args.input);
   const payloadHash = hashPayload(args.input);
   return transaction(async client => {
     const existing = await client.query<{ id: string; payload_hash: string; accepted_at: Date }>(

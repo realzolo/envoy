@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import type { ProviderType } from "@/modules/providers/contracts";
+import { providerRegistry } from "@/modules/providers/registry";
 import { query, transaction } from "@/server/database";
 import { createId } from "@/server/ids";
 import { enforceScopedRateLimit } from "@/server/redis";
@@ -10,13 +12,12 @@ type Candidate = {
   policy_priority: number;
   provider_account_id: string;
   provider_identity_id: string;
-  provider_type: string;
+  provider_type: ProviderType;
   provider_name: string;
   priority: number;
   weight: number;
   rate_limit_per_minute: number;
   domain: string;
-  capabilities: Record<string, unknown>;
   quota: Record<string, unknown>;
   monthly_usage: string;
   daily_usage: string
@@ -71,19 +72,6 @@ export function choosePolicyTarget<T extends {
   if (!candidates.length) return undefined;
   const policyPriority = Math.min(...candidates.map(candidate => candidate.policyPriority));
   return chooseWeighted(deliveryId, attempt, candidates.filter(candidate => candidate.policyPriority === policyPriority))
-}
-
-export function selectEligibleTarget<T extends {
-  priority: number;
-  weight: number;
-  targetStatus: string;
-  accountStatus: string;
-  identityStatus: string;
-  healthy: boolean;
-  quotaAvailable: boolean;
-  circuitOpen: boolean
-}>(seed: string, attempt: number, candidates: T[]) {
-  return chooseWeighted(seed, attempt, candidates.filter(candidate => candidate.targetStatus === "active" && candidate.accountStatus === "active" && candidate.identityStatus === "verified" && candidate.healthy && candidate.quotaAvailable && !candidate.circuitOpen))
 }
 
 function configuredLimit(quota: Record<string, unknown>, key: "monthlyLimit" | "dailyLimit") {
@@ -174,7 +162,7 @@ export async function prepareSubmission(deliveryId: string): Promise<DeliverySub
     }>("SELECT provider_account_id FROM delivery_attempts WHERE delivery_id=$1 AND outcome_determinate=true AND status='failed' AND NOT (routing_snapshot?'manualRetryAuthorizedAt' OR routing_snapshot?'serviceRetryAuthorizedAt')", [deliveryId]);
     const excluded = prior.rows.map(r => r.provider_account_id);
     const candidates = await client.query<Candidate>(`SELECT rt.id AS target_id,rp.id AS policy_id,rp.name AS policy_name,rp.priority AS policy_priority,rt.provider_account_id,rt.provider_identity_id,
-      pa.type AS provider_type,pa.name AS provider_name,rt.priority,rt.weight,rt.rate_limit_per_minute,sd.domain,pi.capabilities,pa.quota,
+      pa.type AS provider_type,pa.name AS provider_name,rt.priority,rt.weight,rt.rate_limit_per_minute,sd.domain,pa.quota,
       usage.monthly_usage::text,usage.daily_usage::text
       FROM routing_policies rp JOIN routing_targets rt ON rt.policy_id=rp.id
       JOIN provider_accounts pa ON pa.id=rt.provider_account_id JOIN provider_identities pi ON pi.id=rt.provider_identity_id
@@ -185,12 +173,11 @@ export async function prepareSubmission(deliveryId: string): Promise<DeliverySub
         FROM delivery_attempts da WHERE da.provider_account_id=pa.id) usage
       WHERE rp.status='active' AND (rt.status='active' OR (rt.status='circuit_open' AND rt.circuit_open_until<=now()))
         AND pa.status='active' AND COALESCE(pa.health->>'status','unknown') NOT IN ('unhealthy','offline')
-        AND pi.status='verified' AND pi.sending_domain_id=$1 AND pi.provider_account_id=pa.id AND sd.status='active'
+        AND rp.sending_domain_id=$1 AND pi.status='verified' AND pi.sending_domain_id=$1 AND pi.provider_account_id=pa.id AND sd.status='active'
         AND (NOT (pa.quota?'monthlyLimit') OR ((pa.quota->>'monthlyLimit')~'^[0-9]+$' AND usage.monthly_usage<(pa.quota->>'monthlyLimit')::bigint))
         AND (NOT (pa.quota?'dailyLimit') OR ((pa.quota->>'dailyLimit')~'^[0-9]+$' AND usage.daily_usage<(pa.quota->>'dailyLimit')::bigint))
         AND (rp.product_id IS NULL OR rp.product_id=$2) AND (rp.service_id IS NULL OR rp.service_id=$3)
         AND (rp.message_category IS NULL OR rp.message_category=$4)
-        AND (rp.destination_region IS NULL OR rp.destination_region=sd.region)
         AND (cardinality($5::text[])=0 OR NOT (rt.provider_account_id=ANY($5::text[])))
       ORDER BY rp.priority,rt.priority,rt.id`, [delivery.sending_domain_id, delivery.product_id, delivery.service_id, delivery.category, excluded]);
     if (!candidates.rows.length) {
@@ -217,7 +204,8 @@ export async function prepareSubmission(deliveryId: string): Promise<DeliverySub
       return null
     }
     const attemptId = createId("att");
-    const providerIdempotencyKey = selected.capabilities.nativeIdempotency === true ? `envoy/${deliveryId}/${attemptNumber}` : null;
+    const nativeIdempotency = providerRegistry(selected.provider_type).descriptor.capabilities.nativeIdempotency;
+    const providerIdempotencyKey = nativeIdempotency ? `envoy/${deliveryId}/${attemptNumber}` : null;
     const fingerprint = createHash("sha256").update(JSON.stringify({
       deliveryId,
       attemptNumber,
@@ -236,7 +224,7 @@ export async function prepareSubmission(deliveryId: string): Promise<DeliverySub
         accountId: selected.provider_account_id,
         identityId: selected.provider_identity_id,
         providerType: selected.provider_type,
-        nativeIdempotency: selected.capabilities.nativeIdempotency === true
+        nativeIdempotency
       },
       candidates: candidates.rows.map(c => ({
         targetId: c.target_id,

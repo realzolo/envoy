@@ -1,0 +1,50 @@
+name: Bug report
+description: Report reproducible behavior that differs from Envoy's documented contract.
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include credentials, message bodies containing sensitive data, or provider webhook payloads.
+        Report security vulnerabilities through the repository Security tab, not this form.
+
+  - type: input
+    id: version
+    attributes:
+      label: Envoy version or commit
+      placeholder: v0.1.0 or a commit SHA
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Deployment environment
+      description: Include the deployment method and provider involved, with secrets redacted.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs or errors
+      description: Redact secrets, recipient addresses, and message content.

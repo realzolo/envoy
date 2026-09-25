@@ -1,25 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { choosePolicyTarget, chooseWeighted, selectEligibleTarget } from "@/modules/core/routing/engine";
+import { choosePolicyTarget, chooseWeighted } from "@/modules/core/routing/engine";
 
 const candidate = (id: string, overrides: Partial<{
   priority: number;
-  weight: number;
-  targetStatus: string;
-  accountStatus: string;
-  identityStatus: string;
-  healthy: boolean;
-  quotaAvailable: boolean;
-  circuitOpen: boolean
+  weight: number
 }> = {}) => ({
   id,
   priority: 100,
   weight: 100,
-  targetStatus: "active",
-  accountStatus: "active",
-  identityStatus: "verified",
-  healthy: true,
-  quotaAvailable: true,
-  circuitOpen: false, ...overrides
+  ...overrides
 });
 describe("routing selection", () => {
   it("always selects the lowest priority tier", () => {
@@ -29,12 +18,6 @@ describe("routing selection", () => {
     const list = [candidate("a", { weight: 1 }), candidate("b", { weight: 9 })];
     expect(chooseWeighted("same", 1, list)?.id).toBe(chooseWeighted("same", 1, list)?.id)
   });
-  it.each([["disabled target", { targetStatus: "disabled" }], ["disabled provider", { accountStatus: "disabled" }], ["unverified identity", { identityStatus: "pending" }], ["exhausted quota", { quotaAvailable: false }], ["open circuit", { circuitOpen: true }], ["unhealthy account", { healthy: false }]])("excludes %s", (_name, overrides) => {
-    expect(selectEligibleTarget("delivery", 1, [candidate("blocked", overrides), candidate("eligible")])?.id).toBe("eligible")
-  });
-  it("returns no target when failover is unsafe or unavailable", () => {
-    expect(selectEligibleTarget("delivery", 1, [candidate("unknown", { circuitOpen: true })])).toBeUndefined()
-  })
 });
 describe("policy precedence", () => {
   it("evaluates policy priority before target priority", () => {
