@@ -1,125 +1,277 @@
 "use client";
 
-import { Code2, LoaderCircle, Monitor, Send, Smartphone } from "lucide-react";
-import { type FormEvent, useMemo, useState } from "react";
+import {
+  Alert,
+  Button,
+  Card,
+  Form,
+  Grid,
+  Input,
+  Select,
+  Space,
+  Tooltip,
+  Typography,
+} from "@arco-design/web-react";
+import { IconCode, IconDesktop, IconMobile, IconSend } from "@arco-design/web-react/icon";
+import { useMemo, useState } from "react";
 
 type Service = { id: string; name: string; product: string; product_id: string };
 type Sender = { name: string; product_id: string; category: string; from_address: string };
 
-const field = "mt-1.5 w-full rounded-md border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-300 outline-none focus:border-zinc-600";
+type MessageFormValues = {
+  serviceId: string;
+  senderProfile: string;
+  recipient: string;
+  category: string;
+  subject: string;
+  html: string;
+  text: string;
+};
+
+const defaultSubject = "Test message from Envoy";
+const defaultHtml =
+  '<main style="font-family:Arial,sans-serif;padding:32px"><h1>Envoy test</h1><p>This rendered message was submitted directly to the delivery service.</p></main>';
+const defaultText =
+  "Envoy test\n\nThis rendered message was submitted directly to the delivery service.";
 
 export function MessageComposer({ services, senders }: { services: Service[]; senders: Sender[] }) {
+  const [form] = Form.useForm<MessageFormValues>();
   const [serviceId, setServiceId] = useState(services[0]?.id ?? "");
-  const [senderProfile, setSenderProfile] = useState("");
-  const initialProductId = services[0]?.product_id;
-  const [category, setCategory] = useState(senders.find(item => item.product_id === initialProductId)?.category ?? "transactional");
-  const [subject, setSubject] = useState("Test message from Envoy");
-  const [html, setHtml] = useState("<main style=\"font-family:Arial,sans-serif;padding:32px\"><h1>Envoy test</h1><p>This rendered message was submitted directly to the delivery service.</p></main>");
-  const [textBody, setTextBody] = useState("Envoy test\n\nThis rendered message was submitted directly to the delivery service.");
+  const [subject, setSubject] = useState(defaultSubject);
+  const [html, setHtml] = useState(defaultHtml);
   const [viewport, setViewport] = useState<"desktop" | "mobile">("desktop");
   const [source, setSource] = useState(false);
   const [pending, setPending] = useState(false);
   const [notice, setNotice] = useState("");
-  const service = services.find(item => item.id === serviceId);
-  const availableSenders = useMemo(() => senders.filter(item => item.product_id === service?.product_id), [senders, service?.product_id]);
 
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  const service = services.find((item) => item.id === serviceId);
+  const availableSenders = useMemo(
+    () => senders.filter((item) => item.product_id === service?.product_id),
+    [senders, service?.product_id],
+  );
+  const initialCategory =
+    senders.find((item) => item.product_id === services[0]?.product_id)?.category ?? "transactional";
+
+  function handleServiceChange(nextServiceId: string | number) {
+    const serviceIdValue = String(nextServiceId);
+    const productId = services.find((item) => item.id === serviceIdValue)?.product_id;
+    const category = senders.find((item) => item.product_id === productId)?.category ?? "transactional";
+
+    setServiceId(serviceIdValue);
+    form.setFieldsValue({
+      serviceId: serviceIdValue,
+      senderProfile: "",
+      category,
+    });
+  }
+
+  function handleSenderChange(profile: string | number) {
+    const senderProfile = String(profile);
+    const sender = availableSenders.find((item) => item.name === senderProfile);
+
+    if (sender) {
+      form.setFieldValue("category", sender.category);
+    }
+  }
+
+  function handleValuesChange(changedValues: Partial<MessageFormValues>) {
+    if (typeof changedValues.subject === "string") {
+      setSubject(changedValues.subject);
+    }
+    if (typeof changedValues.html === "string") {
+      setHtml(changedValues.html);
+    }
+  }
+
+  async function submit(values: MessageFormValues) {
     setPending(true);
     setNotice("");
-    const data = new FormData(event.currentTarget);
+
     try {
       const response = await fetch("/api/admin/actions", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           action: "message.test",
-          serviceId,
-          senderProfile: senderProfile || undefined,
-          recipient: data.get("recipient"),
-          category: data.get("category"),
-          subject,
-          html: html || undefined,
-          text: textBody || undefined
-        })
+          serviceId: values.serviceId,
+          senderProfile: values.senderProfile || undefined,
+          recipient: values.recipient,
+          category: values.category,
+          subject: values.subject,
+          html: values.html || undefined,
+          text: values.text || undefined,
+        }),
       });
-      const payload = await response.json() as { error?: string; result?: { id?: string } };
-      if (!response.ok) throw new Error(payload.error ?? "Unable to queue message");
-      setNotice(`Queued message ${payload.result?.id ?? "successfully"}`)
+      const payload = (await response.json()) as { error?: string; result?: { id?: string } };
+      if (!response.ok) {
+        throw new Error(payload.error ?? "Unable to queue message");
+      }
+      setNotice(`Queued message ${payload.result?.id ?? "successfully"}`);
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Unable to queue message")
+      setNotice(error instanceof Error ? error.message : "Unable to queue message");
     } finally {
-      setPending(false)
+      setPending(false);
     }
   }
 
-  return <form onSubmit={submit} className="grid gap-6 xl:grid-cols-[380px_minmax(0,1fr)]">
-    <aside className="space-y-4">
-      <label className="block text-xs text-zinc-500">Service<select required value={serviceId}
-                                                                    onChange={event => {
-                                                                      const nextServiceId = event.target.value;
-                                                                      const nextProductId = services.find(item => item.id === nextServiceId)?.product_id;
-                                                                      setServiceId(nextServiceId);
-                                                                      setSenderProfile("");
-                                                                      setCategory(senders.find(item => item.product_id === nextProductId)?.category ?? "transactional")
-                                                                    }} className={`${field} h-9`}>
-        {services.map(item => <option key={item.id} value={item.id}>{item.product} / {item.name}</option>)}
-      </select></label>
-      <label className="block text-xs text-zinc-500">Sender profile<select value={senderProfile}
-                                                                           onChange={event => {
-                                                                             const profile = event.target.value;
-                                                                             setSenderProfile(profile);
-                                                                             if (profile) setCategory(availableSenders.find(item => item.name === profile)?.category ?? category)
-                                                                           }} className={`${field} h-9`}>
-        <option value="">Automatic by category</option>
-        {availableSenders.map(item => <option key={item.name}
-                                              value={item.name}>{item.name} / {item.from_address}</option>)}
-      </select></label>
-      <label className="block text-xs text-zinc-500">Recipient<input name="recipient" type="email" required
-                                                                     placeholder="recipient@company.com"
-                                                                     className={`${field} h-9`}/></label>
-      <label className="block text-xs text-zinc-500">Category<input name="category" required value={category}
-                                                                    onChange={event => setCategory(event.target.value)}
-                                                                    className={`${field} h-9`}/></label>
-      <label className="block text-xs text-zinc-500">Subject<input value={subject}
-                                                                   onChange={event => setSubject(event.target.value)}
-                                                                   required className={`${field} h-9`}/></label>
-      <label className="block text-xs text-zinc-500">Plain text<textarea value={textBody}
-                                                                         onChange={event => setTextBody(event.target.value)}
-                                                                         rows={6}
-                                                                         className={`${field} py-2 font-mono text-xs`}/></label>
-      <label className="block text-xs text-zinc-500">HTML<textarea value={html}
-                                                                   onChange={event => setHtml(event.target.value)}
-                                                                   rows={14} spellCheck={false}
-                                                                   className={`${field} py-2 font-mono text-xs`}/></label>
-      <button disabled={pending || !services.length}
-              className="inline-flex h-9 items-center gap-2 rounded-md bg-zinc-100 px-3 text-sm font-medium text-zinc-950 disabled:opacity-50">
-        {pending ? <LoaderCircle size={14} className="animate-spin"/> : <Send size={14}/>}Queue test message
-      </button>
-      {notice && <p role="status"
-                    className={`break-words text-xs ${notice.startsWith("Queued") ? "text-emerald-400" : "text-red-400"}`}>{notice}</p>}
-    </aside>
-    <section className="overflow-hidden rounded-lg border border-zinc-800 bg-[#090909]">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-800 px-4 py-3">
-        <div className="min-w-0"><p className="truncate text-sm text-zinc-200">{subject}</p><p
-          className="mt-1 text-[11px] text-zinc-700">Transient preview</p></div>
-        <div className="flex items-center gap-1">
-          <button type="button" title="Desktop preview" onClick={() => setViewport("desktop")}
-                  className={`flex size-8 items-center justify-center rounded-md ${viewport === "desktop" ? "bg-zinc-800 text-white" : "text-zinc-600"}`}>
-            <Monitor size={14}/></button>
-          <button type="button" title="Mobile preview" onClick={() => setViewport("mobile")}
-                  className={`flex size-8 items-center justify-center rounded-md ${viewport === "mobile" ? "bg-zinc-800 text-white" : "text-zinc-600"}`}>
-            <Smartphone size={14}/></button>
-          <button type="button" title="Toggle source" onClick={() => setSource(!source)}
-                  className={`flex size-8 items-center justify-center rounded-md ${source ? "bg-zinc-800 text-white" : "text-zinc-600"}`}>
-            <Code2 size={14}/></button>
-        </div>
-      </div>
-      <div className="subtle-grid flex min-h-[720px] justify-center bg-[#111] p-4 sm:p-8">
-        {source ?
-          <pre className="w-full overflow-auto whitespace-pre-wrap text-xs leading-5 text-zinc-400">{html}</pre> :
-          <iframe title="Message preview" srcDoc={html} sandbox=""
-                  className={`min-h-[680px] border-0 bg-white transition-[width] ${viewport === "desktop" ? "w-full max-w-[660px]" : "w-full max-w-[375px]"}`}/>}</div>
-    </section>
-  </form>
+  return (
+    <Grid.Row gutter={[16, 16]}>
+      <Grid.Col lg={10} xs={24}>
+        <Card title="Message details">
+        <Form<MessageFormValues>
+          form={form}
+          initialValues={{
+            serviceId,
+            senderProfile: "",
+            category: initialCategory,
+            subject: defaultSubject,
+            html: defaultHtml,
+            text: defaultText,
+          }}
+          layout="vertical"
+          onSubmit={submit}
+          onValuesChange={handleValuesChange}
+          requiredSymbol
+        >
+          <Form.Item field="serviceId" label="Service" rules={[{ required: true }]}>
+            <Select
+              options={services.map((item) => ({
+                label: `${item.product} / ${item.name}`,
+                value: item.id,
+              }))}
+              onChange={handleServiceChange}
+            />
+          </Form.Item>
+          <Form.Item field="senderProfile" label="Sender profile">
+            <Select
+              options={[
+                { label: "Automatic by category", value: "" },
+                ...availableSenders.map((item) => ({
+                  label: `${item.name} / ${item.from_address}`,
+                  value: item.name,
+                })),
+              ]}
+              onChange={handleSenderChange}
+            />
+          </Form.Item>
+          <Form.Item
+            field="recipient"
+            label="Recipient"
+            rules={[
+              { required: true, message: "Enter a recipient email address." },
+              { type: "email", message: "Enter a valid email address." },
+            ]}
+          >
+            <Input placeholder="recipient@company.com" type="email" />
+          </Form.Item>
+          <Form.Item field="category" label="Category" rules={[{ required: true }]}>
+            <Input />
+          </Form.Item>
+          <Form.Item field="subject" label="Subject" rules={[{ required: true }]}>
+            <Input value={subject} onChange={setSubject} />
+          </Form.Item>
+          <Form.Item field="text" label="Plain text">
+            <Input.TextArea autoSize={{ minRows: 6, maxRows: 12 }} />
+          </Form.Item>
+          <Form.Item field="html" label="HTML">
+            <Input.TextArea
+              autoSize={{ minRows: 12, maxRows: 24 }}
+              spellCheck={false}
+              value={html}
+              onChange={setHtml}
+            />
+          </Form.Item>
+          <Space size="medium" wrap>
+            <Button
+              disabled={!services.length}
+              htmlType="submit"
+              icon={<IconSend aria-hidden="true" />}
+              loading={pending}
+              type="primary"
+            >
+              Queue test message
+            </Button>
+          </Space>
+          {notice && (
+            <Alert
+              content={notice}
+              showIcon
+              type={notice.startsWith("Queued") ? "success" : "error"}
+            />
+          )}
+        </Form>
+        </Card>
+      </Grid.Col>
+
+      <Grid.Col lg={14} xs={24}>
+        <Card
+          extra={
+            <Space size="mini">
+              <Tooltip content="Desktop preview">
+                <Button
+                  aria-label="Desktop preview"
+                  icon={<IconDesktop aria-hidden="true" />}
+                  onClick={() => setViewport("desktop")}
+                  shape="circle"
+                  type={viewport === "desktop" ? "primary" : "secondary"}
+                />
+              </Tooltip>
+              <Tooltip content="Mobile preview">
+                <Button
+                  aria-label="Mobile preview"
+                  icon={<IconMobile aria-hidden="true" />}
+                  onClick={() => setViewport("mobile")}
+                  shape="circle"
+                  type={viewport === "mobile" ? "primary" : "secondary"}
+                />
+              </Tooltip>
+              <Tooltip content="Toggle HTML source">
+                <Button
+                  aria-label="Toggle HTML source"
+                  aria-pressed={source}
+                  icon={<IconCode aria-hidden="true" />}
+                  onClick={() => setSource((current) => !current)}
+                  shape="circle"
+                  type={source ? "primary" : "secondary"}
+                />
+              </Tooltip>
+            </Space>
+          }
+          title="Message preview"
+        >
+          <Space direction="vertical" size="medium" style={{ width: "100%" }}>
+            <Space direction="vertical" size="mini" style={{ width: "100%" }}>
+              <Typography.Ellipsis rows={1} showTooltip style={{ width: "100%" }}>
+                <Typography.Text bold>{subject || "Untitled message"}</Typography.Text>
+              </Typography.Ellipsis>
+              <Typography.Text type="secondary">Transient preview</Typography.Text>
+            </Space>
+            {source ? (
+              <Input.TextArea
+                autoSize={{ minRows: 20, maxRows: 32 }}
+                readOnly
+                spellCheck={false}
+                value={html}
+              />
+            ) : (
+              <div style={{ display: "flex", justifyContent: "center" }}>
+                <iframe
+                  sandbox=""
+                  srcDoc={html}
+                  style={{
+                    border: "1px solid var(--color-border-2)",
+                    display: "block",
+                    height: 650,
+                    maxWidth: viewport === "mobile" ? 375 : 680,
+                    width: "100%",
+                  }}
+                  title="Message preview"
+                />
+              </div>
+            )}
+          </Space>
+        </Card>
+      </Grid.Col>
+    </Grid.Row>
+  );
 }

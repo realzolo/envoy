@@ -1,26 +1,28 @@
+"use client";
+
+import { PageHeader as ArcoPageHeader, Space } from "@arco-design/web-react";
 import type { ReactNode } from "react";
 
 export function PageHeader({
-                             title,
-                             description,
-                             actions,
-                           }: {
-  title: string;
-  description?: string;
+  title,
+  description,
+  actions,
+  backIcon = false,
+  onBack,
+}: {
+  title: ReactNode;
+  description?: ReactNode;
   actions?: ReactNode;
+  backIcon?: boolean;
+  onBack?: () => void;
 }) {
   return (
-    <header
-      className="flex flex-col gap-4 border-b border-zinc-800/80 pb-6 sm:flex-row sm:items-end sm:justify-between">
-      <div>
-        <h1 className="text-xl font-medium text-zinc-50">{title}</h1>
-        {description && (
-          <p className="mt-1.5 max-w-2xl text-sm leading-6 text-zinc-500">
-            {description}
-          </p>
-        )}
-      </div>
-      {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
-    </header>
+    <ArcoPageHeader
+      backIcon={backIcon}
+      extra={actions ? <Space size="small" wrap>{actions}</Space> : undefined}
+      onBack={onBack}
+      subTitle={description}
+      title={title}
+    />
   );
 }

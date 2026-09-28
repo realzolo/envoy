@@ -33,7 +33,10 @@ export default async function SectionPage({ params }: { params: Promise<{ sectio
   const section = (await params).section;
   if (!valid(section)) notFound();
   const data = await adminData(section as AdminSection);
-  return <div className="space-y-6"><PageHeader title={sections[section][0]}
-                                                description={sections[section][1]}/><AdminConsole section={section}
-                                                                                                  data={data}/></div>
+  return (
+    <div className="page-stack">
+      <PageHeader title={sections[section][0]} description={sections[section][1]} />
+      <AdminConsole section={section} data={data} />
+    </div>
+  );
 }

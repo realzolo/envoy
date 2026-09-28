@@ -1,16 +1,7 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import "@arco-design/web-react/dist/css/arco.css";
 import "./globals.css";
-
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
+import { ArcoProvider } from "@/components/arco-provider";
 
 export const metadata: Metadata = {
   title: {
@@ -22,11 +13,8 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html
-      lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
-    >
-    <body className="min-h-full bg-[#050505] text-zinc-100">{children}</body>
+    <html lang="en">
+      <body><ArcoProvider>{children}</ArcoProvider></body>
     </html>
   );
 }

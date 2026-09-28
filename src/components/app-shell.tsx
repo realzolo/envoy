@@ -1,23 +1,23 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { Avatar, Badge, Button, Drawer, Layout, Menu } from "@arco-design/web-react";
 import {
-  Ban,
-  BookOpenText,
-  Gauge,
-  Globe2,
-  Inbox,
-  KeyRound,
-  Menu,
-  RadioTower,
-  Route,
-  ScrollText,
-  SendHorizonal,
-  ServerCog,
-  Webhook,
-  X,
-} from "lucide-react";
+  IconBook,
+  IconBranch,
+  IconCloud,
+  IconDashboard,
+  IconFile,
+  IconLiveBroadcast,
+  IconLock,
+  IconMenu,
+  IconMessage,
+  IconMessageBanned,
+  IconPublic,
+  IconSend,
+  IconSettings,
+} from "@arco-design/web-react/icon";
 import { type ReactNode, useEffect, useState } from "react";
 import { EnvoyLogo } from "@/components/envoy-logo";
 import { LogoutButton } from "@/components/session-actions";
@@ -26,186 +26,146 @@ const navigation = [
   {
     label: "",
     items: [
-      { href: "/", label: "Overview", icon: Gauge },
-      { href: "/emails", label: "Messages", icon: Inbox },
-      { href: "/inbound", label: "Inbound", icon: BookOpenText },
+      { href: "/", label: "Overview", icon: IconDashboard },
+      { href: "/emails", label: "Messages", icon: IconMessage },
+      { href: "/inbound", label: "Inbound", icon: IconBook },
     ],
   },
   {
     label: "DELIVERY",
-    items: [
-      { href: "/senders", label: "Sender Profiles", icon: SendHorizonal },
-    ],
+    items: [{ href: "/senders", label: "Sender Profiles", icon: IconSend }],
   },
   {
     label: "INFRASTRUCTURE",
     items: [
-      { href: "/providers", label: "Provider Accounts", icon: ServerCog },
-      { href: "/domains", label: "Sending Domains", icon: Globe2 },
-      { href: "/routing", label: "Routing", icon: Route },
-      { href: "/events", label: "Provider Events", icon: RadioTower },
+      { href: "/providers", label: "Provider Accounts", icon: IconCloud },
+      { href: "/domains", label: "Sending Domains", icon: IconPublic },
+      { href: "/routing", label: "Routing", icon: IconBranch },
+      { href: "/events", label: "Provider Events", icon: IconLiveBroadcast },
     ],
   },
   {
     label: "DEVELOPER",
     items: [
-      { href: "/api-keys", label: "Service Credentials", icon: KeyRound },
-      { href: "/webhooks", label: "Callbacks", icon: Webhook },
-      { href: "/suppressions", label: "Suppressions", icon: Ban },
-      { href: "/logs", label: "Audit Log", icon: ScrollText },
+      { href: "/api-keys", label: "Service Credentials", icon: IconLock },
+      { href: "/webhooks", label: "Callbacks", icon: IconSettings },
+      { href: "/suppressions", label: "Suppressions", icon: IconMessageBanned },
+      { href: "/logs", label: "Audit Log", icon: IconFile },
     ],
   },
 ];
 
-function SidebarContent({ onNavigate, email }: {
-  onNavigate?: () => void;
-  email: string;
-}) {
+function SidebarContent({ onNavigate, email }: { onNavigate?: () => void; email: string }) {
   const pathname = usePathname();
+  const router = useRouter();
+  const activeKey = navigation.flatMap((group) => group.items).find((item) => (
+    item.href === "/" ? pathname === "/" : pathname.startsWith(item.href)
+  ))?.href;
 
   return (
-    <>
-      <div className="flex h-16 items-center justify-between border-b border-zinc-800/80 px-4">
-        <Link href="/" onClick={onNavigate}>
-          <EnvoyLogo/>
-        </Link>
+    <div className="sidebar-content">
+      <div className="brand-bar">
+        <Link href="/" onClick={onNavigate}><EnvoyLogo /></Link>
       </div>
+      <nav className="app-menu" aria-label="Main navigation">
+        <Menu
+          mode="vertical"
+          selectedKeys={activeKey ? [activeKey] : []}
+          onClickMenuItem={(key) => {
+            onNavigate?.();
+            router.push(key);
+          }}
+        >
+          {navigation.map((group) => {
+            const items = group.items.map((item) => {
+              const Icon = item.icon;
+              return (
+                <Menu.Item key={item.href}>
+                  <Icon aria-hidden="true" />
+                  <span>{item.label}</span>
+                </Menu.Item>
+              );
+            });
 
-      <nav className="flex-1 overflow-y-auto px-3 py-3" aria-label="Main navigation">
-        {navigation.map((group, groupIndex) => (
-          <div key={group.label || "primary"} className={groupIndex ? "mt-5" : ""}>
-            {group.label && (
-              <p className="mb-1 px-2 text-[11px] font-medium text-zinc-600">
-                {group.label}
-              </p>
-            )}
-            <div className="space-y-0.5">
-              {group.items.map((item) => {
-                const Icon = item.icon;
-                const active =
-                  item.href === "/"
-                    ? pathname === "/"
-                    : pathname.startsWith(item.href);
-
-                return (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    onClick={onNavigate}
-                    className={`flex h-8.5 items-center gap-2.5 rounded-md px-2 text-[13px] transition ${
-                      active
-                        ? "bg-zinc-800/70 text-zinc-100"
-                        : "text-zinc-500 hover:bg-zinc-900/80 hover:text-zinc-200"
-                    }`}
-                  >
-                    <Icon size={15} strokeWidth={1.8} aria-hidden="true"/>
-                    {item.label}
-                  </Link>
-                );
-              })}
-            </div>
-          </div>
-        ))}
+            return group.label ? (
+              <Menu.ItemGroup key={group.label} title={group.label}>
+                {items}
+              </Menu.ItemGroup>
+            ) : items;
+          })}
+        </Menu>
       </nav>
-
-      <div className="border-t border-zinc-800/80 p-3">
-        <div className="flex items-center gap-2.5 rounded-md px-2 py-2">
-          <span
-            className="flex size-7 items-center justify-center rounded-full bg-gradient-to-br from-zinc-100 to-zinc-500 text-xs font-medium text-zinc-950">
-            {email.slice(0, 2).toUpperCase()}
-          </span>
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-xs font-medium text-zinc-200">Administrator</p>
-            <p className="truncate text-[11px] text-zinc-600">{email}</p>
-          </div>
-          <LogoutButton/>
+      <div className="user-panel">
+        <Avatar size={30} className="workspace-avatar">{email.slice(0, 2).toUpperCase()}</Avatar>
+        <div className="user-copy">
+          <strong>Administrator</strong>
+          <span>{email}</span>
         </div>
+        <LogoutButton />
       </div>
-    </>
+    </div>
   );
 }
 
-export function AppShell({ children, email }: {
-  children: ReactNode;
-  email: string;
-}) {
+export function AppShell({ children, email }: { children: ReactNode; email: string }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [healthy, setHealthy] = useState<boolean | null>(null);
+
   useEffect(() => {
     let active = true;
     const check = async () => {
       try {
         const response = await fetch("/api/health", { cache: "no-store" });
-        if (active) setHealthy(response.ok)
+        if (active) setHealthy(response.ok);
       } catch {
-        if (active) setHealthy(false)
+        if (active) setHealthy(false);
       }
     };
     void check();
     const timer = setInterval(check, 30_000);
     return () => {
       active = false;
-      clearInterval(timer)
-    }
+      clearInterval(timer);
+    };
   }, []);
 
+  const healthStatus = healthy === null ? "default" : healthy ? "success" : "error";
+  const healthText = healthy === null ? "Checking API" : healthy ? "API healthy" : "API degraded";
+
   return (
-    <div className="min-h-screen bg-transparent">
-      <aside
-        className="fixed inset-y-0 left-0 z-40 hidden w-[228px] flex-col border-r border-zinc-800/80 bg-[#070707] lg:flex">
-        <SidebarContent email={email}/>
-      </aside>
-
-      {mobileOpen && (
-        <div className="fixed inset-0 z-50 lg:hidden">
-          <button
-            type="button"
-            aria-label="Close navigation"
-            className="absolute inset-0 bg-black/70 backdrop-blur-sm"
-            onClick={() => setMobileOpen(false)}
-          />
-          <aside className="relative flex h-full w-[272px] flex-col border-r border-zinc-800 bg-[#070707] shadow-2xl">
-            <button
-              type="button"
-              aria-label="Close navigation"
-              className="absolute right-3 top-4 z-10 flex size-8 items-center justify-center rounded-md text-zinc-500 hover:bg-zinc-900 hover:text-zinc-200"
-              onClick={() => setMobileOpen(false)}
-            >
-              <X size={17} aria-hidden="true"/>
-            </button>
-            <SidebarContent email={email} onNavigate={() => setMobileOpen(false)}/>
-          </aside>
-        </div>
-      )}
-
-      <div className="lg:pl-[228px]">
-        <header
-          className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-zinc-800/80 bg-[#050505]/85 px-4 backdrop-blur-xl sm:px-6 lg:px-8">
-          <button
-            type="button"
-            aria-label="Open navigation"
-            className="flex size-8 items-center justify-center rounded-md border border-zinc-800 text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100 lg:hidden"
-            onClick={() => setMobileOpen(true)}
-          >
-            <Menu size={16} aria-hidden="true"/>
-          </button>
-          <div className="flex items-center gap-3">
-            <div className="hidden items-center gap-2 text-xs text-zinc-500 sm:flex">
-              <span className="relative flex size-2">
-                {healthy && <span
-                  className="absolute inline-flex size-full animate-ping rounded-full bg-emerald-400 opacity-40"/>}
-                <span
-                  className={`relative inline-flex size-2 rounded-full ${healthy === null ? "bg-zinc-600" : healthy ? "bg-emerald-400" : "bg-red-400"}`}/>
-              </span>
-              {healthy === null ? "Checking API" : healthy ? "API healthy" : "API degraded"}
-            </div>
-          </div>
-        </header>
-
-        <main className="mx-auto w-full max-w-[1480px] px-4 py-7 sm:px-6 lg:px-8 lg:py-9">
-          {children}
-        </main>
-      </div>
-    </div>
+    <>
+      <Layout className="app-shell" hasSider>
+        <Layout.Sider className="app-sider" theme="light">
+          <SidebarContent email={email} />
+        </Layout.Sider>
+        <Layout className="app-body">
+          <Layout.Header className="app-topbar">
+            <Button
+              className="mobile-trigger"
+              type="text"
+              shape="circle"
+              icon={<IconMenu />}
+              aria-label="Open navigation"
+              onClick={() => setMobileOpen(true)}
+            />
+            <span className="topbar-label">Email delivery control plane</span>
+            <Badge className="health" status={healthStatus} text={healthText} />
+          </Layout.Header>
+          <Layout.Content className="app-content">{children}</Layout.Content>
+        </Layout>
+      </Layout>
+      <Drawer
+        bodyStyle={{ display: "flex", flexDirection: "column", minHeight: 0, padding: 0 }}
+        className="mobile-drawer"
+        placement="left"
+        width={280}
+        visible={mobileOpen}
+        footer={null}
+        closable={false}
+        onCancel={() => setMobileOpen(false)}
+      >
+        <SidebarContent email={email} onNavigate={() => setMobileOpen(false)} />
+      </Drawer>
+    </>
   );
 }
