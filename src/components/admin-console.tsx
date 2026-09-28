@@ -11,11 +11,13 @@ import {
   Grid,
   Input,
   List,
+  Message,
   Modal,
   Select,
   Space,
   Table,
   Tag,
+  Tooltip,
   Typography,
   type PaginationProps,
   type TableColumnProps,
@@ -23,10 +25,12 @@ import {
 import {
   IconCheck,
   IconDelete,
+  IconDown,
   IconExclamationCircle,
   IconRefresh,
   IconRotateLeft,
   IconSend,
+  IconUp,
 } from "@arco-design/web-react/icon";
 import { useRouter } from "next/navigation";
 import { type ReactNode, useState } from "react";
@@ -35,6 +39,7 @@ import { ProviderAccounts } from "@/components/provider-accounts";
 type Row = Record<string, unknown>;
 type Data = Record<string, unknown>;
 type FormValues = Record<string, unknown>;
+type ActionNotice = { kind: "success" | "error"; text: string } | null;
 
 const requiredRule = [{ required: true }];
 const rows = (input: unknown) => Array.isArray(input) ? input as Row[] : [];
@@ -75,25 +80,33 @@ async function mutate(body: Row) {
 function useAction() {
   const router = useRouter();
   const [pending, setPending] = useState(false);
-  const [notice, setNotice] = useState("");
+  const [notice, setNoticeState] = useState<ActionNotice>(null);
 
   async function run(body: Row) {
     setPending(true);
-    setNotice("");
+    setNoticeState(null);
     try {
       const result = await mutate(body);
-      setNotice(result ? JSON.stringify(result, null, 2) : "Completed");
+      setNoticeState({ kind: "success", text: "Action completed successfully." });
       router.refresh();
       return result;
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Action failed");
+      setNoticeState({
+        kind: "error",
+        text: error instanceof Error ? error.message : "Action failed",
+      });
       throw error;
     } finally {
       setPending(false);
     }
   }
 
-  return { run, pending, notice, setNotice };
+  return {
+    run,
+    pending,
+    notice,
+    setNotice: (text: string) => setNoticeState({ kind: "success", text }),
+  };
 }
 
 function Field({
@@ -127,16 +140,32 @@ function Field({
   );
 }
 
-function Panel({ title, description, children }: {
+function Panel({ title, description, children, defaultExpanded = true }: {
   title: string;
   description: string;
   children: ReactNode;
+  defaultExpanded?: boolean;
 }) {
+  const [expanded, setExpanded] = useState(defaultExpanded);
+
   return (
-    <Card title={title}>
-      <Space direction="vertical" size="large" style={{ width: "100%" }}>
+    <Card
+      title={title}
+      extra={(
+        <Tooltip content={expanded ? "Hide form" : "Show form"}>
+          <Button
+            aria-label={expanded ? `Hide ${title} form` : `Show ${title} form`}
+            icon={expanded ? <IconUp /> : <IconDown />}
+            onClick={() => setExpanded((current) => !current)}
+            shape="circle"
+            type="text"
+          />
+        </Tooltip>
+      )}
+    >
+      <Space direction="vertical" size={expanded ? "large" : "small"} className="admin-panel">
         <Typography.Text type="secondary">{description}</Typography.Text>
-        {children}
+        {expanded && <div className="admin-panel__content">{children}</div>}
       </Space>
     </Card>
   );
@@ -146,14 +175,13 @@ function Submit({ pending, labelText, disabled = false }: { pending: boolean; la
   return <Button htmlType="submit" type="primary" icon={<IconCheck />} loading={pending} disabled={disabled}>{labelText}</Button>;
 }
 
-function Notice({ text }: { text: string }) {
-  if (!text) return null;
-  const success = text.startsWith("{") || text === "Completed";
+function Notice({ notice }: { notice: ActionNotice }) {
+  if (!notice) return null;
   return (
     <Alert
-      type={success ? "success" : "error"}
-      title={success ? "Action completed" : "Action failed"}
-      content={<Input.TextArea autoSize={{ minRows: 2, maxRows: 8 }} readOnly value={text} />}
+      type={notice.kind}
+      title={notice.kind === "success" ? "Action completed" : "Action failed"}
+      content={notice.text}
       showIcon
     />
   );
@@ -164,52 +192,56 @@ function ActionButton({
   children,
   danger = false,
   confirmText,
+  confirmTitle,
+  confirmOkText,
 }: {
   body: Row;
   children: ReactNode;
   danger?: boolean;
   confirmText?: string;
+  confirmTitle?: string;
+  confirmOkText?: string;
 }) {
   const action = useAction();
 
   async function run() {
     try {
       await action.run(body);
-    } catch {
-      // The inline Alert-style notice communicates the API failure beside the action.
+      Message.success("Action completed successfully.");
+    } catch (error) {
+      Message.error(error instanceof Error ? error.message : "Action failed");
+      throw error;
     }
   }
 
   function request() {
     if (!confirmText) {
-      void run();
+      void run().catch(() => undefined);
       return;
     }
     Modal.confirm({
-      title: "Confirm action",
+      title: confirmTitle ?? (danger ? "Confirm destructive action" : "Confirm action"),
       content: confirmText,
-      okText: "Continue",
+      okText: confirmOkText ?? (danger ? "Confirm" : "Continue"),
+      cancelText: "Cancel",
       okButtonProps: { status: danger ? "danger" : "default" },
       onOk: run,
     });
   }
 
   return (
-    <Space size="mini" wrap>
-      <Button
-        type={danger ? "outline" : "secondary"}
-        status={danger ? "danger" : "default"}
-        size="small"
-        loading={action.pending}
-        onClick={event => {
-          event.stopPropagation();
-          request();
-        }}
-      >
-        {children}
-      </Button>
-      {action.notice && <Typography.Text type={action.notice.startsWith("{") || action.notice === "Completed" ? "success" : "error"} ellipsis={{ showTooltip: true }}>{action.notice}</Typography.Text>}
-    </Space>
+    <Button
+      type={danger ? "outline" : "secondary"}
+      status={danger ? "danger" : "default"}
+      size="small"
+      loading={action.pending}
+      onClick={event => {
+        event.stopPropagation();
+        request();
+      }}
+    >
+      {children}
+    </Button>
   );
 }
 
@@ -393,7 +425,11 @@ function Domains({ data }: { data: Data }) {
 
   return (
     <Space direction="vertical" size="large" className="admin-stack">
-      <Panel title="Add sending domain" description="Provision or associate identities on selected providers">
+      <Panel
+        title="Add sending domain"
+        description="Provision or associate identities on selected providers"
+        defaultExpanded={domains.length === 0}
+      >
         <Form
           layout="vertical"
           onSubmit={values => void submit(values as FormValues)}
@@ -432,7 +468,7 @@ function Domains({ data }: { data: Data }) {
             </Grid.Col>
           </Grid.Row>
         </Form>
-        <Notice text={action.notice} />
+        <Notice notice={action.notice} />
       </Panel>
       {domains.map(domain => (
         <Card
@@ -491,7 +527,11 @@ function Senders({ data }: { data: Data }) {
 
   return (
     <Space direction="vertical" size="large" className="admin-stack">
-      <Panel title="Create sender profile" description="Visible From identity resolved before queuing">
+      <Panel
+        title="Create sender profile"
+        description="Visible From identity resolved before queuing"
+        defaultExpanded={senders.length === 0}
+      >
         <Form layout="vertical" onSubmit={values => void submit(values as FormValues)}>
           <Grid.Row align="end" gutter={[16, 0]}>
             <Grid.Col md={8} xs={24}>
@@ -512,7 +552,7 @@ function Senders({ data }: { data: Data }) {
             <Grid.Col md={8} xs={24}><Space><Submit pending={action.pending} labelText="Create profile" /></Space></Grid.Col>
           </Grid.Row>
         </Form>
-        <Notice text={action.notice} />
+        <Notice notice={action.notice} />
       </Panel>
       <TableCard title="Sender profiles">
         <DataTable
@@ -595,7 +635,11 @@ function Routing({ data }: { data: Data }) {
 
   return (
     <Space direction="vertical" size="large" className="admin-stack">
-      <Panel title="Create routing policy" description="Match a verified identity to a sending domain">
+      <Panel
+        title="Create routing policy"
+        description="Match a verified identity to a sending domain"
+        defaultExpanded={policies.length === 0}
+      >
         <Form layout="vertical" onSubmit={values => void submit(values as FormValues)} initialValues={{ productId: "", serviceId: "" }}>
           <Grid.Row gutter={[16, 0]}>
             <Grid.Col md={8} xs={24}><Field field="name" label="Name" required rules={requiredRule}><Input /></Field></Grid.Col>
@@ -607,9 +651,13 @@ function Routing({ data }: { data: Data }) {
             <Grid.Col xs={24}><Space><Submit pending={create.pending} labelText="Create policy" /></Space></Grid.Col>
           </Grid.Row>
         </Form>
-        <Notice text={create.notice} />
+        <Notice notice={create.notice} />
       </Panel>
-      <Panel title="Route simulator" description="Read-only deterministic eligibility inspection">
+      <Panel
+        title="Route simulator"
+        description="Read-only deterministic eligibility inspection"
+        defaultExpanded={false}
+      >
         <Form layout="vertical" onSubmit={values => void simulateSubmit(values as FormValues)} initialValues={{ productId: "", serviceId: "" }}>
           <Grid.Row gutter={[16, 0]}>
             <Grid.Col md={8} xs={24}><Field label="Sending domain" required><Select value={selectedDomainId} options={eligibleDomains.map(domain => ({ value: value(domain, "id"), label: value(domain, "domain") }))} onChange={changeDomain} /></Field></Grid.Col>
@@ -620,7 +668,7 @@ function Routing({ data }: { data: Data }) {
           </Grid.Row>
         </Form>
         <RoutingSimulation result={simulationResult} />
-        <Notice text={simulate.notice.startsWith("{") ? "" : simulate.notice} />
+        <Notice notice={simulate.notice?.kind === "error" ? simulate.notice : null} />
       </Panel>
       {policies.map(policy => (
         <Card
@@ -706,14 +754,18 @@ function Credentials({ data }: { data: Data }) {
 
   return (
     <Space direction="vertical" size="large" className="admin-stack">
-      <Panel title="Create product" description="A product owns its services, senders, and delivery rules.">
+      <Panel
+        title="Create product"
+        description="A product owns its services, senders, and delivery rules."
+        defaultExpanded={products.length === 0}
+      >
         <Form form={productForm} layout="vertical" onSubmit={values => void createProduct(values as FormValues)}>
           <Grid.Row gutter={[16, 0]}>
             <Grid.Col xs={24}><Field field="name" label="Name" required rules={requiredRule}><Input /></Field></Grid.Col>
             <Grid.Col xs={24}><Space><Submit pending={productAction.pending} labelText="Create product" /></Space></Grid.Col>
           </Grid.Row>
         </Form>
-        <Notice text={productAction.notice} />
+        <Notice notice={productAction.notice} />
       </Panel>
       {products.length ? (
         <TableCard title="Products">
@@ -730,7 +782,11 @@ function Credentials({ data }: { data: Data }) {
       ) : <EmptyState text="No products configured. Create the first product to issue a service credential." />}
       {activeProducts.length ? (
         <>
-          <Panel title="Issue service credential" description="The plaintext key is shown once">
+          <Panel
+            title="Issue service credential"
+            description="The plaintext key is shown once"
+            defaultExpanded={credentials.length === 0}
+          >
             <Form layout="vertical" onSubmit={values => void submit(values as FormValues)}>
               <Grid.Row gutter={[16, 0]}>
                 <Grid.Col md={12} xs={24}><Field field="productId" label="Product" initialValue={value(activeProducts[0], "id")} required rules={requiredRule}><Select options={activeProducts.map(product => ({ value: value(product, "id"), label: value(product, "name") }))} /></Field></Grid.Col>
@@ -739,7 +795,7 @@ function Credentials({ data }: { data: Data }) {
               </Grid.Row>
             </Form>
             {key && <Secret value={key} />}
-            <Notice text={action.notice} />
+            <Notice notice={action.notice} />
           </Panel>
           <TableCard title="Service credentials">
             <DataTable
@@ -755,7 +811,15 @@ function Credentials({ data }: { data: Data }) {
                   render: (_, credential) => (
                     <Space size="small">
                       <Button size="small" icon={<IconRotateLeft />} loading={action.pending} onClick={() => void rotate(value(credential, "id"))}>Rotate</Button>
-                      <ActionButton danger confirmText="Revoke this credential immediately?" body={{ action: "credential.revoke", id: credential.id }}><IconDelete />Revoke</ActionButton>
+                      <ActionButton
+                        danger
+                        body={{ action: "credential.revoke", id: credential.id }}
+                        confirmOkText="Revoke"
+                        confirmText="This immediately invalidates the credential and cannot be undone."
+                        confirmTitle="Revoke credential?"
+                      >
+                        <IconDelete />Revoke
+                      </ActionButton>
                     </Space>
                   ),
                 },
@@ -793,7 +857,7 @@ function RotateCallback({ id }: { id: string }) {
             Rotate secret
           </Button>
           {secret && <Secret value={secret} />}
-          <Notice text={action.notice} />
+          <Notice notice={action.notice} />
         </Space>
       </Collapse.Item>
     </Collapse>
@@ -831,7 +895,11 @@ function Callbacks({ data }: { data: Data }) {
 
   return (
     <Space direction="vertical" size="large" className="admin-stack">
-      <Panel title="Add callback endpoint" description="Canonical events with HMAC signatures">
+      <Panel
+        title="Add callback endpoint"
+        description="Canonical events with HMAC signatures"
+        defaultExpanded={callbacks.length === 0}
+      >
         <Form layout="vertical" onSubmit={values => void submit(values as FormValues)}>
           <Grid.Row gutter={[16, 0]}>
             <Grid.Col md={12} xs={24}><Field field="serviceId" label="Service" initialValue={value(services[0], "id")} required rules={requiredRule}><Select options={services.map(service => ({ value: value(service, "id"), label: `${value(service, "product")} / ${value(service, "name")}` }))} /></Field></Grid.Col>
@@ -841,10 +909,19 @@ function Callbacks({ data }: { data: Data }) {
             <Grid.Col xs={24}><Space><Submit pending={action.pending} disabled={!events.length} labelText="Add endpoint" /></Space></Grid.Col>
           </Grid.Row>
         </Form>
-        <Notice text={action.notice} />
+        <Notice notice={action.notice} />
         {secret && <Secret value={secret} label="Generated signing secret. Store it in the callback consumer now." />}
       </Panel>
-      <Space wrap><ActionButton body={{ action: "callback.replay_dlq" }} confirmText="Replay every dead letter belonging to an active callback endpoint?"><IconRotateLeft />Replay eligible dead letters</ActionButton></Space>
+      <Space wrap>
+        <ActionButton
+          body={{ action: "callback.replay_dlq" }}
+          confirmOkText="Replay"
+          confirmText="Replay every dead letter belonging to an active callback endpoint?"
+          confirmTitle="Replay eligible dead letters?"
+        >
+          <IconRotateLeft />Replay eligible dead letters
+        </ActionButton>
+      </Space>
       <TableCard title="Callback endpoints">
         <DataTable
           data={callbacks}
@@ -913,6 +990,7 @@ function Suppressions({ data }: { data: Data }) {
   const action = useAction();
   const [scope, setScope] = useState<"global" | "product" | "list">("global");
   const products = rows(data.products).filter(product => product.status === "active");
+  const suppressions = rows(data.suppressions);
 
   async function submit(values: FormValues) {
     try {
@@ -933,7 +1011,11 @@ function Suppressions({ data }: { data: Data }) {
 
   return (
     <Space direction="vertical" size="large" className="admin-stack">
-      <Panel title="Add suppression" description="Global, product, or list scope">
+      <Panel
+        title="Add suppression"
+        description="Global, product, or list scope"
+        defaultExpanded={suppressions.length === 0}
+      >
         <Form layout="vertical" onSubmit={values => void submit(values as FormValues)}>
           <Grid.Row gutter={[16, 0]}>
             <Grid.Col md={8} xs={24}><Field field="email" label="Email" required rules={[{ required: true, type: "email" }]}><Input type="email" /></Field></Grid.Col>
@@ -945,18 +1027,31 @@ function Suppressions({ data }: { data: Data }) {
             <Grid.Col xs={24}><Space><Submit pending={action.pending} disabled={scope !== "global" && !products.length} labelText="Add suppression" /></Space></Grid.Col>
           </Grid.Row>
         </Form>
-        <Notice text={action.notice} />
+        <Notice notice={action.notice} />
       </Panel>
       <TableCard title="Suppressions">
         <DataTable
-          data={rows(data.suppressions)}
+          data={suppressions}
           columns={[
             { title: "Email", render: (_, suppression) => value(suppression, "email_normalized") },
             { title: "Scope", render: (_, suppression) => `${value(suppression, "scope_type")} ${value(suppression, "product")}${value(suppression, "list_id") ? ` / ${value(suppression, "list_id")}` : ""}` },
             { title: "Reason", render: (_, suppression) => value(suppression, "reason") },
             { title: "Source", render: (_, suppression) => value(suppression, "source") },
             { title: "Expires", render: (_, suppression) => suppression.expires_at ? date(suppression.expires_at) : "Permanent" },
-            { title: "Action", render: (_, suppression) => <ActionButton danger body={{ action: "suppression.remove", id: suppression.id }}><IconDelete />Remove</ActionButton> },
+            {
+              title: "Action",
+              render: (_, suppression) => (
+                <ActionButton
+                  danger
+                  body={{ action: "suppression.remove", id: suppression.id }}
+                  confirmOkText="Remove"
+                  confirmText="This recipient will become eligible for delivery again immediately."
+                  confirmTitle="Remove suppression?"
+                >
+                  <IconDelete />Remove
+                </ActionButton>
+              ),
+            },
           ]}
         />
       </TableCard>
@@ -967,6 +1062,7 @@ function Suppressions({ data }: { data: Data }) {
 function Inbound({ data }: { data: Data }) {
   const action = useAction();
   const items = rows(data.inbound);
+  const inboundRoutes = rows(data.inboundRoutes);
   const endpoints = rows(data.webhooks).filter(endpoint => endpoint.status === "active" && endpoint.security_configured);
   const products = rows(data.products).filter(product => product.status === "active");
   const availableDomains = rows(data.domains).filter(domain => domain.status === "active" && rows(domain.identities).some(identity => identity.status === "verified" && endpoints.some(endpoint => endpoint.provider_account_id === identity.accountId)));
@@ -1023,7 +1119,11 @@ function Inbound({ data }: { data: Data }) {
 
   return (
     <Space direction="vertical" size="large" className="admin-stack">
-      <Panel title="Create inbound route" description="Route provider ingress by domain and local part">
+      <Panel
+        title="Create inbound route"
+        description="Route provider ingress by domain and local part"
+        defaultExpanded={inboundRoutes.length === 0}
+      >
         <Form layout="vertical" onSubmit={values => void submit(values as FormValues)}>
           <Grid.Row gutter={[16, 0]}>
             <Grid.Col md={8} xs={24}><Field label="Provider endpoint" required><Select value={webhookEndpointId} options={endpoints.map(endpoint => ({ value: value(endpoint, "id"), label: `${value(endpoint, "account")} / ${value(endpoint, "type")}` }))} onChange={selectEndpoint} /></Field></Grid.Col>
@@ -1035,11 +1135,11 @@ function Inbound({ data }: { data: Data }) {
             <Grid.Col xs={24}><Space><Submit pending={action.pending} labelText="Create route" /></Space></Grid.Col>
           </Grid.Row>
         </Form>
-        <Notice text={action.notice} />
+        <Notice notice={action.notice} />
       </Panel>
       <TableCard title="Inbound routes">
         <DataTable
-          data={rows(data.inboundRoutes)}
+          data={inboundRoutes}
           columns={[
             { title: "Pattern", render: (_, route) => <Typography.Text code>{value(route, "local_part_pattern")}@{value(route, "domain")}</Typography.Text> },
             { title: "Domain", render: (_, route) => value(route, "domain") },
@@ -1114,7 +1214,9 @@ export function RetryDeliveryButton({ id, unknown }: { id: string; unknown: bool
   return (
     <ActionButton
       body={{ action: "delivery.retry", id, acknowledgeDuplicateRisk: unknown }}
+      confirmOkText={unknown ? "Accept risk and retry" : "Retry"}
       confirmText={unknown ? "The provider outcome is unknown. Retrying may send a duplicate. Accept the risk and continue?" : "Retry this delivery?"}
+      confirmTitle={unknown ? "Retry with duplicate risk?" : "Retry delivery?"}
     >
       {unknown ? <IconExclamationCircle /> : <IconRotateLeft />}Manual retry
     </ActionButton>

@@ -2,7 +2,17 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { Avatar, Badge, Button, Drawer, Layout, Menu } from "@arco-design/web-react";
+import {
+  Avatar,
+  Badge,
+  Button,
+  Drawer,
+  Layout,
+  Menu,
+  Popover,
+  Space,
+  Typography,
+} from "@arco-design/web-react";
 import {
   IconBook,
   IconBranch,
@@ -15,6 +25,7 @@ import {
   IconMessage,
   IconMessageBanned,
   IconPublic,
+  IconRefresh,
   IconSend,
   IconSettings,
 } from "@arco-design/web-react/icon";
@@ -110,15 +121,39 @@ function SidebarContent({ onNavigate, email }: { onNavigate?: () => void; email:
 export function AppShell({ children, email }: { children: ReactNode; email: string }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [healthy, setHealthy] = useState<boolean | null>(null);
+  const [checkingHealth, setCheckingHealth] = useState(true);
+  const [lastChecked, setLastChecked] = useState<Date | null>(null);
+
+  async function checkHealth() {
+    setCheckingHealth(true);
+    try {
+      const response = await fetch("/api/health", { cache: "no-store" });
+      setHealthy(response.ok);
+    } catch {
+      setHealthy(false);
+    } finally {
+      setCheckingHealth(false);
+      setLastChecked(new Date());
+    }
+  }
 
   useEffect(() => {
     let active = true;
     const check = async () => {
+      setCheckingHealth(true);
       try {
         const response = await fetch("/api/health", { cache: "no-store" });
-        if (active) setHealthy(response.ok);
+        if (active) {
+          setHealthy(response.ok);
+          setLastChecked(new Date());
+        }
       } catch {
-        if (active) setHealthy(false);
+        if (active) {
+          setHealthy(false);
+          setLastChecked(new Date());
+        }
+      } finally {
+        if (active) setCheckingHealth(false);
       }
     };
     void check();
@@ -135,7 +170,7 @@ export function AppShell({ children, email }: { children: ReactNode; email: stri
   return (
     <>
       <Layout className="app-shell" hasSider>
-        <Layout.Sider className="app-sider" theme="light">
+        <Layout.Sider className="app-sider" theme="light" width={248}>
           <SidebarContent email={email} />
         </Layout.Sider>
         <Layout className="app-body">
@@ -149,7 +184,37 @@ export function AppShell({ children, email }: { children: ReactNode; email: stri
               onClick={() => setMobileOpen(true)}
             />
             <span className="topbar-label">Email delivery control plane</span>
-            <Badge className="health" status={healthStatus} text={healthText} />
+            <Popover
+              position="br"
+              title="Service health"
+              content={(
+                <Space direction="vertical" size="small" className="health-popover">
+                  <Typography.Text>
+                    {healthy === null
+                      ? "Checking application dependencies."
+                      : healthy
+                        ? "The API and its required dependencies are responding."
+                        : "One or more required dependencies are unavailable."}
+                  </Typography.Text>
+                  <Typography.Text type="secondary">
+                    {lastChecked ? `Last checked ${lastChecked.toLocaleTimeString()}` : "Not checked yet"}
+                  </Typography.Text>
+                  <Button
+                    icon={<IconRefresh aria-hidden="true" />}
+                    loading={checkingHealth}
+                    onClick={() => void checkHealth()}
+                    size="small"
+                    type="secondary"
+                  >
+                    Check again
+                  </Button>
+                </Space>
+              )}
+            >
+              <Button className="health-trigger" type="text">
+                <Badge className="health" status={healthStatus} text={healthText} />
+              </Button>
+            </Popover>
           </Layout.Header>
           <Layout.Content className="app-content">{children}</Layout.Content>
         </Layout>

@@ -1,6 +1,6 @@
 "use client";
 
-import { PageHeader as ArcoPageHeader, Space } from "@arco-design/web-react";
+import { PageHeader as ArcoPageHeader, Space, Typography } from "@arco-design/web-react";
 import type { ReactNode } from "react";
 
 export function PageHeader({
@@ -18,11 +18,16 @@ export function PageHeader({
 }) {
   return (
     <ArcoPageHeader
+      className="page-header arco-page-header-wrap"
       backIcon={backIcon}
       extra={actions ? <Space size="small" wrap>{actions}</Space> : undefined}
       onBack={onBack}
       subTitle={description}
-      title={title}
+      title={(
+        <Typography.Title className="page-header__title" heading={4}>
+          {title}
+        </Typography.Title>
+      )}
     />
   );
 }

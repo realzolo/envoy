@@ -1,6 +1,6 @@
 "use client";
 
-import { Button } from "@arco-design/web-react";
+import { Button, Card } from "@arco-design/web-react";
 import { IconDownload, IconSend } from "@arco-design/web-react/icon";
 import { EmailTable } from "@/components/email-table";
 import { PageHeader } from "@/components/page-header";
@@ -27,7 +27,9 @@ export function MessagesPageView({ records }: { records: EmailRecord[] }) {
         description="Inspect every recipient-level delivery, routing attempt, and canonical event."
         title="Messages"
       />
-      <EmailTable records={records} />
+      <Card className="workspace-card" bordered={false}>
+        <EmailTable records={records} variant="embedded" />
+      </Card>
     </section>
   );
 }

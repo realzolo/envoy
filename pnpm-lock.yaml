@@ -4,13 +4,18 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  '@arco-design/web-react@2.66.16':
+    hash: 9eec887147d39e1715095f76e825d8d3e85657d8647a6caac3335295278c44bf
+    path: patches/@arco-design__web-react@2.66.16.patch
+
 importers:
 
   .:
     dependencies:
       '@arco-design/web-react':
         specifier: 2.66.16
-        version: 2.66.16(@types/react@19.3.0)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+        version: 2.66.16(patch_hash=9eec887147d39e1715095f76e825d8d3e85657d8647a6caac3335295278c44bf)(@types/react@19.3.0)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
       '@aws-sdk/client-s3':
         specifier: ^3.1136.0
         version: 3.1136.0
@@ -3103,7 +3108,7 @@ snapshots:
     dependencies:
       color: 3.2.1
 
-  '@arco-design/web-react@2.66.16(@types/react@19.3.0)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)':
+  '@arco-design/web-react@2.66.16(patch_hash=9eec887147d39e1715095f76e825d8d3e85657d8647a6caac3335295278c44bf)(@types/react@19.3.0)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)':
     dependencies:
       '@arco-design/color': 0.4.0
       '@babel/runtime': 7.29.7

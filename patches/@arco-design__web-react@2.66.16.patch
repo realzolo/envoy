@@ -1,0 +1,54 @@
+diff --git a/es/_util/react-dom.js b/es/_util/react-dom.js
+index 8155d849d04f167f1ba559884aa9b474def1fe73..67fe818c792f5cd913b42d9faf98aa4f52a3ec0b 100644
+--- a/es/_util/react-dom.js
++++ b/es/_util/react-dom.js
+@@ -1,6 +1,6 @@
+ import { Component } from 'react';
+ import ReactDOM from 'react-dom';
+-import { isObject, isFunction, isReact18 } from './is';
++import { isObject, isFunction, isReact18, isReact19 } from './is';
+ import warning from './warning';
+ var __SECRET_INTERNALS__ = '__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED';
+ var CopyReactDOM = ReactDOM;
+@@ -95,12 +95,13 @@ export var findDOMNode = function (element, instance) {
+ };
+ // 回调children的原始 ref ，适配函数 ref or ref.current 场景
+ export var callbackOriginRef = function (children, node) {
+-    if (children && children.ref) {
+-        if (isFunction(children.ref)) {
+-            children === null || children === void 0 ? void 0 : children.ref(node);
++    var originRef = children && isReact19 ? children.props.ref : children === null || children === void 0 ? void 0 : children.ref;
++    if (originRef) {
++        if (isFunction(originRef)) {
++            originRef(node);
+         }
+-        if ('current' in children.ref) {
+-            children.ref.current = node;
++        if ('current' in originRef) {
++            originRef.current = node;
+         }
+     }
+ };
+diff --git a/lib/_util/react-dom.js b/lib/_util/react-dom.js
+index 994deffb8f90ef071501488ec60d14e953b2999f..91d64f933523f5956bf7563c8c81931fc5678e9a 100644
+--- a/lib/_util/react-dom.js
++++ b/lib/_util/react-dom.js
+@@ -102,12 +102,13 @@ var findDOMNode = function (element, instance) {
+ exports.findDOMNode = findDOMNode;
+ // 回调children的原始 ref ，适配函数 ref or ref.current 场景
+ var callbackOriginRef = function (children, node) {
+-    if (children && children.ref) {
+-        if ((0, is_1.isFunction)(children.ref)) {
+-            children === null || children === void 0 ? void 0 : children.ref(node);
++    var originRef = children && is_1.isReact19 ? children.props.ref : children === null || children === void 0 ? void 0 : children.ref;
++    if (originRef) {
++        if ((0, is_1.isFunction)(originRef)) {
++            originRef(node);
+         }
+-        if ('current' in children.ref) {
+-            children.ref.current = node;
++        if ('current' in originRef) {
++            originRef.current = node;
+         }
+     }
+ };

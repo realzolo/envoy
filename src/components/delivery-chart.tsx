@@ -191,12 +191,13 @@ export function DashboardOverview({ stats, health, trend, recent, setup }: Dashb
         description="Monitor delivery, routing, callbacks, and provider health across every product."
         title="Delivery pipeline"
       />
-      <SetupChecklist state={setup} />
       <Grid.Row gutter={[16, 16]}>
         {metrics.map((metric) => (
           <Grid.Col key={metric.label} lg={6} sm={12} xs={24}>
-            <Card>
+            <Card className="metric-card">
               <Statistic
+                countDuration={450}
+                countUp
                 extra={metric.extra}
                 groupSeparator={metric.groupSeparator}
                 precision={metric.precision}
@@ -208,6 +209,7 @@ export function DashboardOverview({ stats, health, trend, recent, setup }: Dashb
           </Grid.Col>
         ))}
       </Grid.Row>
+      <SetupChecklist state={setup} />
       <Grid.Row gutter={[16, 16]}>
         <Grid.Col lg={16} xs={24}>
           <Card

@@ -1,8 +1,20 @@
 "use client";
 
-import { Empty, Form, Grid, Input, Link as ArcoLink, Select, Table, Tag, Typography } from "@arco-design/web-react";
+import {
+  Button,
+  Empty,
+  Form,
+  Grid,
+  Input,
+  Link as ArcoLink,
+  Select,
+  Space,
+  Table,
+  Tag,
+  Typography,
+} from "@arco-design/web-react";
 import type { TableColumnProps } from "@arco-design/web-react";
-import { IconSearch } from "@arco-design/web-react/icon";
+import { IconRefresh, IconSearch, IconSend } from "@arco-design/web-react/icon";
 import { useMemo, useState } from "react";
 import type { DeliveryStatus, EmailRecord } from "@/lib/types";
 
@@ -127,11 +139,41 @@ export function EmailTable({
   }, [query, records, status]);
 
   const displayedRecords = compact ? filtered.slice(0, 5) : filtered;
+  const filteredByUser = Boolean(query.trim()) || status !== "all";
+
+  const emptyState = records.length === 0 ? (
+    <Empty
+      description={(
+        <Space direction="vertical" size="medium" align="center">
+          <Typography.Text type="secondary">No messages have been sent yet.</Typography.Text>
+          <Button href="/emails/compose" icon={<IconSend />} type="primary">Send a test</Button>
+        </Space>
+      )}
+    />
+  ) : (
+    <Empty
+      description={(
+        <Space direction="vertical" size="medium" align="center">
+          <Typography.Text type="secondary">No messages match the current filters.</Typography.Text>
+          <Button
+            icon={<IconRefresh />}
+            onClick={() => {
+              setQuery("");
+              setStatus("all");
+            }}
+            type="secondary"
+          >
+            Clear filters
+          </Button>
+        </Space>
+      )}
+    />
+  );
 
   return (
     <>
       {!compact && (
-        <Form layout="vertical">
+        <Form className="message-filters" layout="vertical">
           <Grid.Row gutter={[16, 0]}>
             <Grid.Col md={16} xs={24}>
               <Form.Item label="Search messages">
@@ -157,15 +199,37 @@ export function EmailTable({
         </Form>
       )}
 
+      {!compact && (
+        <div className="table-summary">
+          <Typography.Text type="secondary">
+            {filtered.length.toLocaleString()} {filtered.length === 1 ? "message" : "messages"}
+          </Typography.Text>
+          {filteredByUser && (
+            <Button
+              icon={<IconRefresh aria-hidden="true" />}
+              onClick={() => {
+                setQuery("");
+                setStatus("all");
+              }}
+              size="small"
+              type="text"
+            >
+              Reset filters
+            </Button>
+          )}
+        </div>
+      )}
+
       <Table<EmailRecord>
         border={variant === "page"}
+        className="message-table"
         columns={columns}
         data={displayedRecords}
         hover
-        noDataElement={<Empty description="No messages match the current filters." />}
+        noDataElement={emptyState}
         pagination={compact ? false : messagePagination}
         rowKey="id"
-        scroll={{ x: 760 }}
+        scroll={displayedRecords.length ? { x: 760 } : undefined}
         size={compact ? "small" : "default"}
       />
     </>
