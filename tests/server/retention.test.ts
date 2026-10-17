@@ -5,26 +5,42 @@ import { createId } from "@/server/ids";
 import { retentionOptions, runRetention } from "@/server/services/retention";
 import type { ObjectStore } from "@/modules/config/object-store";
 
-const created: { messages: string[]; raw: string[]; inbound: string[]; callbacks: string[]; audits: string[] } = { messages: [], raw: [], inbound: [], callbacks: [], audits: [] };
+const created: { messages: string[]; files: string[]; raw: string[]; inbound: string[]; callbacks: string[]; audits: string[] } = { messages: [], files: [], raw: [], inbound: [], callbacks: [], audits: [] };
 const store = (): ObjectStore => ({ put: vi.fn(), get: vi.fn(), delete: vi.fn().mockResolvedValue(undefined) });
 const options = (apply: boolean) => ({ apply, batchSize: 100, days: { messages: 3650, rawEvents: 3650, inbound: 3650, callbacks: 3650, auditDetails: 3650 } });
 
 async function message(status: string) {
   const id = createId("retention");
   created.messages.push(id);
-  await query(`INSERT INTO messages(id,product_id,service_id,sender_profile_id,sender_snapshot,idempotency_key,payload_hash,recipient_count,subject,text_body,message_category,accepted_at)
-    VALUES ($1,'prd_atlas','svc_atlas_auth','sp_atlas_security','{"fromEmail":"security@mail.atlas.test"}',$1,'original-fingerprint',1,'Private subject','Private body','security',now()-interval '4000 days')`, [id]);
-  await query("INSERT INTO deliveries(id,message_id,recipient_email,lifecycle_status) VALUES ($1,$1,'retention@example.test',$2)", [id, status]);
+  await query(`INSERT INTO messages(id,product_id,service_id,sending_domain_id,sender_snapshot,idempotency_key,payload_hash,recipient_count,subject,text_body,message_category,accepted_at)
+    VALUES ($1,'prd_atlas','svc_atlas_auth','sd_atlas','{"fromEmail":"security@mail.atlas.test"}',$1,'original-fingerprint',1,'Private subject','Private body','security',now()-interval '4000 days')`, [id]);
+  await query("INSERT INTO deliveries(id,message_id,recipient_email,recipient_role,lifecycle_status) VALUES ($1,$1,'retention@example.test','to',$2)", [id, status]);
   return id;
 }
 
 afterEach(async () => {
   for (const id of created.callbacks.splice(0)) await query("DELETE FROM callback_deliveries WHERE id=$1", [id]);
   for (const id of created.messages.splice(0)) await query("DELETE FROM messages WHERE id=$1", [id]);
+  for (const id of created.files.splice(0)) await query("DELETE FROM outbound_files WHERE id=$1", [id]);
   for (const id of created.inbound.splice(0)) await query("DELETE FROM inbound_messages WHERE id=$1", [id]);
   for (const id of created.raw.splice(0)) await query("DELETE FROM raw_provider_events WHERE id=$1", [id]);
   for (const id of created.audits.splice(0)) await query("DELETE FROM audit_logs WHERE id=$1", [id]);
 });
+
+async function outboundFile() {
+  const id = createId("retentionfile");
+  created.files.push(id);
+  await query(`INSERT INTO outbound_files(id,service_id,file_name,content_type,size_bytes,sha256,object_key,created_at)
+    VALUES ($1,'svc_atlas_auth','private.txt','text/plain',12,'retained-hash',$2,now()-interval '4000 days')`, [id, `retention/${id}`]);
+  return { id, key: `retention/${id}` };
+}
+
+async function submission(messageId: string) {
+  const id = createId("retentionsub");
+  await query("INSERT INTO submissions(id,message_id,status) VALUES ($1,$2,'failed')", [id, messageId]);
+  await query("INSERT INTO submission_deliveries(submission_id,delivery_id) VALUES ($1,$2)", [id, messageId]);
+  return id;
+}
 
 describe("bounded content retention", () => {
   it("defaults to dry-run and disables cleanup without an explicit deployment policy", () => {
@@ -49,6 +65,93 @@ describe("bounded content retention", () => {
     expect(row.content_purged_at).toBeInstanceOf(Date);
     expect((await query("SELECT id FROM messages WHERE id=ANY($1::text[]) AND content_purged_at IS NULL", [[unknown, queued]])).rowCount).toBe(2);
     expect((await runRetention(options(true), fakeStore)).messages.applied).toBe(0);
+  });
+
+  it("preserves correlation metadata and structured errors when deleting sensitive bodies", async () => {
+    const id = await message("failed");
+    const error = { code: "MAILBOX_NOT_FOUND", message: "Mailbox unavailable", stage: "recipient_delivery" };
+    await query("UPDATE messages SET metadata=$2,provider_tags=$3 WHERE id=$1", [id, { orderId: "123" }, { purpose: "receipt" }]);
+    await query("UPDATE deliveries SET last_error=$2 WHERE id=$1", [id, error]);
+    await runRetention(options(true), store());
+    expect((await query("SELECT metadata,provider_tags,subject,text_body FROM messages WHERE id=$1", [id])).rows[0]).toEqual({ metadata: { orderId: "123" }, provider_tags: { purpose: "receipt" }, subject: "", text_body: "" });
+    expect((await query("SELECT last_error FROM deliveries WHERE id=$1", [id])).rows[0].last_error).toEqual(error);
+  });
+
+  it("keeps a shared attachment until every referencing message has expired", async () => {
+    const file = await outboundFile();
+    const done = await message("delivered");
+    const unknown = await message("unknown");
+    for (const id of [done, unknown]) await query("UPDATE messages SET attachment_snapshot=$2 WHERE id=$1", [id, JSON.stringify([{ fileId: file.id, objectKey: file.key, fileName: "private.txt" }])]);
+    const storage = store();
+    const first = await runRetention(options(true), storage);
+    expect(first.messages.applied).toBe(1);
+    expect(first.outboundFiles.applied).toBe(0);
+    expect(storage.delete).not.toHaveBeenCalled();
+    await query("UPDATE deliveries SET lifecycle_status='delivered' WHERE id=$1", [unknown]);
+    const second = await runRetention(options(true), storage);
+    expect(second.messages.applied).toBe(1);
+    expect(second.outboundFiles.applied).toBe(1);
+    expect(storage.delete).toHaveBeenCalledExactlyOnceWith(file.key);
+    expect((await query("SELECT sha256,file_name,content_purged_at FROM outbound_files WHERE id=$1", [file.id])).rows[0]).toMatchObject({ sha256: "retained-hash", file_name: "private.txt", content_purged_at: expect.any(Date) });
+    expect((await query("SELECT attachment_snapshot FROM messages WHERE id=$1", [done])).rows[0].attachment_snapshot).toEqual([{ fileId: file.id, objectKey: file.key, fileName: "private.txt" }]);
+  });
+
+  it("retries expired outbound-file deletion without losing metadata or the purge reference", async () => {
+    const file = await outboundFile();
+    const storage = store();
+    vi.mocked(storage.delete).mockRejectedValueOnce(new Error("storage unavailable"));
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect((await runRetention(options(false), storage)).outboundFiles.eligible).toBe(1);
+      expect(storage.delete).not.toHaveBeenCalled();
+      expect((await runRetention(options(true), storage)).outboundFiles.failed).toBe(1);
+      expect((await query("SELECT object_key,content_purged_at FROM outbound_files WHERE id=$1", [file.id])).rows[0]).toEqual({ object_key: file.key, content_purged_at: null });
+      expect((await runRetention(options(true), storage)).outboundFiles.applied).toBe(1);
+      expect((await runRetention(options(true), storage)).outboundFiles.applied).toBe(0);
+      expect(storage.delete).toHaveBeenCalledTimes(2);
+    } finally { log.mockRestore(); }
+  });
+
+  it("protects unresolved submission attempts even when recipient projections are terminal", async () => {
+    const id = await message("failed");
+    const sid = await submission(id);
+    await query(`INSERT INTO submission_attempts(id,submission_id,attempt_number,provider_account_id,provider_identity_id,routing_snapshot,request_fingerprint,status)
+      VALUES ($1,$2,1,'pa_mock','pi_atlas_mock','{}','fingerprint','unknown')`, [createId("retentionattempt"), sid]);
+    expect((await runRetention(options(true), store())).messages.applied).toBe(0);
+  });
+
+  it("retains current unresolved recipients even after another recipient authorized a retry", async () => {
+    const id = await message("failed");
+    const sid = await submission(id);
+    const attemptId = createId("retentionattempt");
+    await query(`INSERT INTO submission_attempts(id,submission_id,attempt_number,provider_account_id,provider_identity_id,routing_snapshot,request_fingerprint,status,retry_authorized_at,retry_authorized_by)
+      VALUES ($1,$2,1,'pa_mock','pi_atlas_mock','{}','fingerprint','unknown',now(),'operator')`, [attemptId, sid]);
+    await query("UPDATE deliveries SET current_attempt_id=$2,current_submission_id=$3,compliance_status='suppressed' WHERE id=$1", [id, attemptId, sid]);
+    expect((await runRetention(options(true), store())).messages.applied).toBe(0);
+    // Audit authorization records risk acceptance; uncertainty only stops being
+    // relevant to retained content once no current recipient uses that attempt.
+    await query("UPDATE deliveries SET current_attempt_id=NULL,current_submission_id=NULL WHERE id=$1", [id]);
+    expect((await runRetention(options(true), store())).messages.applied).toBe(1);
+    expect((await query("SELECT status,outcome_determinate FROM submission_attempts WHERE id=$1", [attemptId])).rows[0]).toEqual({ status: "unknown", outcome_determinate: false });
+  });
+
+  it("protects content and raw receipts while a submission callback still requires replay", async () => {
+    const id = await message("failed");
+    const sid = await submission(id);
+    const rawId = createId("retentionraw"); created.raw.push(rawId);
+    await query(`INSERT INTO raw_provider_events(id,provider_account_id,webhook_endpoint_id,native_type,signature_valid,replay_valid,raw_body,headers,received_at,processed_at)
+      VALUES ($1,'pa_mock','pwe_mock','failed',true,true,$2,'{}',now()-interval '4000 days',now()-interval '4000 days')`, [rawId, Buffer.from("raw")]);
+    const event = createId("retentionsev");
+    await query("INSERT INTO submission_events(id,submission_id,raw_provider_event_id,event_type,source_key,occurred_at,canonical_payload) VALUES ($1,$2,$3,'failed',$1,now(),'{}')", [event, sid, rawId]);
+    const callback = createId("retentioncb"); created.callbacks.push(callback);
+    await query("INSERT INTO callback_deliveries(id,endpoint_id,submission_event_id,event_type,payload,status) VALUES ($1,'cb_atlas_local',$2,'email.failed','{}','dead_letter')", [callback, event]);
+    const first = await runRetention(options(true), store());
+    expect(first.messages.applied).toBe(0);
+    expect(first.rawEvents.applied).toBe(0);
+    await query("UPDATE callback_deliveries SET status='delivered',delivered_at=now() WHERE id=$1", [callback]);
+    const second = await runRetention(options(true), store());
+    expect(second.messages.applied).toBe(1);
+    expect(second.rawEvents.applied).toBe(1);
   });
 
   it("keeps terminal message content while a callback still requires delivery or replay", async () => {
@@ -133,6 +236,19 @@ describe("object-store / database handoff cleanup", () => {
     const id = createId("cleanupraw"); orphanRawIds.push(id);
     await query(`INSERT INTO raw_provider_events(id,provider_account_id,webhook_endpoint_id,native_type,signature_valid,replay_valid,headers,raw_object_key,verification)
       VALUES ($1,'pa_mock','pwe_mock','delivered',true,true,'{}',$2,$3)`, [id, body, { objectKey: receipt }]);
+    const storage = store();
+    expect((await pass(true, storage)).objectDeletions.applied).toBe(2);
+    expect(storage.delete).not.toHaveBeenCalled();
+  });
+
+  it("never treats retained outbound file bytes or active message snapshots as orphans", async () => {
+    const file = await outboundFile();
+    objectKeys.push(file.key);
+    await registerObjectUpload(file.key); await due(file.key);
+    const snapshotKey = objectKey();
+    await registerObjectUpload(snapshotKey); await due(snapshotKey);
+    const id = await message("unknown");
+    await query("UPDATE messages SET attachment_snapshot=$2 WHERE id=$1", [id, JSON.stringify([{ fileId: "snapshot-only", objectKey: snapshotKey }])]);
     const storage = store();
     expect((await pass(true, storage)).objectDeletions.applied).toBe(2);
     expect(storage.delete).not.toHaveBeenCalled();

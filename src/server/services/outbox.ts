@@ -1,3 +1,4 @@
+import { recordWorkflowFailure } from "@/modules/core/routing/engine";
 import type { JobsOptions } from "bullmq";
 import { db, query } from "@/server/database";
 import { PROVIDER_EVENT_RECEIVED } from "@/server/outbox-events";
@@ -7,10 +8,10 @@ export type OutboxRow = { id: string; event_type: string; payload: Record<string
 
 export function queueForEvent(eventType: string): PostgresQueue {
   const all = queues();
-  if (eventType === "delivery.requested") return all.delivery;
-  if (eventType === PROVIDER_EVENT_RECEIVED || eventType === "delivery.suppressed") return all.events;
+  if (eventType === "submission.requested") return all.delivery;
+  if (eventType === PROVIDER_EVENT_RECEIVED) return all.events;
   if (eventType === "callback.requested") return all.callbacks;
-  if (eventType === "delivery.reconcile") return all.reconciliation;
+  if (eventType === "submission.reconcile") return all.reconciliation;
   throw new Error(`Unsupported outbox event type: ${eventType}`);
 }
 
@@ -40,11 +41,14 @@ export async function dispatchOutboxBatch(limit = 100) {
         );
         published++;
       } catch (error) {
-        await client.query(
+        const failed = await client.query<{ status: string }>(
           `UPDATE outbox_events SET attempt_count=attempt_count+1,
            available_at=now()+LEAST(attempt_count+1,30)*interval '2 seconds',
-           status=CASE WHEN attempt_count+1>=20 THEN 'failed' ELSE 'pending' END WHERE id=$1`, [event.id],
+           status=CASE WHEN attempt_count+1>=20 THEN 'failed' ELSE 'pending' END WHERE id=$1 RETURNING status`, [event.id],
         );
+        if (failed.rows[0]?.status === "failed" && event.event_type === "submission.requested") {
+          await recordWorkflowFailure(event.payload.submissionId, error instanceof Error ? error.message : "Queue publication failed");
+        }
         console.error("Failed to publish outbox event", event.id, error);
       }
     }
@@ -62,6 +66,8 @@ export async function outboxBacklog() {
 }
 
 export async function markOutboxJobFailed(jobId: string, error: Error) {
-  await query("UPDATE outbox_events SET status='failed' WHERE id=$1 AND status='published'", [jobId]);
+  const failed = await query<{ event_type: string; payload: Record<string, string> }>("UPDATE outbox_events SET status='failed' WHERE id=$1 AND status='published' RETURNING event_type,payload", [jobId]);
+  const event = failed.rows[0];
+  if (event?.event_type === "submission.requested") await recordWorkflowFailure(event.payload.submissionId, error.message);
   console.error("Task exhausted queue retries", jobId, error.message);
 }

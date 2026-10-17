@@ -12,7 +12,8 @@ export function GET(request: Request) {
       events: `${origin}/api/v1/events`,
       inboundMessages: `${origin}/api/v1/inbound-messages`,
       suppressions: `${origin}/api/v1/suppressions`,
-      senders: `${origin}/api/v1/senders`,
+      files: `${origin}/api/v1/files`,
+      requests: `${origin}/api/v1/requests/{requestId}`,
       capabilities: `${origin}/api/v1/capabilities`,
     },
   });

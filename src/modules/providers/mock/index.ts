@@ -1,5 +1,5 @@
 import { CanonicalProviderError, type ProviderModule } from "../contracts";
-import { event } from "../shared";
+import { event, nativeMailCapabilities, assertMessageCapabilities, messageRecipients, requestFingerprint } from "../shared";
 
 export const mockModule: ProviderModule = {
   descriptor: {
@@ -11,19 +11,24 @@ export const mockModule: ProviderModule = {
       domainManagement: true,
       webhookSecurity: "Shared token",
       eventTypes: ["accepted", "delivered", "bounced", "complained", "inbound.received"],
-      attachments: false,
+      ...nativeMailCapabilities,
+      envelopeRecipients: true,
+      requiresTo: false,
+      maxRecipients: 1000,
+      maxMessageBytes: 40_000_000,
       scheduling: false
     }
   },
   sender: {
     async send(message, context) {
+      assertMessageCapabilities(message, mockModule.descriptor.capabilities);
       if (context.config.type !== "mock") throw new Error("Invalid mock configuration");
-      if (message.to.email.includes("unknown") || context.config.behavior === "unknown") return {
+      if (messageRecipients(message).some(a => a.email.includes("unknown")) || context.config.behavior === "unknown") return {
         outcome: "unknown",
         reason: "Simulated response loss"
       };
-      if (message.to.email.includes("fail")) throw new CanonicalProviderError("Simulated provider rejection", "provider", "mock_rejected", "not_accepted", false);
-      return { outcome: "accepted", externalMessageId: `mock_${crypto.randomUUID()}` };
+      if (messageRecipients(message).some(a => a.email.includes("fail"))) throw new CanonicalProviderError("Simulated provider rejection", "provider", "PROVIDER_REJECTED", "not_accepted", false, { providerCode: "mock_rejected" });
+      return { outcome: "accepted", externalMessageId: `mock_${context.idempotencyKey ? requestFingerprint([context.accountId, context.idempotencyKey]) : crypto.randomUUID()}` };
     }
   },
   webhook: {

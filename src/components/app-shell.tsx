@@ -50,7 +50,7 @@ const navigation = [
   },
   {
     label: "Delivery",
-    items: [{ href: "/senders", label: "Sender Profiles", icon: IconSend }],
+    items: [{ href: "/senders", label: "Senders", icon: IconSend }],
   },
   {
     label: "Infrastructure",

@@ -6,7 +6,7 @@ import styles from "./dashboard.module.css";
 
 export type SetupChain = {
   id:string; product:string; service:string; category:string; sender:string;
-  credential:boolean;provider:boolean;identity:boolean;route:boolean;tested:boolean;observable:boolean;event_seen:boolean;
+  grant:boolean;credential:boolean;provider:boolean;identity:boolean;route:boolean;tested:boolean;observable:boolean;event_seen:boolean;
 };
 export type SetupState = { chains: SetupChain[] };
 
@@ -15,6 +15,7 @@ export function SetupChecklist({state}:{state:SetupState}) {
   const chain=state.chains.find(row=>row.id===selected) ?? state.chains[0];
   const steps = [
     {title:"Service credential",done:chain?.credential,href:"/api-keys"},
+    {title:"Sender authorization",done:chain?.grant,href:"/senders"},
     {title:"Tested provider",done:chain?.provider,href:"/providers"},
     {title:"Verified domain",done:chain?.identity,href:"/domains"},
     {title:"Matching route",done:chain?.route,href:"/routing"},
@@ -22,12 +23,12 @@ export function SetupChecklist({state}:{state:SetupState}) {
     {title:"Verified event received",done:chain?.observable && chain?.event_seen,href:"/events"}
   ];
   const next=steps.find(step=>!step.done);
-  const ready=Boolean(chain?.credential && chain.provider && chain.identity && chain.route);
+  const ready=Boolean(chain?.credential && chain.grant && chain.provider && chain.identity && chain.route);
   const completed=steps.filter(step=>step.done).length;
   return <Card title="Delivery readiness" extra={<Tag color={ready ? "green":"orange"}>{ready ? "Ready to send":"Setup required"}</Tag>}>
     {chain ? <Space direction="vertical" size="medium" style={{width:"100%"}}>
       <div className={styles.readiness}>
-        <Select aria-label="Service and sender readiness" value={chain.id} onChange={setSelected} options={state.chains.map(row=>({value:row.id,label:`${row.product} / ${row.service} / ${row.category} / ${row.sender}`}))}/>
+        <Select aria-label="Service and domain authorization readiness" value={chain.id} onChange={setSelected} options={state.chains.map(row=>({value:row.id,label:`${row.product} / ${row.service} / ${row.category} / ${row.sender}`}))}/>
         {next ? <Button href={next.href} type="primary">{next.title}</Button> : <Typography.Text type="success">All checks complete</Typography.Text>}
       </div>
       <Collapse bordered={false} style={{width:"100%"}}>
@@ -38,8 +39,8 @@ export function SetupChecklist({state}:{state:SetupState}) {
         </Collapse.Item>
       </Collapse>
     </Space> : <Space direction="vertical" size="medium" style={{width:"100%"}}>
-      <Alert type="info" content="Connect a provider, verify a domain, then create a service credential and sender to start sending."/>
-      <Space wrap><Button href="/providers" type="primary">Connect provider</Button><Button href="/domains">Domains</Button><Button href="/api-keys">Service credentials</Button><Button href="/senders">Senders</Button></Space>
+      <Alert type="info" content="Connect a provider, verify a domain, then create a service credential and authorize its sender domain to start sending."/>
+      <Space wrap><Button href="/providers" type="primary">Connect provider</Button><Button href="/domains">Domains</Button><Button href="/api-keys">Service credentials</Button><Button href="/senders">Sender authorization</Button></Space>
     </Space>}
   </Card>
 }

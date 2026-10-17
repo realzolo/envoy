@@ -1,7 +1,7 @@
 import { Resend } from "resend";
 import { Webhook } from "svix";
 import { type CanonicalEventType, type ManagedIdentityStatus, type ProviderModule } from "../contracts";
-import { accepted, checkedJson, submitRequest, eventDate, event, header, stableEventId } from "../shared";
+import { nativeMailCapabilities, assertMessageCapabilities, formatAddress, messageHeaders, safeDiagnostic, accepted, checkedJson, submitRequest, eventDate, event, header, stableEventId } from "../shared";
 
 function client(secret: { type: string; apiKey?: string }) {
   if (secret.type !== "resend" || !secret.apiKey) throw new Error("Invalid Resend credential");
@@ -33,24 +33,31 @@ export const resendModule: ProviderModule = {
       domainManagement: true,
       webhookSecurity: "Svix HMAC",
       eventTypes: Object.keys(eventMap),
-      attachments: false,
+      ...nativeMailCapabilities,
+      maxMessageBytes: 40_000_000,
+      tagValuePattern: "^[A-Za-z0-9_-]{0,256}$",
       scheduling: false
     }
   },
   sender: {
     async send(message, context) {
+      assertMessageCapabilities(message, resendModule.descriptor.capabilities);
       if (context.config.type !== "resend") throw new Error("Invalid Resend configuration");
       if (context.secret.type !== "resend") throw new Error("Invalid Resend credential");
       const response = await submitRequest("https://api.resend.com/emails", {
         method: "POST",
         headers: { authorization: `Bearer ${context.secret.apiKey}`, "content-type": "application/json", ...(context.idempotencyKey ? { "idempotency-key": context.idempotencyKey } : {}) },
         body: JSON.stringify({
-          from: `${message.from.name} <${message.from.email}>`,
-          to: message.to.name ? `${message.to.name} <${message.to.email}>` : message.to.email,
-          reply_to: message.replyTo,
+          from: formatAddress(message.from),
+          to: message.to.map(formatAddress),
+          cc: message.cc.length ? message.cc.map(formatAddress) : undefined,
+          bcc: message.bcc.length ? message.bcc.map(formatAddress) : undefined,
+          reply_to: message.replyTo.length ? message.replyTo.map(formatAddress) : undefined,
           subject: message.subject,
           html: message.html,
           text: message.text,
+          headers: messageHeaders(message),
+          attachments: message.attachments.map(a => ({ filename: a.fileName, content_type: a.contentType, content: Buffer.from(a.content).toString("base64"), ...(a.disposition === "inline" ? { content_id: a.contentId } : {}) })),
           tags: Object.entries(message.tags).map(([name, value]) => ({ name, value }))
         })
       });
@@ -88,18 +95,21 @@ export const resendModule: ProviderModule = {
       if (!type) return [];
       const data = payload.data ?? {};
       const bounce = data.bounce as { type?: string; message?: string } | undefined;
+      const failed = data.failed as { reason?: string } | undefined;
       return [event({
         id: verified.providerEventId ?? stableEventId(payload),
         externalMessageId: typeof data.email_id === "string" ? data.email_id : undefined,
         type,
         occurredAt: eventDate(payload.created_at),
-        recipient: Array.isArray(data.to) ? String(data.to[0]) : undefined,
+        // Current Resend events contain exactly one recipient in `to`.
+        // An unexpected multi-address payload must retain message scope.
+        recipient: typeof data.recipient === "string" ? data.recipient : Array.isArray(data.to) && data.to.length === 1 && typeof data.to[0] === "string" ? data.to[0] : undefined,
         bounce: type === "bounced" ? {
           classification: bounce?.type === "Permanent" ? "hard" : "soft",
           message: bounce?.message
         } : undefined,
         inboundReference: type === "inbound.received" ? String(data.email_id) : undefined,
-        metadata: {}
+        metadata: failed?.reason ? { reason: safeDiagnostic(failed.reason), providerCode: failed.reason } : {}
       })];
     },
   },

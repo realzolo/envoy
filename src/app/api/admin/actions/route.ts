@@ -1,4 +1,4 @@
-import { MAX_REQUEST_BYTES } from "@/lib/contracts";
+import { createMessageSchema, MAX_REQUEST_BYTES } from "@/lib/contracts";
 import { BodyTooLargeError, readRequestBytes } from "@/server/request-body";
 import { z } from "zod";
 import { MessageValidationError, IdempotencyConflictError, DuplicateRiskError } from "@/modules/core/message/service";
@@ -173,14 +173,21 @@ export async function POST(request: Request) {
         result = await actions.sendTestMessage({
           idempotencyKey: text(body, "idempotencyKey"),
           serviceId: text(body, "serviceId"),
-          recipient: text(body, "recipient"),
-          category: text(body, "category"),
-          senderProfile: typeof body.senderProfile === "string" && body.senderProfile ? body.senderProfile : undefined,
-          subject: text(body, "subject"),
-          html: typeof body.html === "string" && body.html ? body.html : undefined,
-          text: typeof body.text === "string" && body.text ? body.text : undefined
+          message: createMessageSchema.parse(body.message),
         }, session.email);
         status = 202;
+        break;
+      case"grant.create":
+        result = { id: await actions.createSenderGrant({
+          productId: text(body, "productId"),
+          serviceId: typeof body.serviceId === "string" ? body.serviceId : undefined,
+          domainId: text(body, "domainId"),
+          fromLocalPart: typeof body.fromLocalPart === "string" ? body.fromLocalPart : undefined,
+        }, session.email) };
+        status = 201;
+        break;
+      case"grant.toggle":
+        await actions.toggleSenderGrant(text(body, "id"), body.enabled === true, session.email);
         break;
       case"credential.create":
         result = await actions.createServiceCredential({

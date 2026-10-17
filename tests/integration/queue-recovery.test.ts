@@ -2,10 +2,10 @@ import { fork } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { Client } from "pg";
 import { runMigrations, Worker, createPostgresBackend, type PostgresQueueBackend } from "bullmq";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { db, query } from "@/server/database";
 import { closeQueues, createQueueWorker, DELIVERY_QUEUE, queues } from "@/server/queues";
-import { dispatchOutboxBatch } from "@/server/services/outbox";
+import { dispatchOutboxBatch, markOutboxJobFailed } from "@/server/services/outbox";
 import { retryOutbox } from "@/modules/admin/actions";
 import { recoverWorkBatch } from "@/server/services/recovery";
 
@@ -32,8 +32,8 @@ beforeAll(async () => {
       INSERT INTO provider_webhook_endpoints(id,provider_account_id,opaque_token) VALUES ('webhook','provider','queue-test');
       INSERT INTO provider_identities(id,sending_domain_id,provider_account_id,status) VALUES ('identity','domain','provider','verified');
       INSERT INTO sender_profiles(id,product_id,sending_domain_id,name,from_name,from_local_part) VALUES ('sender','p','domain','queue-test','Queue','test');
-      INSERT INTO messages(id,product_id,service_id,sender_profile_id,sender_snapshot,idempotency_key,payload_hash,recipient_count,subject,text_body,message_category)
-      VALUES ('m','p','s','sender','{}','queue-test','test',1,'Queue','test','transactional');`);
+      INSERT INTO messages(id,product_id,service_id,sending_domain_id,sender_snapshot,idempotency_key,payload_hash,recipient_count,subject,text_body,message_category)
+      VALUES ('m','p','s','domain','{}','queue-test','test',1,'Queue','test','transactional');`);
   } finally { client.release(); }
 }, 30_000);
 
@@ -131,8 +131,8 @@ describe("PostgreSQL queue / transactional outbox handoff", () => {
 
   it("deduplicates the add-success / published-update crash gap", async () => {
     await query(`INSERT INTO outbox_events(id,aggregate_type,aggregate_id,event_type,payload)
-      VALUES ('crash-gap','delivery','not-a-real-delivery','delivery.requested','{"deliveryId":"not-a-real-delivery"}')`);
-    await queues().delivery.add("delivery.requested", { deliveryId: "not-a-real-delivery" }, { jobId: "crash-gap" });
+      VALUES ('crash-gap','submission','not-a-real-delivery','submission.requested','{"submissionId":"not-a-real-delivery"}')`);
+    await queues().delivery.add("submission.requested", { submissionId: "not-a-real-delivery" }, { jobId: "crash-gap" });
     expect(await dispatchOutboxBatch()).toBe(1);
     expect(await queues().delivery.getJobCountByTypes("wait", "active", "completed")).toBe(1);
     const outbox = await query<{ status: string }>("SELECT status FROM outbox_events WHERE id='crash-gap'");
@@ -140,14 +140,17 @@ describe("PostgreSQL queue / transactional outbox handoff", () => {
   });
 
   it("repairs missing published jobs from business state and does not duplicate future work", async () => {
-    await query(`INSERT INTO deliveries(id,message_id,recipient_email,updated_at) VALUES
-      ('missing','m','missing@queue.test',now()-interval '5 minutes'),
-      ('future','m','future@queue.test',now()-interval '5 minutes'),
-      ('accepted','m','accepted@queue.test',now()-interval '5 minutes');
+    await query(`INSERT INTO deliveries(id,message_id,recipient_email,recipient_role,updated_at) VALUES
+      ('missing','m','missing@queue.test','to',now()-interval '5 minutes'),
+      ('future','m','future@queue.test','to',now()-interval '5 minutes'),
+      ('accepted','m','accepted@queue.test','to',now()-interval '5 minutes');
       UPDATE deliveries SET lifecycle_status='accepted' WHERE id='accepted';
+      INSERT INTO submissions(id,message_id,status,updated_at) VALUES ('missing','m','queued',now()-interval '5 minutes'),('future','m','queued',now()-interval '5 minutes'),('accepted','m','accepted',now()-interval '5 minutes');
+      INSERT INTO submission_deliveries(submission_id,delivery_id) VALUES ('missing','missing'),('future','future'),('accepted','accepted');
+      UPDATE deliveries SET current_submission_id=id WHERE id IN ('missing','future','accepted');
       INSERT INTO outbox_events(id,aggregate_type,aggregate_id,event_type,payload,status,created_at,available_at,published_at) VALUES
-      ('missing-job','delivery','missing','delivery.requested','{"deliveryId":"missing"}','published',now()-interval '5 minutes',now()-interval '5 minutes',now()-interval '5 minutes'),
-      ('future-job','delivery','future','delivery.requested','{"deliveryId":"future"}','pending',now()-interval '5 minutes',now()+interval '1 hour',NULL)`);
+      ('missing-job','submission','missing','submission.requested','{"submissionId":"missing"}','published',now()-interval '5 minutes',now()-interval '5 minutes',now()-interval '5 minutes'),
+      ('future-job','submission','future','submission.requested','{"submissionId":"future"}','pending',now()-interval '5 minutes',now()+interval '1 hour',NULL)`);
     expect(await recoverWorkBatch()).toBe(1);
     expect(await recoverWorkBatch()).toBe(0);
     const rows = await query<{ aggregate_id: string; count: string }>("SELECT aggregate_id,count(*) FROM outbox_events WHERE aggregate_id IN ('missing','future','accepted') GROUP BY aggregate_id");
@@ -155,9 +158,12 @@ describe("PostgreSQL queue / transactional outbox handoff", () => {
   });
 
   it("leaves exhausted work visible rather than generating an infinite recovery loop", async () => {
-    await query(`INSERT INTO deliveries(id,message_id,recipient_email,updated_at) VALUES ('poison','m','poison@queue.test',now()-interval '5 minutes');
+    await query(`INSERT INTO deliveries(id,message_id,recipient_email,recipient_role,updated_at) VALUES ('poison','m','poison@queue.test','to',now()-interval '5 minutes');
+      INSERT INTO submissions(id,message_id,updated_at) VALUES ('poison','m',now()-interval '5 minutes');
+      INSERT INTO submission_deliveries(submission_id,delivery_id) VALUES ('poison','poison');
+      UPDATE deliveries SET current_submission_id='poison' WHERE id='poison';
       INSERT INTO outbox_events(id,aggregate_type,aggregate_id,event_type,payload,status,created_at)
-      VALUES ('poison-job','delivery','poison','delivery.requested','{"deliveryId":"poison"}','failed',now()-interval '5 minutes')`);
+      VALUES ('poison-job','submission','poison','submission.requested','{"submissionId":"poison"}','failed',now()-interval '5 minutes')`);
     expect(await recoverWorkBatch()).toBe(0);
     const rows = await query<{ count: string }>("SELECT count(*) FROM outbox_events WHERE aggregate_id='poison'");
     expect(Number(rows.rows[0].count)).toBe(1);
@@ -171,7 +177,7 @@ describe("PostgreSQL queue / transactional outbox handoff", () => {
     });
     const running = failing.run();
     try {
-      await queues().delivery.add("delivery.requested", { deliveryId: "poison" }, { jobId: "poison-job", attempts: 1 });
+      await queues().delivery.add("submission.requested", { submissionId: "poison" }, { jobId: "poison-job", attempts: 1 });
       await failed;
     } finally { await failing.close(); await running; }
     expect(await (await queues().delivery.getJob("poison-job"))!.getState()).toBe("failed");
@@ -194,26 +200,55 @@ describe("PostgreSQL queue / transactional outbox handoff", () => {
     expect(await (await queues().delivery.getJob("poison-job"))!.getState()).toBe("completed");
   }, 15_000);
 
+  it("records public queue failure diagnostics for both exhausted publication and worker processing", async () => {
+    await query(`INSERT INTO deliveries(id,message_id,recipient_email,recipient_role) VALUES
+      ('workflow-publish','m','publish@queue.test','to'),('workflow-worker','m','worker@queue.test','cc');
+      INSERT INTO submissions(id,message_id) VALUES ('workflow-publish','m'),('workflow-worker','m');
+      INSERT INTO submission_deliveries(submission_id,delivery_id) VALUES ('workflow-publish','workflow-publish'),('workflow-worker','workflow-worker');
+      UPDATE deliveries SET current_submission_id=id WHERE id IN ('workflow-publish','workflow-worker');
+      INSERT INTO outbox_events(id,aggregate_type,aggregate_id,event_type,payload,status,attempt_count) VALUES
+      ('workflow-publish-job','submission','workflow-publish','submission.requested','{"submissionId":"workflow-publish"}','pending',19),
+      ('workflow-worker-job','submission','workflow-worker','submission.requested','{"submissionId":"workflow-worker"}','published',1)`);
+    const queue = queues().delivery;
+    const original = queue.add.bind(queue);
+    const add = vi.spyOn(queue, "add").mockImplementation((name,data,options) => options?.jobId === "workflow-publish-job" ? Promise.reject(new Error("Queue dependency unavailable")) : original(name,data,options));
+    const logging = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await dispatchOutboxBatch();
+      await markOutboxJobFailed("workflow-worker-job", new Error("Worker dependency unavailable"));
+    } finally { add.mockRestore(); logging.mockRestore(); }
+    const rows = await query<{ id: string; lifecycle_status: string; last_error: { code: string; stage: string; retryDecision: { action: string } } }>("SELECT id,lifecycle_status,last_error FROM deliveries WHERE id IN ('workflow-publish','workflow-worker') ORDER BY id");
+    expect(rows.rows).toHaveLength(2);
+    for (const row of rows.rows) expect(row).toMatchObject({ lifecycle_status: "deferred", last_error: { code: "WORKFLOW_EXHAUSTED", stage: "queue", retryDecision: { action: "manual_review" } } });
+    expect((await query("SELECT id FROM outbox_events WHERE id IN ('workflow-publish-job','workflow-worker-job') AND status='failed'")).rowCount).toBe(2);
+    expect((await query("SELECT id FROM submission_events WHERE submission_id IN ('workflow-publish','workflow-worker') AND canonical_payload#>>'{metadata,diagnostic,code}'='WORKFLOW_EXHAUSTED'")).rowCount).toBe(2);
+  });
+
   it("reopens a verified raw receipt for an orphaned scanning inbound message", async () => {
     await query(`INSERT INTO raw_provider_events(id,provider_account_id,webhook_endpoint_id,native_type,signature_valid,replay_valid,headers,verification,received_at,processed_at)
       VALUES ('orphan-raw','provider','webhook','inbound',true,true,'{}','{}',now()-interval '5 minutes',now()-interval '4 minutes');
       INSERT INTO inbound_messages(id,provider_account_id,raw_provider_event_id,from_email,to_emails,subject,status,processing_deadline_at,received_at)
       VALUES ('orphan-inbound','provider','orphan-raw','sender@queue.test','{recipient@queue.test}','Orphan','scanning',now()-interval '3 minutes',now()-interval '5 minutes')`);
-    expect(await recoverWorkBatch()).toBe(1);
+    // A newly inserted earlier aggregate may require wrapping the bounded recovery cursor.
+    await recoverWorkBatch();
+    await recoverWorkBatch();
     expect((await query("SELECT id FROM raw_provider_events WHERE id='orphan-raw' AND processed_at IS NULL")).rowCount).toBe(1);
     expect((await query("SELECT id FROM outbox_events WHERE aggregate_id='orphan-raw' AND status='pending'")).rowCount).toBe(1);
   });
 
   it("closes exhausted final claims after a worker crashes before recording their result", async () => {
-    await query(`INSERT INTO deliveries(id,message_id,recipient_email,lifecycle_status) VALUES ('exhausted','m','exhausted@queue.test','unknown');
-      INSERT INTO delivery_attempts(id,delivery_id,attempt_number,provider_account_id,provider_identity_id,routing_snapshot,request_fingerprint,status,reconciliation_count,reconcile_after)
+    await query(`INSERT INTO deliveries(id,message_id,recipient_email,recipient_role,lifecycle_status) VALUES ('exhausted','m','exhausted@queue.test','to','unknown');
+      INSERT INTO submissions(id,message_id,status) VALUES ('exhausted','m','unknown');
+      INSERT INTO submission_deliveries(submission_id,delivery_id) VALUES ('exhausted','exhausted');
+      INSERT INTO submission_attempts(id,submission_id,attempt_number,provider_account_id,provider_identity_id,routing_snapshot,request_fingerprint,status,reconciliation_count,reconcile_after)
       VALUES ('exhausted-attempt','exhausted',1,'provider','identity','{}','fingerprint','reconciling',12,now()-interval '1 minute');
-      UPDATE deliveries SET current_attempt_id='exhausted-attempt' WHERE id='exhausted';
+      UPDATE deliveries SET current_attempt_id='exhausted-attempt',current_submission_id='exhausted' WHERE id='exhausted';
+      UPDATE submissions SET current_attempt_id='exhausted-attempt' WHERE id='exhausted';
       INSERT INTO raw_provider_events(id,provider_account_id,webhook_endpoint_id,native_type,signature_valid,replay_valid,headers,received_at,processing_attempt_count,next_attempt_at)
       VALUES ('exhausted-raw','provider','webhook','delivered',true,true,'{}',now()-interval '5 minutes',20,now()-interval '1 minute')`);
     await recoverWorkBatch();
-    const attempt = (await query<{ status: string; reconcile_after: Date | null; error_code: string }>("SELECT status,reconcile_after,error_code FROM delivery_attempts WHERE id='exhausted-attempt'")).rows[0];
-    expect(attempt).toEqual({ status: "unknown", reconcile_after: null, error_code: "reconciliation_exhausted" });
+    const attempt = (await query<{ status: string; reconcile_after: Date | null; error_code: string }>("SELECT status,reconcile_after,error_code FROM submission_attempts WHERE id='exhausted-attempt'")).rows[0];
+    expect(attempt).toEqual({ status: "unknown", reconcile_after: null, error_code: "RECONCILIATION_EXHAUSTED" });
     expect((await query<{ processing_error: string }>("SELECT processing_error FROM raw_provider_events WHERE id='exhausted-raw'")).rows[0].processing_error).toContain("exhausted");
     expect((await query("SELECT id FROM outbox_events WHERE aggregate_id='exhausted-attempt'")).rowCount).toBe(0);
   });

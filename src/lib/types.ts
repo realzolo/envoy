@@ -15,6 +15,8 @@ export type EmailRecord = {
   messageId?: string;
   recipient: string;
   recipientName?: string;
+  recipientRole?: "to" | "cc" | "bcc";
+  lastError?: Record<string, unknown> | null;
   subject: string;
   category: string;
   product: string;

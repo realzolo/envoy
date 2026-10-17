@@ -1,6 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { CanonicalEventType, ProviderModule } from "../contracts";
-import { accepted, submitRequest, eventDate, stableEventId, checkedJson, decodeJson, event, header, type MultipartValue, parseMultipart } from "../shared";
+import { nativeMailCapabilities, assertMessageCapabilities, buildMimeMessage, messageRecipients, accepted, submitRequest, eventDate, stableEventId, checkedJson, decodeJson, event, header, type MultipartValue, parseMultipart } from "../shared";
 
 const eventMap: Record<string, CanonicalEventType> = {
   accepted: "accepted",
@@ -22,28 +22,30 @@ export const mailgunModule: ProviderModule = {
       domainManagement: false,
       webhookSecurity: "Timestamp token HMAC",
       eventTypes: Object.keys(eventMap),
-      attachments: false,
+      ...nativeMailCapabilities,
+      envelopeRecipients: true,
+      requiresTo: false,
+      maxRecipients: 1000,
+      maxMessageBytes: 25_000_000,
       scheduling: false
     }
   },
   sender: {
     async send(message, context) {
+      assertMessageCapabilities(message, mailgunModule.descriptor.capabilities);
       if (context.config.type !== "mailgun" || context.secret.type !== "mailgun") throw new Error("Invalid Mailgun configuration");
       const form = new FormData();
-      form.set("from", `${message.from.name} <${message.from.email}>`);
-      form.set("to", message.to.name ? `${message.to.name} <${message.to.email}>` : message.to.email);
-      form.set("subject", message.subject);
-      form.set("text", message.text);
-      form.set("html", message.html);
-      if (message.replyTo) form.set("h:Reply-To", message.replyTo);
+      for (const recipient of messageRecipients(message)) form.append("to", recipient.email);
+      form.set("message", new Blob([Buffer.from(buildMimeMessage(message))], { type: "message/rfc822" }), "message.eml");
+      for (const [key, value] of Object.entries(message.tags)) form.set(`v:${key}`, value);
       const host = context.config.region === "eu" ? "https://api.eu.mailgun.net" : "https://api.mailgun.net";
-      const response = await submitRequest(`${host}/v3/${context.config.sendingDomain}/messages`, {
+      const response = await submitRequest(`${host}/v3/${context.config.sendingDomain}/messages.mime`, {
         method: "POST",
         headers: { authorization: `Basic ${Buffer.from(`api:${context.secret.apiKey}`).toString("base64")}` },
         body: form
       });
       const body = await checkedJson(response);
-      return accepted(body.id, body);
+      return accepted(body.id);
     }
   },
   webhook: {

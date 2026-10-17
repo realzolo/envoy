@@ -11,6 +11,7 @@ export const GET = serviceRoute(async (request, identity) => {
     limit: page.limit,
     cursor: page.cursor,
     deliveryId: page.url.searchParams.get("deliveryId"),
+    messageId: page.url.searchParams.get("messageId"),
     type,
   }));
 });

@@ -29,7 +29,9 @@ export async function cleanupOrphanObjects(client: PoolClient, apply: boolean, l
       const referenced = await client.query<{ referenced: boolean }>(`SELECT
         EXISTS(SELECT 1 FROM raw_provider_events WHERE raw_object_key=$1 OR verification->>'objectKey'=$1)
         OR EXISTS(SELECT 1 FROM inbound_messages WHERE raw_mime_object_key=$1)
-        OR EXISTS(SELECT 1 FROM inbound_attachments WHERE object_key=$1 AND content_purged_at IS NULL) AS referenced`, [key]);
+        OR EXISTS(SELECT 1 FROM inbound_attachments WHERE object_key=$1 AND content_purged_at IS NULL)
+        OR EXISTS(SELECT 1 FROM outbound_files WHERE object_key=$1 AND content_purged_at IS NULL)
+        OR EXISTS(SELECT 1 FROM messages WHERE content_purged_at IS NULL AND attachment_snapshot @> jsonb_build_array(jsonb_build_object('objectKey',$1::text))) AS referenced`, [key]);
       if (!referenced.rows[0].referenced) await (store ?? objectStore()).delete(key);
       await client.query("DELETE FROM pending_object_deletions WHERE object_key=$1", [key]);
       await client.query("COMMIT");

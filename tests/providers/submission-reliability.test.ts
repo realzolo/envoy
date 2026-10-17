@@ -4,7 +4,7 @@ import { SendEmailCommand, SESv2Client } from "@aws-sdk/client-sesv2";
 import { providerRegistry } from "@/modules/providers/registry";
 import type { CanonicalMessage, ProviderSendContext, ProviderType } from "@/modules/providers/contracts";
 
-const message: CanonicalMessage = { deliveryId: "dlv", from: { name: "App", email: "app@example.com" }, to: { email: "person@example.net" }, subject: "Hello", html: "<p>Hello</p>", text: "Hello", attachments: [], tags: {} };
+const message: CanonicalMessage = { submissionId: "sub", from: { name: "App", email: "app@example.com" }, to: [{ email: "person@example.net" }], cc: [], bcc: [], replyTo: [], headers: {}, references: [], subject: "Hello", html: "<p>Hello</p>", text: "Hello", attachments: [], tags: {} };
 const contexts: Partial<Record<ProviderType, ProviderSendContext>> = {
   resend: { accountId: "pa", config: { type: "resend", schemaVersion: 1 }, secret: { type: "resend", apiKey: "re_test_key" }, idempotencyKey: "attempt-stable-key" },
   sendgrid: { accountId: "pa", config: { type: "sendgrid", schemaVersion: 1, region: "global" }, secret: { type: "sendgrid", apiKey: "SG.test_key" } },

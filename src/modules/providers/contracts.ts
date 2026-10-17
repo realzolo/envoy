@@ -85,21 +85,42 @@ export type ProviderCapabilities = {
   domainManagement: boolean;
   webhookSecurity: string;
   eventTypes: string[];
-  attachments: boolean;
+  cc: boolean;
+  bcc: boolean;
+  replyTo: boolean;
+  customHeaders: boolean;
+  threading: boolean;
+  outboundAttachments: boolean;
+  inlineAttachments: boolean;
+  /** The adapter can preserve visible headers while sending to an independent envelope. */
+  envelopeRecipients: boolean;
+  /** A documented upstream constraint, used before submitting a Bcc-only email. */
+  requiresTo: boolean;
+  maxRecipients: number;
+  maxMessageBytes: number;
+  /** Native metadata restrictions, enforced during routing rather than silently changed. */
+  tagValuePattern?: string;
   scheduling: boolean;
 };
 
 export type ProviderDescriptor = { type: ProviderType; displayName: string; capabilities: ProviderCapabilities };
 
-export type CanonicalAttachment = { fileName: string; contentType: string; objectKey: string; contentId?: string };
+export type EmailAddress = { email: string; name?: string };
+export type CanonicalAttachment = { fileName: string; contentType: string; content: Uint8Array; contentId?: string; disposition: "attachment" | "inline" };
 export type CanonicalMessage = {
-  deliveryId: string;
-  from: { name: string; email: string };
-  to: { name?: string; email: string };
-  replyTo?: string;
+  submissionId: string;
+  from: EmailAddress;
+  to: EmailAddress[];
+  cc: EmailAddress[];
+  bcc: EmailAddress[];
+  replyTo: EmailAddress[];
   subject: string;
-  html: string;
-  text: string;
+  html?: string;
+  text?: string;
+  headers: Record<string, string>;
+  inReplyTo?: string;
+  references: string[];
+  envelopeRecipients?: EmailAddress[];
   attachments: CanonicalAttachment[];
   tags: Record<string, string>;
 };
@@ -124,8 +145,15 @@ export type ErrorCategory =
   | "unknown";
 
 export class CanonicalProviderError extends Error {
-  constructor(message: string, public readonly category: ErrorCategory, public readonly code: string, public readonly outcome: "not_accepted" | "unknown" | "accepted", public readonly retryable: boolean) {
+  public readonly stage: string;
+  public readonly providerCode?: string;
+  public readonly smtpStatus?: string;
+  constructor(message: string, public readonly category: ErrorCategory, public readonly code: string, public readonly outcome: "not_accepted" | "unknown" | "accepted", public readonly retryable: boolean, details: { stage?: string; providerCode?: string; smtpStatus?: string } = {}) {
     super(message);
+    this.name = "CanonicalProviderError";
+    this.stage = details.stage ?? "submission";
+    this.providerCode = details.providerCode;
+    this.smtpStatus = details.smtpStatus;
   }
 }
 

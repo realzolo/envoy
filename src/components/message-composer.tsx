@@ -6,11 +6,16 @@ import { useMemo, useState, useRef } from "react";
 import styles from "./mail-views.module.css";
 
 type Service = { id: string; name: string; product: string; product_id: string };
-type Sender = { name: string; product_id: string; category: string; from_address: string };
+type Sender = { name: string; product_id: string; category: string; from_address: string; from_name: string; from_email: string; reply_to: string | null };
 type MessageFormValues = {
   serviceId: string;
   senderProfile: string;
-  recipient: string;
+  fromEmail: string;
+  fromName: string;
+  to: string;
+  cc: string;
+  bcc: string;
+  replyTo: string;
   category: string;
   subject: string;
   html: string;
@@ -30,6 +35,8 @@ export function MessageComposer({ services, senders }: { services: Service[]; se
   const [source, setSource] = useState(false);
   const [pending, setPending] = useState(false);
   const [notice, setNotice] = useState<{ type: "success" | "error"; message: string } | null>(null);
+  const [attachments, setAttachments] = useState<Array<{ fileId: string; fileName: string }>>([]);
+  const [uploading, setUploading] = useState(false);
   const [messageId, setMessageId] = useState<string>();
   const submission = useRef<{ fingerprint: string; key: string } | null>(null);
   const service = services.find((item) => item.id === serviceId);
@@ -41,13 +48,14 @@ export function MessageComposer({ services, senders }: { services: Service[]; se
     const productId = services.find((item) => item.id === serviceIdValue)?.product_id;
     const category = senders.find((item) => item.product_id === productId)?.category ?? "transactional";
     setServiceId(serviceIdValue);
+    setAttachments([]);
     form.setFieldsValue({ serviceId: serviceIdValue, senderProfile: "", category });
     setNotice(null);
   }
 
   function handleSenderChange(profile: string | number) {
     const sender = availableSenders.find((item) => item.name === String(profile));
-    if (sender) form.setFieldValue("category", sender.category);
+    if (sender) form.setFieldsValue({ category: sender.category, fromEmail: sender.from_email, fromName: sender.from_name, replyTo: sender.reply_to ?? "" });
   }
 
   function handleValuesChange(changedValues: Partial<MessageFormValues>) {
@@ -61,16 +69,23 @@ export function MessageComposer({ services, senders }: { services: Service[]; se
     setNotice(null);
     setMessageId(undefined);
     try {
-      const fingerprint = JSON.stringify(values);
+      const addresses = (value: string | undefined) => (value ?? "").split(/[,;\n]/).map(email => email.trim()).filter(Boolean).map(email => ({ email }));
+      const message = {
+        from: { email: values.fromEmail, ...(values.fromName ? { name: values.fromName } : {}) },
+        to: addresses(values.to), cc: addresses(values.cc), bcc: addresses(values.bcc), replyTo: addresses(values.replyTo),
+        category: values.category || "transactional", subject: values.subject,
+        html: values.html || undefined, text: values.text || undefined,
+        attachments: attachments.map(file => ({ ...file, disposition: "attachment" })),
+        metadata: { source: "admin_test" },
+      };
+      const fingerprint = JSON.stringify({ serviceId: values.serviceId, message });
       if (!submission.current || submission.current.fingerprint !== fingerprint) submission.current = { fingerprint, key: crypto.randomUUID() };
       const response = await fetch("/api/admin/actions", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           action: "message.test", idempotencyKey: submission.current.key,
-          serviceId: values.serviceId, senderProfile: values.senderProfile || undefined,
-          recipient: values.recipient, category: values.category, subject: values.subject,
-          html: values.html || undefined, text: values.text || undefined,
+          serviceId: values.serviceId, message,
         }),
       });
       const payload = (await response.json()) as { error?: string; result?: { id?: string } };
@@ -84,31 +99,58 @@ export function MessageComposer({ services, senders }: { services: Service[]; se
     }
   }
 
+  async function upload(files: FileList | null) {
+    if (!files?.length) return;
+    setUploading(true);
+    setNotice(null);
+    try {
+      const uploaded: Array<{ fileId: string; fileName: string }> = [];
+      for (const file of Array.from(files)) {
+        const response = await fetch(`/api/admin/files?serviceId=${encodeURIComponent(serviceId)}`, {
+          method: "POST", headers: { "x-file-name": encodeURIComponent(file.name), "content-type": file.type || "application/octet-stream" }, body: file,
+        });
+        const payload = await response.json() as { id: string; fileName: string; error?: string };
+        if (!response.ok) throw new Error(payload.error ?? "Unable to upload attachment");
+        uploaded.push({ fileId: payload.id, fileName: payload.fileName });
+      }
+      setAttachments(current => [...current, ...uploaded]);
+    } catch (error) {
+      setNotice({ type: "error", message: error instanceof Error ? error.message : "Unable to upload attachment" });
+    } finally { setUploading(false); }
+  }
+
   return (
     <div className={styles.composerGrid}>
       <Card className={styles.card} bordered={false} title="Test message">
         <Form<MessageFormValues>
           form={form}
-          initialValues={{ serviceId, senderProfile: "", category: initialCategory, subject: defaultSubject, html: defaultHtml, text: defaultText }}
-          layout="vertical" onSubmit={submit} onValuesChange={handleValuesChange} disabled={pending} requiredSymbol
+          initialValues={{ serviceId, senderProfile: "", fromEmail: "", fromName: "", to: "", cc: "", bcc: "", replyTo: "", category: initialCategory, subject: defaultSubject, html: defaultHtml, text: defaultText }}
+          layout="vertical" onSubmit={submit} onValuesChange={handleValuesChange} disabled={pending || uploading} requiredSymbol
         >
           <div className={styles.formFields}>
             <Form.Item field="serviceId" label="Service" rules={[{ required: true, message: "Select a service." }]}>
               <Select options={services.map((item) => ({ label: `${item.product} / ${item.name}`, value: item.id }))} onChange={handleServiceChange} />
             </Form.Item>
-            <Form.Item field="senderProfile" label="Sender profile">
-              <Select options={[{ label: "Automatic by category", value: "" }, ...availableSenders.map((item) => ({ label: `${item.name} / ${item.from_address}`, value: item.name }))]} onChange={handleSenderChange} />
+            <Form.Item field="senderProfile" label="Optional sender preset">
+              <Select options={[{ label: "Enter sender directly", value: "" }, ...availableSenders.map((item) => ({ label: `${item.name} / ${item.from_address}`, value: item.name }))]} onChange={handleSenderChange} />
             </Form.Item>
-            <Form.Item field="recipient" label="Recipient" rules={[{ required: true, message: "Enter a recipient email address." }, { type: "email", message: "Enter a valid email address." }]}>
-              <Input placeholder="recipient@company.com" type="email" />
-            </Form.Item>
+            <Form.Item field="fromEmail" label="From address" rules={[{ required: true, type: "email", message: "Enter an authorized sender address." }]}><Input type="email" placeholder="orders@mail.company.com" /></Form.Item>
+            <Form.Item field="fromName" label="From name"><Input placeholder="Order service" /></Form.Item>
+            <Form.Item field="to" label="To"><Input placeholder="customer@example.com, colleague@example.com" /></Form.Item>
+            <Form.Item field="cc" label="Cc"><Input placeholder="manager@company.com" /></Form.Item>
+            <Form.Item field="bcc" label="Bcc"><Input placeholder="archive@company.com" /></Form.Item>
+            <Form.Item field="replyTo" label="Reply-To"><Input placeholder="support@company.com" /></Form.Item>
             <Form.Item field="category" label="Category" rules={[{ required: true, message: "Enter a message category." }]}>
               <Input />
             </Form.Item>
-            <Form.Item className={styles.fullField} field="subject" label="Subject" rules={[{ required: true, message: "Enter a subject." }]}>
+            <Form.Item className={styles.fullField} field="subject" label="Subject">
               <Input />
             </Form.Item>
           </div>
+          <Form.Item label="Attachments" extra="Up to 20 files, 10 MB each, 20 MB combined. Files belong to the selected service.">
+            <input aria-label="Upload attachments" type="file" multiple disabled={pending || uploading || !serviceId} onChange={event => { void upload(event.target.files); event.target.value = ""; }} />
+            {attachments.map(file => <Space key={file.fileId}><Typography.Text>{file.fileName}</Typography.Text><Button type="text" size="small" onClick={() => setAttachments(current => current.filter(item => item.fileId !== file.fileId))}>Remove</Button></Space>)}
+          </Form.Item>
           <Divider />
           <Tabs defaultActiveTab="html" headerPadding={false} lazyload={false}>
             <Tabs.TabPane key="html" title="HTML content">
@@ -123,8 +165,8 @@ export function MessageComposer({ services, senders }: { services: Service[]; se
             </Tabs.TabPane>
           </Tabs>
           <div className={styles.formFooter}>
-            <Typography.Text type="secondary">This sends a real message to the recipient above.</Typography.Text>
-            <Button disabled={!services.length} htmlType="submit" icon={<IconSend />} loading={pending} type="primary">Queue test message</Button>
+            <Typography.Text type="secondary">This sends a real email. Separate addresses with commas; at least one To, Cc, or Bcc is required.</Typography.Text>
+            <Button disabled={!services.length || uploading} htmlType="submit" icon={<IconSend />} loading={pending} type="primary">Queue test message</Button>
             {notice && <Alert showIcon type={notice.type} title={notice.type === "success" ? "Message queued" : "Unable to queue message"} content={
               <Space direction="vertical">
                 {notice.message}

@@ -1,6 +1,6 @@
 import { createHash, createPublicKey, verify as verifySignature } from "node:crypto";
 import type { CanonicalEventType, ProviderModule } from "../contracts";
-import { accepted, submitRequest, eventDate, stableEventId, checkedJson, event, header, type MultipartValue, parseMultipart } from "../shared";
+import { nativeMailCapabilities, assertMessageCapabilities, messageHeaders, safeDiagnostic, accepted, submitRequest, eventDate, stableEventId, checkedJson, event, header, type MultipartValue, parseMultipart } from "../shared";
 
 const eventMap: Record<string, CanonicalEventType> = {
   processed: "accepted",
@@ -28,25 +28,32 @@ export const sendgridModule: ProviderModule = {
       domainManagement: false,
       webhookSecurity: "ECDSA signed event and inbound webhooks",
       eventTypes: Object.keys(eventMap),
-      attachments: false,
+      ...nativeMailCapabilities,
+      maxRecipients: 1000,
+      maxMessageBytes: 30_000_000,
       scheduling: false
     }
   },
   sender: {
     async send(message, context) {
+      assertMessageCapabilities(message, sendgridModule.descriptor.capabilities);
       if (context.config.type !== "sendgrid" || context.secret.type !== "sendgrid") throw new Error("Invalid SendGrid configuration");
       const response = await submitRequest(`${apiBase(context.config.region)}/v3/mail/send`, {
         method: "POST",
         headers: { authorization: `Bearer ${context.secret.apiKey}`, "content-type": "application/json" },
         body: JSON.stringify({
           personalizations: [{
-            to: [{ email: message.to.email, name: message.to.name }],
+            to: message.to,
+            cc: message.cc.length ? message.cc : undefined,
+            bcc: message.bcc.length ? message.bcc : undefined,
             custom_args: message.tags
           }],
           from: message.from,
-          reply_to: message.replyTo ? { email: message.replyTo } : undefined,
+          reply_to_list: message.replyTo.length ? message.replyTo : undefined,
           subject: message.subject,
-          content: [{ type: "text/plain", value: message.text }, { type: "text/html", value: message.html }]
+          content: [...(message.text ? [{ type: "text/plain", value: message.text }] : []), ...(message.html ? [{ type: "text/html", value: message.html }] : [])],
+          headers: messageHeaders(message),
+          attachments: message.attachments.map(a => ({ filename: a.fileName, type: a.contentType, content: Buffer.from(a.content).toString("base64"), disposition: a.disposition, content_id: a.contentId }))
         })
       });
       if (!response.ok) await checkedJson(response);
@@ -114,8 +121,10 @@ export const sendgridModule: ProviderModule = {
           recipient: typeof row.email === "string" ? row.email : undefined,
           bounce: type === "bounced" ? {
             classification: String(row.type).includes("bounce") ? "hard" : "soft",
+            code: typeof row.status === "string" ? row.status : undefined,
             message: String(row.reason ?? "")
-          } : undefined
+          } : undefined,
+          metadata: ["failed", "deferred"].includes(type) ? { reason: safeDiagnostic(row.reason ?? row.response ?? "Provider delivery failed"), ...(row.status ? { providerCode: String(row.status), smtpStatus: String(row.status).match(/\b[245]\.\d{1,3}\.\d{1,3}\b/)?.[0] } : {}) } : {}
         })]
       })
     }

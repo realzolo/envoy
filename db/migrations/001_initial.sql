@@ -126,6 +126,33 @@ CREATE TABLE sender_profiles
     UNIQUE (product_id, name)
 );
 
+CREATE TABLE sender_grants
+(
+    id text PRIMARY KEY,
+    product_id text NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+    service_id text,
+    sending_domain_id text NOT NULL REFERENCES sending_domains(id) ON DELETE CASCADE,
+    from_local_part text,
+    status text NOT NULL DEFAULT 'active' CHECK(status IN ('active','disabled')),
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    FOREIGN KEY(service_id,product_id) REFERENCES services(id,product_id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX sender_grant_scope ON sender_grants(product_id,COALESCE(service_id,'*'),sending_domain_id,COALESCE(from_local_part,''));
+
+CREATE TABLE outbound_files
+(
+    id text PRIMARY KEY,
+    service_id text NOT NULL REFERENCES services(id) ON DELETE RESTRICT,
+    file_name text NOT NULL,
+    content_type text NOT NULL,
+    size_bytes bigint NOT NULL CHECK(size_bytes>0),
+    sha256 text NOT NULL,
+    object_key text NOT NULL UNIQUE,
+    content_purged_at timestamptz,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
 CREATE TABLE routing_policies
 (
     id                 text PRIMARY KEY,
@@ -165,7 +192,15 @@ CREATE TABLE messages
     id                text PRIMARY KEY,
     product_id        text        NOT NULL REFERENCES products (id) ON DELETE RESTRICT,
     service_id        text        NOT NULL REFERENCES services (id) ON DELETE RESTRICT,
-    sender_profile_id text        NOT NULL REFERENCES sender_profiles (id) ON DELETE RESTRICT,
+    sending_domain_id text NOT NULL REFERENCES sending_domains(id) ON DELETE RESTRICT,
+    request_id text,
+    to_recipients jsonb NOT NULL DEFAULT '[]'::jsonb,
+    cc_recipients jsonb NOT NULL DEFAULT '[]'::jsonb,
+    bcc_recipients jsonb NOT NULL DEFAULT '[]'::jsonb,
+    headers jsonb NOT NULL DEFAULT '{}'::jsonb,
+    in_reply_to text,
+    references_ids text[] NOT NULL DEFAULT '{}',
+    attachment_snapshot jsonb NOT NULL DEFAULT '[]'::jsonb,
     sender_snapshot   jsonb       NOT NULL,
     idempotency_key   text        NOT NULL,
     payload_hash      text        NOT NULL,
@@ -176,12 +211,21 @@ CREATE TABLE messages
     html_body         text,
     text_body         text,
     message_category  text        NOT NULL,
-    reply_to          text,
+    reply_to          jsonb NOT NULL DEFAULT '[]'::jsonb,
     provider_tags     jsonb       NOT NULL DEFAULT '{}'::jsonb,
     accepted_at       timestamptz NOT NULL DEFAULT now(),
     updated_at        timestamptz NOT NULL DEFAULT now(),
     CHECK (html_body IS NOT NULL OR text_body IS NOT NULL),
     UNIQUE (service_id, idempotency_key)
+);
+
+CREATE TABLE message_retries (
+    message_id text NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    idempotency_key text NOT NULL,
+    payload_hash text NOT NULL,
+    result jsonb NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY(message_id,idempotency_key)
 );
 
 CREATE TABLE deliveries
@@ -190,6 +234,8 @@ CREATE TABLE deliveries
     message_id         text        NOT NULL REFERENCES messages (id) ON DELETE CASCADE,
     recipient_email    text        NOT NULL,
     recipient_name     text,
+    recipient_role text NOT NULL CHECK(recipient_role IN ('to','cc','bcc')),
+    last_error jsonb,
     lifecycle_status   text        NOT NULL DEFAULT 'queued' CHECK (lifecycle_status IN
                                                                     ('queued', 'submitting', 'accepted', 'deferred',
                                                                      'delivered', 'bounced', 'failed', 'unknown',
@@ -199,46 +245,78 @@ CREATE TABLE deliveries
                                                                    ('clean', 'complained', 'unsubscribed',
                                                                     'suppressed')),
     current_attempt_id text,
-    defer_count        integer     NOT NULL DEFAULT 0 CHECK (defer_count >= 0),
+    current_submission_id text,
+
     queued_at          timestamptz NOT NULL DEFAULT now(),
     accepted_at        timestamptz,
     delivered_at       timestamptz,
     updated_at         timestamptz NOT NULL DEFAULT now(),
-    CHECK (recipient_email = lower(recipient_email)),
     UNIQUE (message_id, recipient_email)
 );
 
-CREATE TABLE delivery_attempts
+CREATE TABLE submissions
 (
-    id                       text PRIMARY KEY,
-    delivery_id              text        NOT NULL REFERENCES deliveries (id) ON DELETE CASCADE,
-    attempt_number           integer     NOT NULL,
-    provider_account_id      text        NOT NULL REFERENCES provider_accounts (id) ON DELETE RESTRICT,
-    provider_identity_id     text        NOT NULL REFERENCES provider_identities (id) ON DELETE RESTRICT,
-    routing_snapshot         jsonb       NOT NULL,
-    request_fingerprint      text        NOT NULL,
-    provider_idempotency_key text,
-    external_message_id      text,
-    status                   text        NOT NULL CHECK (status IN
-                                                         ('submitting', 'accepted', 'failed', 'unknown', 'reconciling',
-                                                          'reconciled')),
-    outcome_determinate      boolean     NOT NULL DEFAULT false,
-    error_category           text,
-    error_code               text,
-    error_message            text,
-    provider_response_ref    text,
-    started_at               timestamptz NOT NULL DEFAULT now(),
-    finished_at              timestamptz,
-    submission_deadline_at   timestamptz NOT NULL DEFAULT now() + interval '2 minutes',
-    retry_authorized_at      timestamptz,
-    retry_authorized_by      text,
-    reconciliation_count     integer NOT NULL DEFAULT 0 CHECK (reconciliation_count >= 0),
-    reconcile_after          timestamptz,
-    UNIQUE (delivery_id, attempt_number),
-    UNIQUE (provider_account_id, external_message_id)
+    id text PRIMARY KEY,
+    message_id text NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    status text NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','submitting','accepted','deferred','unknown','failed','canceled')),
+    current_attempt_id text,
+    defer_count integer NOT NULL DEFAULT 0 CHECK(defer_count>=0),
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now()
 );
-ALTER TABLE deliveries
-    ADD CONSTRAINT deliveries_current_attempt_fk FOREIGN KEY (current_attempt_id) REFERENCES delivery_attempts (id) ON DELETE SET NULL;
+
+CREATE TABLE submission_deliveries
+(
+    submission_id text NOT NULL REFERENCES submissions(id) ON DELETE CASCADE,
+    delivery_id text NOT NULL REFERENCES deliveries(id) ON DELETE CASCADE,
+    PRIMARY KEY(submission_id,delivery_id)
+);
+
+ALTER TABLE deliveries ADD CONSTRAINT deliveries_current_submission_fk FOREIGN KEY (current_submission_id) REFERENCES submissions(id) ON DELETE SET NULL;
+
+CREATE TABLE submission_attempts
+(
+    id text PRIMARY KEY,
+    submission_id text NOT NULL REFERENCES submissions(id) ON DELETE CASCADE,
+    attempt_number integer NOT NULL CHECK(attempt_number>0),
+    provider_account_id text NOT NULL REFERENCES provider_accounts(id) ON DELETE RESTRICT,
+    provider_identity_id text NOT NULL REFERENCES provider_identities(id) ON DELETE RESTRICT,
+    routing_snapshot jsonb NOT NULL,
+    request_fingerprint text NOT NULL,
+    provider_idempotency_key text,
+    external_message_id text,
+    status text NOT NULL CHECK(status IN ('submitting','accepted','failed','unknown','reconciling','reconciled')),
+    outcome_determinate boolean NOT NULL DEFAULT false,
+    error_category text,
+    error_code text,
+    error_message text,
+    diagnostic jsonb,
+    provider_response_ref text,
+    started_at timestamptz NOT NULL DEFAULT now(),
+    finished_at timestamptz,
+    submission_deadline_at timestamptz NOT NULL DEFAULT now()+interval '2 minutes',
+    retry_authorized_at timestamptz,
+    retry_authorized_by text,
+    reconciliation_count integer NOT NULL DEFAULT 0 CHECK(reconciliation_count>=0),
+    reconcile_after timestamptz,
+    UNIQUE(submission_id,attempt_number),
+    UNIQUE(provider_account_id,external_message_id)
+);
+ALTER TABLE deliveries ADD CONSTRAINT deliveries_current_attempt_fk FOREIGN KEY(current_attempt_id) REFERENCES submission_attempts(id) ON DELETE SET NULL;
+ALTER TABLE submissions ADD CONSTRAINT submissions_current_attempt_fk FOREIGN KEY(current_attempt_id) REFERENCES submission_attempts(id) ON DELETE SET NULL;
+
+CREATE TABLE submission_events
+(
+    id text PRIMARY KEY,
+    submission_id text NOT NULL REFERENCES submissions(id) ON DELETE CASCADE,
+    raw_provider_event_id text,
+    attempt_id text REFERENCES submission_attempts(id) ON DELETE SET NULL,
+    event_type text NOT NULL,
+    source_key text NOT NULL UNIQUE,
+    occurred_at timestamptz NOT NULL,
+    canonical_payload jsonb NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
 
 CREATE TABLE raw_provider_events
 (
@@ -262,6 +340,10 @@ CREATE TABLE raw_provider_events
     next_attempt_at     timestamptz NOT NULL DEFAULT now(),
     UNIQUE (provider_account_id, provider_event_id)
 );
+
+ALTER TABLE submission_events ADD CONSTRAINT submission_events_raw_event_fk
+    FOREIGN KEY(raw_provider_event_id) REFERENCES raw_provider_events(id) ON DELETE SET NULL;
+CREATE INDEX submission_events_raw_event_idx ON submission_events(raw_provider_event_id) WHERE raw_provider_event_id IS NOT NULL;
 
 CREATE TABLE delivery_events
 (
@@ -375,6 +457,7 @@ CREATE TABLE callback_deliveries
     id                 text PRIMARY KEY,
     endpoint_id        text        NOT NULL REFERENCES callback_endpoints (id) ON DELETE CASCADE,
     delivery_event_id  text        REFERENCES delivery_events (id) ON DELETE SET NULL,
+    submission_event_id text REFERENCES submission_events(id) ON DELETE SET NULL,
     inbound_message_id text        REFERENCES inbound_messages (id) ON DELETE SET NULL,
     event_type         text        NOT NULL,
     payload            jsonb       NOT NULL,
@@ -418,7 +501,9 @@ CREATE TABLE audit_logs
 CREATE TABLE request_logs
 (
     id          bigserial PRIMARY KEY,
-    request_id  text        NOT NULL,
+    request_id  text NOT NULL UNIQUE,
+    service_id text REFERENCES services(id) ON DELETE SET NULL,
+    message_id text REFERENCES messages(id) ON DELETE SET NULL,
     method      text        NOT NULL,
     path        text        NOT NULL,
     status_code integer     NOT NULL,
@@ -431,7 +516,7 @@ CREATE TABLE request_logs
 CREATE INDEX messages_service_accepted_cursor ON messages (service_id, accepted_at DESC, id DESC);
 CREATE INDEX deliveries_lifecycle_idx ON deliveries (lifecycle_status, queued_at DESC);
 CREATE INDEX deliveries_message_status ON deliveries (message_id, lifecycle_status);
-CREATE INDEX attempts_external_idx ON delivery_attempts (provider_account_id, external_message_id);
+CREATE INDEX attempts_external_idx ON submission_attempts (provider_account_id, external_message_id);
 CREATE INDEX raw_provider_events_pending_idx ON raw_provider_events (processed_at, received_at);
 CREATE INDEX delivery_events_timeline_idx ON delivery_events (delivery_id, occurred_at DESC);
 CREATE INDEX callback_deliveries_pending_idx ON callback_deliveries (status, next_attempt_at);
@@ -440,15 +525,20 @@ CREATE INDEX inbound_messages_received_idx ON inbound_messages (received_at DESC
 CREATE INDEX inbound_messages_service_received_cursor ON inbound_messages (service_id, received_at DESC, id DESC);
 CREATE INDEX delivery_events_delivery_occurred_cursor ON delivery_events (delivery_id, occurred_at DESC, id DESC);
 CREATE INDEX request_logs_created_idx ON request_logs (created_at DESC);
+CREATE INDEX request_logs_service ON request_logs(service_id,created_at DESC);
+CREATE INDEX submission_deliveries_delivery ON submission_deliveries(delivery_id);
+CREATE INDEX submissions_message ON submissions(message_id);
+CREATE INDEX submission_events_timeline ON submission_events(submission_id,occurred_at DESC,id DESC);
+CREATE UNIQUE INDEX callback_submission_event_once ON callback_deliveries(endpoint_id,submission_event_id) WHERE submission_event_id IS NOT NULL;
 
 
 CREATE UNIQUE INDEX callback_delivery_event_once ON callback_deliveries(endpoint_id, delivery_event_id) WHERE delivery_event_id IS NOT NULL;
 CREATE UNIQUE INDEX callback_inbound_event_once ON callback_deliveries(endpoint_id, inbound_message_id, event_type) WHERE inbound_message_id IS NOT NULL;
-CREATE INDEX deliveries_recovery ON deliveries(lifecycle_status, updated_at) WHERE lifecycle_status IN ('queued','deferred','submitting','unknown');
-CREATE INDEX attempts_reconcile_due ON delivery_attempts(reconcile_after) WHERE status IN ('unknown','reconciling');
+CREATE INDEX submissions_recovery ON submissions(status,updated_at) WHERE status IN ('queued','deferred','submitting','unknown');
+CREATE INDEX attempts_reconcile_due ON submission_attempts(reconcile_after) WHERE status IN ('unknown','reconciling');
 CREATE INDEX raw_events_retry_due ON raw_provider_events(next_attempt_at) WHERE processed_at IS NULL;
 CREATE INDEX inbound_scan_due ON inbound_messages(processing_deadline_at) WHERE status='scanning';
-CREATE INDEX provider_attempt_usage ON delivery_attempts(provider_account_id, started_at);
+CREATE INDEX provider_attempt_usage ON submission_attempts(provider_account_id, started_at);
 
 CREATE TABLE rate_limit_counters (
     scope text NOT NULL,

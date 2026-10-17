@@ -41,6 +41,20 @@ describe("native provider protocol facts", () => {
     expect(events[0]).toMatchObject({ occurredAt: new Date("2026-10-17T08:00:02Z"), bounce: { classification: "hard", code: "5.1.1" } });
     expect(events[0].id).not.toBe(events[1].id);
   });
+  it.each([["Open", "open", "opened"], ["Click", "click", "clicked"]])("keeps SES %s message scoped when a group member is unidentified", async (eventType, detailsKey, type) => {
+    const events = await providerRegistry("ses").webhook.normalize(verified({ Type: "Notification", Message: JSON.stringify({ eventType, mail: { messageId: "m", timestamp: "2026-10-17T08:00:00Z", destination: ["a@example.net", "b@example.net"] }, [detailsKey]: { timestamp: "2026-10-17T08:00:02Z" } }) }), contexts.ses);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type, externalMessageId: "m" });
+    expect(events[0].recipient).toBeUndefined();
+  });
+  it("only assigns Resend recipient scope when the webhook supplies exactly one recipient", async () => {
+    const adapter = providerRegistry("resend");
+    const context: ProviderSendContext = { accountId: "pa", config: { type: "resend", schemaVersion: 1 }, secret: { type: "resend", apiKey: "re_test_key" } };
+    const payload = { type: "email.opened", created_at: "2026-10-17T08:00:00Z", data: { email_id: "m", to: ["a@example.net", "b@example.net"] } };
+    expect((await adapter.webhook.normalize(verified(payload), context))[0].recipient).toBeUndefined();
+    payload.data.to = ["a@example.net"];
+    expect((await adapter.webhook.normalize(verified(payload), context))[0].recipient).toBe("a@example.net");
+  });
   it("preserves Postmark HardBounce and Email facts with stable replay identity", async () => {
     const input = verified({ RecordType: "Bounce", ID: 1, MessageID: "m", Type: "HardBounce", TypeCode: 1, Email: "a@example.net", BouncedAt: "2026-10-17T08:00:02Z" });
     const adapter = providerRegistry("postmark");

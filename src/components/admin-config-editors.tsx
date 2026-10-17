@@ -8,17 +8,17 @@ import styles from "@/components/admin-views.module.css";
 export function EditSender({ sender, data, onClose }: { sender: Row; data: Data; onClose: () => void }) {
   const action = useAction();
   const [form] = Form.useForm();
-  return <Modal title="Edit sender profile" style={{ width: 680, maxWidth: "calc(100vw - 32px)" }} visible onCancel={onClose} confirmLoading={action.pending} onOk={async () => {
+  return <Modal title="Edit sender preset" style={{ width: 680, maxWidth: "calc(100vw - 32px)" }} visible onCancel={onClose} confirmLoading={action.pending} onOk={async () => {
     const values = await form.validate();
     try { await action.run({ action: "sender.update", id: sender.id, productId: formValue(values, "productId"), domainId: formValue(values, "domainId"), name: formValue(values, "name"), fromName: formValue(values, "fromName"), fromLocalPart: formValue(values, "fromLocalPart"), replyTo: formValue(values, "replyTo"), category: formValue(values, "category") }); onClose(); } catch { /* Keep values and notice visible. */ }
   }}>
     <div className={styles.detail}>
-    <Alert type="info" content="Changes apply to newly accepted messages. Existing messages retain their sender snapshot. Product and domain ownership stay fixed; create another sender profile to use a different product or domain." />
+    <Alert type="info" content="Changes apply to newly accepted messages. Existing messages retain their sender snapshot. Product and domain ownership stay fixed; create another sender preset to use a different product or domain." />
     <ActionForm fieldErrors={action.fields} form={form} layout="vertical" initialValues={{ productId: sender.product_id, domainId: sender.domain_id, name: sender.name, fromName: sender.from_name, fromLocalPart: sender.from_local_part, replyTo: sender.reply_to ?? "", category: sender.message_category }}>
       <Grid.Row gutter={[16, 0]}>
       <Grid.Col xs={24} md={12}><Field field="productId" label="Product" required rules={requiredRule}><Select disabled options={rows(data.products).map(row => ({ value: value(row, "id"), label: value(row, "name") }))} /></Field></Grid.Col>
       <Grid.Col xs={24} md={12}><Field field="domainId" label="Domain" required rules={requiredRule}><Select disabled options={rows(data.domains).map(row => ({ value: value(row, "id"), label: value(row, "domain") }))} /></Field></Grid.Col>
-      <Grid.Col xs={24} md={12}><Field field="name" label="Profile name" required rules={requiredRule}><Input /></Field></Grid.Col>
+      <Grid.Col xs={24} md={12}><Field field="name" label="Preset name" required rules={requiredRule}><Input /></Field></Grid.Col>
       <Grid.Col xs={24} md={12}><Field field="category" label="Category" required rules={requiredRule}><Input /></Field></Grid.Col>
       <Grid.Col xs={24} md={12}><Field field="fromName" label="From name" required rules={requiredRule}><Input /></Field></Grid.Col>
       <Grid.Col xs={24} md={12}><Field field="fromLocalPart" label="From local part" required rules={requiredRule}><Input /></Field></Grid.Col>

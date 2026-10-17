@@ -10,7 +10,7 @@ import {
   MessageValidationError,
   retryMessage
 } from "@/modules/core/message/service";
-import { applyCanonicalEvent, applySuppressedDelivery, processRawProviderEvent } from "@/modules/core/event/service";
+import { applyCanonicalEvent, applyDeliveryEvent, processRawProviderEvent } from "@/modules/core/event/service";
 import {
   createSuppression,
   listDeliveries,
@@ -35,11 +35,11 @@ import { objectStore } from "@/modules/config/object-store";
 import { persistInbound } from "@/modules/inbound/service";
 import { deadLetterCallback } from "@/modules/callbacks/service";
 import { sealSecret } from "@/modules/config/envelope";
-import { markAccepted, markDeterminateFailure, markUnknown, markReconciled, getAttemptForReconciliation, prepareSubmission } from "@/modules/core/routing/engine";
+import { markAccepted, markDeterminateFailure, markUnknown, markReconciled, getAttemptForReconciliation, prepareSubmission as prepareSubmissionById } from "@/modules/core/routing/engine";
 import { createMessageSchema, createSuppressionSchema } from "@/lib/contracts";
 import { providerRegistry } from "@/modules/providers/registry";
 import { processDelivery } from "@/worker/delivery";
-import { db, query } from "@/server/database";
+import { db, query, transaction } from "@/server/database";
 
 const identity = {
   serviceId: "svc_atlas_auth",
@@ -48,7 +48,8 @@ const identity = {
   product: "Atlas",
   rateLimitPerMinute: 600
 };
-const request = {
+const request = createMessageSchema.parse({
+  from: {name: "Atlas", email: "security@mail.atlas.test"},
   category: "security",
   to: [{ email: "pipeline@example.net" }],
   subject: "123456 is your Atlas login code",
@@ -57,7 +58,18 @@ const request = {
   tags: { purpose: "integration" },
   referenceId: "pipeline-test",
   metadata: { suite: "integration" }
-};
+});
+
+async function submissionIdForDelivery(deliveryId: string) {
+  const row = (await query<{ id: string }>(`SELECT s.id FROM submissions s JOIN submission_deliveries sd ON sd.submission_id=s.id
+    WHERE sd.delivery_id=$1 ORDER BY s.created_at DESC,s.id DESC LIMIT 1`, [deliveryId])).rows[0];
+  if (!row) throw new Error(`No submission for ${deliveryId}`);
+  return row.id;
+}
+async function prepareRecipientSubmission(deliveryId: string) {
+  return prepareSubmissionById(await submissionIdForDelivery(deliveryId));
+}
+
 const messageIds: string[] = [];
 const suppressionEmails: string[] = [];
 const inboundIds: string[] = [];
@@ -65,10 +77,10 @@ afterAll(async () => {
   await query("UPDATE provider_accounts SET status='active',quota=$2 WHERE id=$1", ["pa_mock", { monthlyLimit: 100000 }]);
   await query("UPDATE routing_targets SET status='active',circuit_open_until=NULL WHERE provider_account_id='pa_mock'");
   for (const id of messageIds) {
-    await query("DELETE FROM outbox_events WHERE payload->>'attemptId' IN (SELECT da.id FROM delivery_attempts da JOIN deliveries d ON d.id=da.delivery_id WHERE d.message_id=$1)", [id]);
+    await query("DELETE FROM outbox_events WHERE payload->>'attemptId' IN (SELECT sa.id FROM submission_attempts sa JOIN submissions s ON s.id=sa.submission_id WHERE s.message_id=$1)", [id]);
     await query("DELETE FROM outbox_events WHERE payload->>'callbackDeliveryId' IN (SELECT id FROM callback_deliveries WHERE payload#>>'{data,messageId}'=$1)", [id]);
     await query("DELETE FROM callback_deliveries WHERE payload#>>'{data,messageId}'=$1", [id]);
-    await query("DELETE FROM outbox_events WHERE payload->>'deliveryId' IN (SELECT id FROM deliveries WHERE message_id=$1)", [id]);
+    await query("DELETE FROM outbox_events WHERE payload->>'submissionId' IN (SELECT id FROM submissions WHERE message_id=$1)", [id]);
     await query("DELETE FROM messages WHERE id=$1", [id])
   }
   for (const id of inboundIds) {
@@ -101,13 +113,13 @@ describe("durable message pipeline", () => {
     const delivery = (await query<{ id: string }>("SELECT id FROM deliveries WHERE message_id=$1", [accepted.message.id])).rows[0];
     await query("UPDATE sender_profiles SET from_name='Changed after acceptance',from_local_part='changed' WHERE id='sp_atlas_security'");
     try {
-      const submissions = await Promise.all(Array.from({ length: 8 }, () => prepareSubmission(delivery.id)));
+      const submissions = await Promise.all(Array.from({ length: 8 }, () => prepareRecipientSubmission(delivery.id)));
       const claimed = submissions.filter(submission => submission && !("reconcileAttemptId" in submission));
       expect(claimed).toHaveLength(1);
       const submission = claimed[0]!;
       if ("reconcileAttemptId" in submission) throw new Error("Unexpected reconcile work");
-      expect(submission.fromName).toBe("Atlas");
-      expect(submission.fromEmail).toBe("security@mail.atlas.test");
+      expect(submission.message.from.name).toBe("Atlas");
+      expect(submission.message.from.email).toBe("security@mail.atlas.test");
       const externalId = crypto.randomUUID();
       await Promise.all([markAccepted(submission.attemptId, externalId), markAccepted(submission.attemptId, externalId)]);
       await applyCanonicalEvent("pa_mock", null, { id: crypto.randomUUID(), externalMessageId: externalId, type: "accepted", occurredAt: new Date(), metadata: {} });
@@ -124,26 +136,26 @@ describe("durable message pipeline", () => {
     messageIds.push(accepted.message.id);
     const delivery = (await query<{ id: string }>("SELECT id FROM deliveries WHERE message_id=$1", [accepted.message.id])).rows[0];
     await addSuppression({ email, scope: "global", reason: "manual" }, "test-suite");
-    expect(await prepareSubmission(delivery.id)).toBeNull();
+    expect(await prepareRecipientSubmission(delivery.id)).toBeNull();
     expect((await query<{ lifecycle_status: string; compliance_status: string }>("SELECT lifecycle_status,compliance_status FROM deliveries WHERE id=$1", [delivery.id])).rows[0]).toEqual({ lifecycle_status: "failed", compliance_status: "suppressed" });
-    expect((await retryMessage(accepted.message.id, identity.serviceId, true))?.queued).toBe(0);
+    expect((await retryMessage(accepted.message.id, identity.serviceId, { acknowledgeDuplicateRisk: true }, crypto.randomUUID()))?.queued).toBe(0);
   });
 
   it("keeps unknown outcomes intact after risk authorization and fences the old response", async () => {
     const accepted = await acceptMessage({ identity, idempotencyKey: crypto.randomUUID(), input: request });
     messageIds.push(accepted.message.id);
     const delivery = (await query<{ id: string }>("SELECT id FROM deliveries WHERE message_id=$1", [accepted.message.id])).rows[0];
-    const first = await prepareSubmission(delivery.id);
+    const first = await prepareRecipientSubmission(delivery.id);
     if (!first || "reconcileAttemptId" in first) throw new Error("Expected submission");
     await markUnknown(first.attemptId, "Response lost after submission");
-    expect(await prepareSubmission(delivery.id)).toEqual({ reconcileAttemptId: first.attemptId });
-    await retryMessage(accepted.message.id, identity.serviceId, true);
-    expect((await query<{ status: string; outcome_determinate: boolean }>("SELECT status,outcome_determinate FROM delivery_attempts WHERE id=$1", [first.attemptId])).rows[0]).toEqual({ status: "unknown", outcome_determinate: false });
-    const second = await prepareSubmission(delivery.id);
+    expect(await prepareRecipientSubmission(delivery.id)).toEqual({ reconcileAttemptId: first.attemptId });
+    await retryMessage(accepted.message.id, identity.serviceId, { acknowledgeDuplicateRisk: true }, crypto.randomUUID());
+    expect((await query<{ status: string; outcome_determinate: boolean }>("SELECT status,outcome_determinate FROM submission_attempts WHERE id=$1", [first.attemptId])).rows[0]).toEqual({ status: "unknown", outcome_determinate: false });
+    const second = await prepareRecipientSubmission(delivery.id);
     if (!second || "reconcileAttemptId" in second) throw new Error("Expected authorized submission");
     const oldExternalId = crypto.randomUUID();
     await markAccepted(first.attemptId, oldExternalId);
-    await applyCanonicalEvent("pa_mock", null, { id: crypto.randomUUID(), externalMessageId: oldExternalId, type: "delivered", occurredAt: new Date(), metadata: {} });
+    await applyCanonicalEvent("pa_mock", null, { id: crypto.randomUUID(), externalMessageId: oldExternalId, recipient: request.to[0].email, type: "delivered", occurredAt: new Date(), metadata: {} });
     const historicCallback = (await query<{ payload: { data: { lifecycle: string; attemptId: string } } }>("SELECT c.payload FROM callback_deliveries c JOIN delivery_events e ON e.id=c.delivery_event_id WHERE e.delivery_id=$1 AND e.event_type='delivered'", [delivery.id])).rows[0];
     expect(historicCallback.payload.data).toMatchObject({ lifecycle: "delivered", attemptId: first.attemptId });
     expect((await query<{ lifecycle_status: string; current_attempt_id: string }>("SELECT lifecycle_status,current_attempt_id FROM deliveries WHERE id=$1", [delivery.id])).rows[0]).toEqual({ lifecycle_status: "submitting", current_attempt_id: second.attemptId });
@@ -153,10 +165,10 @@ describe("durable message pipeline", () => {
     const accepted = await acceptMessage({ identity, idempotencyKey: crypto.randomUUID(), input: request });
     messageIds.push(accepted.message.id);
     const delivery = (await query<{ id: string }>("SELECT id FROM deliveries WHERE message_id=$1", [accepted.message.id])).rows[0];
-    const submission = await prepareSubmission(delivery.id);
+    const submission = await prepareRecipientSubmission(delivery.id);
     if (!submission || "reconcileAttemptId" in submission) throw new Error("Expected submission");
     const externalMessageId = crypto.randomUUID();
-    const received = await ingestProviderWebhook("mock", "test-endpoint", { rawBody: new TextEncoder().encode(JSON.stringify({ id: `fixture-early-${crypto.randomUUID()}`, type: "delivered", externalMessageId, occurredAt: new Date().toISOString() })), headers: { authorization: "Bearer test-webhook-token" } });
+    const received = await ingestProviderWebhook("mock", "test-endpoint", { rawBody: new TextEncoder().encode(JSON.stringify({ id: `fixture-early-${crypto.randomUUID()}`, type: "delivered", externalMessageId, recipient: request.to[0].email, occurredAt: new Date().toISOString() })), headers: { authorization: "Bearer test-webhook-token" } });
     if (received.status !== 202) throw new Error("Expected verified receipt");
     await processRawProviderEvent(received.id);
     expect((await query<{ processed_at: Date | null; processing_error: string }>("SELECT processed_at,processing_error FROM raw_provider_events WHERE id=$1", [received.id])).rows[0].processed_at).toBeNull();
@@ -174,12 +186,12 @@ describe("durable message pipeline", () => {
     const accepted = await acceptMessage({ identity, idempotencyKey: crypto.randomUUID(), input: request });
     messageIds.push(accepted.message.id);
     const delivery = (await query<{ id: string }>("SELECT id FROM deliveries WHERE message_id=$1", [accepted.message.id])).rows[0];
-    const submission = await prepareSubmission(delivery.id);
+    const submission = await prepareRecipientSubmission(delivery.id);
     if (!submission || "reconcileAttemptId" in submission) throw new Error("Expected submission");
     const externalMessageId = crypto.randomUUID();
     await markAccepted(submission.attemptId, externalMessageId);
     const occurredAt = new Date(Date.now() + 1000);
-    await Promise.all((["bounced", "failed", "delivered", "clicked", "opened", "complained", "unsubscribed"] as const).map(type => applyCanonicalEvent("pa_mock", null, { id: crypto.randomUUID(), externalMessageId, type, occurredAt, metadata: {} })));
+    await Promise.all((["bounced", "failed", "delivered", "clicked", "opened", "complained", "unsubscribed"] as const).map(type => applyCanonicalEvent("pa_mock", null, { id: crypto.randomUUID(), externalMessageId, recipient: request.to[0].email, type, occurredAt, metadata: {} })));
     expect((await query<{ lifecycle_status: string; engagement_status: string; compliance_status: string }>("SELECT lifecycle_status,engagement_status,compliance_status FROM deliveries WHERE id=$1", [delivery.id])).rows[0]).toEqual({ lifecycle_status: "bounced", engagement_status: "clicked", compliance_status: "complained" });
     await query("DELETE FROM suppressions WHERE email_normalized=$1", [request.to[0].email]);
   });
@@ -188,13 +200,13 @@ describe("durable message pipeline", () => {
     const accepted = await acceptMessage({ identity, idempotencyKey: crypto.randomUUID(), input: request });
     messageIds.push(accepted.message.id);
     const delivery = (await query<{ id: string }>("SELECT id FROM deliveries WHERE message_id=$1", [accepted.message.id])).rows[0];
-    const submission = await prepareSubmission(delivery.id);
+    const submission = await prepareRecipientSubmission(delivery.id);
     if (!submission || "reconcileAttemptId" in submission) throw new Error("Expected submission");
     await markUnknown(submission.attemptId, "Response lost");
-    await query("UPDATE delivery_attempts SET reconciliation_count=11,reconcile_after=now() WHERE id=$1", [submission.attemptId]);
+    await query("UPDATE submission_attempts SET reconciliation_count=11,reconcile_after=now() WHERE id=$1", [submission.attemptId]);
     expect(await getAttemptForReconciliation(submission.attemptId)).toBeTruthy();
     await markReconciled(submission.attemptId, "unknown");
-    expect((await query<{ status: string; reconcile_after: Date | null; error_code: string }>("SELECT status,reconcile_after,error_code FROM delivery_attempts WHERE id=$1", [submission.attemptId])).rows[0]).toEqual({ status: "unknown", reconcile_after: null, error_code: "reconciliation_exhausted" });
+    expect((await query<{ status: string; reconcile_after: Date | null; error_code: string }>("SELECT status,reconcile_after,error_code FROM submission_attempts WHERE id=$1", [submission.attemptId])).rows[0]).toEqual({ status: "unknown", reconcile_after: null, error_code: "RECONCILIATION_EXHAUSTED" });
   });
 
   it("never automatically fails over after an unclassified submission exception", async () => {
@@ -203,8 +215,8 @@ describe("durable message pipeline", () => {
     const delivery = (await query<{ id: string }>("SELECT id FROM deliveries WHERE message_id=$1", [accepted.message.id])).rows[0];
     const send = vi.spyOn(providerRegistry("mock").sender, "send").mockRejectedValue(new Error("connection lost after provider accepted"));
     try {
-      await processDelivery({ data: { deliveryId: delivery.id } } as Job<{ deliveryId: string }>);
-      await processDelivery({ data: { deliveryId: delivery.id } } as Job<{ deliveryId: string }>);
+      await processDelivery({ data: { submissionId: await submissionIdForDelivery(delivery.id) } } as Job<{ submissionId: string }>);
+      await processDelivery({ data: { submissionId: await submissionIdForDelivery(delivery.id) } } as Job<{ submissionId: string }>);
       expect(send).toHaveBeenCalledTimes(1);
       expect((await query<{ lifecycle_status: string }>("SELECT lifecycle_status FROM deliveries WHERE id=$1", [delivery.id])).rows[0].lifecycle_status).toBe("unknown");
     } finally { send.mockRestore(); }
@@ -216,7 +228,7 @@ describe("durable message pipeline", () => {
     const delivery = (await query<{ id: string }>("SELECT id FROM deliveries WHERE message_id=$1", [accepted.message.id])).rows[0];
     const send = vi.spyOn(providerRegistry("mock").sender, "send").mockRejectedValue(new CanonicalProviderError("Explicit rejection", "policy", "policy_rejection", "not_accepted", false));
     try {
-      await processDelivery({ data: { deliveryId: delivery.id } } as Job<{ deliveryId: string }>);
+      await processDelivery({ data: { submissionId: await submissionIdForDelivery(delivery.id) } } as Job<{ submissionId: string }>);
       const failures = (await query<{ event_id: string; payload_id: string }>("SELECT e.id AS event_id,c.payload->>'id' AS payload_id FROM delivery_events e JOIN callback_deliveries c ON c.delivery_event_id=e.id WHERE e.delivery_id=$1 AND e.event_type='failed'", [delivery.id])).rows;
       expect(failures).toHaveLength(1);
       expect(failures[0].payload_id).toBe(failures[0].event_id);
@@ -227,12 +239,12 @@ describe("durable message pipeline", () => {
     const accepted = await acceptMessage({ identity, idempotencyKey: crypto.randomUUID(), input: request });
     messageIds.push(accepted.message.id);
     const delivery = (await query<{ id: string }>("SELECT id FROM deliveries WHERE message_id=$1", [accepted.message.id])).rows[0];
-    await query("UPDATE deliveries SET defer_count=59 WHERE id=$1", [delivery.id]);
+    await query("UPDATE submissions SET defer_count=59 WHERE id=$1", [await submissionIdForDelivery(delivery.id)]);
     await query("UPDATE provider_accounts SET status='disabled' WHERE id='pa_mock'");
     try {
-      expect(await prepareSubmission(delivery.id)).toBeNull();
-      expect((await query<{ lifecycle_status: string; defer_count: number }>("SELECT lifecycle_status,defer_count FROM deliveries WHERE id=$1", [delivery.id])).rows[0]).toEqual({ lifecycle_status: "failed", defer_count: 60 });
-      expect(await prepareSubmission(delivery.id)).toBeNull();
+      expect(await prepareRecipientSubmission(delivery.id)).toBeNull();
+      expect((await query<{ lifecycle_status: string; defer_count: number }>("SELECT d.lifecycle_status,s.defer_count FROM deliveries d JOIN submission_deliveries sd ON sd.delivery_id=d.id JOIN submissions s ON s.id=sd.submission_id WHERE d.id=$1", [delivery.id])).rows[0]).toEqual({ lifecycle_status: "failed", defer_count: 60 });
+      expect(await prepareRecipientSubmission(delivery.id)).toBeNull();
     } finally { await query("UPDATE provider_accounts SET status='active' WHERE id='pa_mock'"); }
   });
 
@@ -266,7 +278,7 @@ describe("durable message pipeline", () => {
     const accepted = await acceptMessage({ identity, idempotencyKey: crypto.randomUUID(), input: { ...request, to: [{ email }] } });
     messageIds.push(accepted.message.id);
     const delivery = (await query<{ id: string }>("SELECT id FROM deliveries WHERE message_id=$1", [accepted.message.id])).rows[0];
-    await applySuppressedDelivery(delivery.id);
+    await transaction(client => applyDeliveryEvent(client, delivery.id, { id: crypto.randomUUID(), type: "suppressed", occurredAt: new Date(), metadata: { source: "submission_policy" } }, `local-suppression:${crypto.randomUUID()}`));
     expect((await query<{ scope_type: string }>("SELECT scope_type FROM suppressions WHERE email_normalized=$1", [email])).rows.map(row => row.scope_type)).toEqual(["product"]);
   });
 
@@ -301,17 +313,17 @@ describe("durable message pipeline", () => {
     const accepted = await acceptMessage({ identity, idempotencyKey: crypto.randomUUID(), input: request });
     messageIds.push(accepted.message.id);
     const delivery = (await query<{ id: string }>("SELECT id FROM deliveries WHERE message_id=$1", [accepted.message.id])).rows[0];
-    const submission = await prepareSubmission(delivery.id);
+    const submission = await prepareRecipientSubmission(delivery.id);
     if (!submission || "reconcileAttemptId" in submission) throw new Error("Expected submission");
     await markUnknown(submission.attemptId, "Response lost");
-    await retryMessage(accepted.message.id, identity.serviceId, true);
+    await retryMessage(accepted.message.id, identity.serviceId, { acknowledgeDuplicateRisk: true }, crypto.randomUUID());
     await markReconciled(submission.attemptId, "accepted");
     expect((await query<{ lifecycle_status: string }>("SELECT lifecycle_status FROM deliveries WHERE id=$1", [delivery.id])).rows[0].lifecycle_status).toBe("accepted");
-    expect(await prepareSubmission(delivery.id)).toBeNull();
+    expect(await prepareRecipientSubmission(delivery.id)).toBeNull();
     // The original response can still provide a native ID after conclusive reconciliation.
     const externalId = crypto.randomUUID();
     await markAccepted(submission.attemptId, externalId);
-    expect((await query<{ external_message_id: string }>("SELECT external_message_id FROM delivery_attempts WHERE id=$1", [submission.attemptId])).rows[0].external_message_id).toBe(externalId);
+    expect((await query<{ external_message_id: string }>("SELECT external_message_id FROM submission_attempts WHERE id=$1", [submission.attemptId])).rows[0].external_message_id).toBe(externalId);
     expect((await query<{ count: string }>("SELECT count(*) FROM delivery_events WHERE delivery_id=$1 AND event_type='accepted'", [delivery.id])).rows[0].count).toBe("1");
   });
 
@@ -319,24 +331,26 @@ describe("durable message pipeline", () => {
     const accepted = await acceptMessage({ identity, idempotencyKey: crypto.randomUUID(), input: request });
     messageIds.push(accepted.message.id);
     const delivery = (await query<{ id: string }>("SELECT id FROM deliveries WHERE message_id=$1", [accepted.message.id])).rows[0];
-    const submission = await prepareSubmission(delivery.id);
+    const submission = await prepareRecipientSubmission(delivery.id);
     if (!submission || "reconcileAttemptId" in submission) throw new Error("Expected submission");
     await markUnknown(submission.attemptId, "Response lost");
     await markReconciled(submission.attemptId, "not_accepted");
     expect((await query<{ lifecycle_status: string }>("SELECT lifecycle_status FROM deliveries WHERE id=$1", [delivery.id])).rows[0].lifecycle_status).toBe("deferred");
-    expect((await query<{ status: string; outcome_determinate: boolean }>("SELECT status,outcome_determinate FROM delivery_attempts WHERE id=$1", [submission.attemptId])).rows[0]).toEqual({ status: "failed", outcome_determinate: true });
-    expect((await query<{ count: string }>("SELECT count(*) FROM outbox_events WHERE aggregate_id=$1 AND event_type='delivery.requested' AND available_at>now()", [delivery.id])).rows[0].count).toBe("1");
+    expect((await query<{ status: string; outcome_determinate: boolean }>("SELECT status,outcome_determinate FROM submission_attempts WHERE id=$1", [submission.attemptId])).rows[0]).toEqual({ status: "failed", outcome_determinate: true });
+    expect((await query<{ count: string }>("SELECT count(*) FROM outbox_events WHERE aggregate_id=$1 AND event_type='submission.requested' AND available_at>now()", [await submissionIdForDelivery(delivery.id)])).rows[0].count).toBe("1");
   });
 
   it("keeps public capabilities and API contracts aligned with implemented behavior", () => {
     for (const type of ["resend", "ses", "sendgrid", "mailgun", "postmark", "mock"] as const) {
       const adapter = providerRegistry(type);
       expect(adapter.descriptor.capabilities.domainManagement).toBe(Boolean(adapter.identity));
-      expect(adapter.descriptor.capabilities.attachments).toBe(false);
+      expect(adapter.descriptor.capabilities.outboundAttachments).toBe(true);
+      expect(adapter.descriptor.capabilities.inlineAttachments).toBe(true);
       expect(adapter.descriptor.capabilities.scheduling).toBe(false);
     }
     expect(createMessageSchema.safeParse({
       category: "security",
+      from: request.from,
       to: [{ email: "Person@example.test" }, { email: "person@example.test" }],
       subject: "Duplicate recipient",
       text: "Duplicate recipient"
@@ -512,7 +526,7 @@ describe("durable message pipeline", () => {
     const state = await query<{
       deliveries: string;
       outbox: string
-    }>(`SELECT (SELECT count(*) FROM deliveries WHERE message_id=$1) deliveries,(SELECT count(*) FROM outbox_events WHERE payload->>'deliveryId' IN (SELECT id FROM deliveries WHERE message_id=$1)) outbox`, [first.message.id]);
+    }>(`SELECT (SELECT count(*) FROM deliveries WHERE message_id=$1) deliveries,(SELECT count(*) FROM outbox_events WHERE payload->>'submissionId' IN (SELECT id FROM submissions WHERE message_id=$1)) outbox`, [first.message.id]);
     expect(Number(state.rows[0].deliveries)).toBe(1);
     expect(Number(state.rows[0].outbox)).toBe(1);
     await expect(acceptMessage({
@@ -526,7 +540,7 @@ describe("durable message pipeline", () => {
     const accepted = await acceptMessage({
       identity,
       idempotencyKey: `resources-${crypto.randomUUID()}`,
-      input: { ...request, referenceId, replyTo: "reply@example.net" }
+      input: { ...request, referenceId, replyTo: [{ email: "reply@example.net" }] }
     });
     messageIds.push(accepted.message.id);
     const detail = await getMessage(accepted.message.id, identity.serviceId);
@@ -535,7 +549,7 @@ describe("durable message pipeline", () => {
       html_body: request.html,
       text_body: request.text,
       category: request.category,
-      reply_to: "reply@example.net",
+      reply_to: [{ email: "reply@example.net" }],
       provider_tags: request.tags
     });
     expect(await getMessage(accepted.message.id, "svc_nova_app")).toBeNull();
@@ -558,11 +572,11 @@ describe("durable message pipeline", () => {
     const delivery = (await query<{
       id: string
     }>("SELECT id FROM deliveries WHERE message_id=$1", [accepted.message.id])).rows[0];
-    await processDelivery({ data: { deliveryId: delivery.id } } as Job<{ deliveryId: string }>);
+    await processDelivery({ data: { submissionId: await submissionIdForDelivery(delivery.id) } } as Job<{ submissionId: string }>);
     expect(Number((await query<{
       count: string
-    }>("SELECT count(*) FROM delivery_attempts WHERE delivery_id=$1", [delivery.id])).rows[0].count)).toBe(0);
-    expect((await getMessage(accepted.message.id, identity.serviceId))?.status).toBe("canceled")
+    }>("SELECT count(*) FROM submission_attempts WHERE submission_id IN (SELECT submission_id FROM submission_deliveries WHERE delivery_id=$1)", [delivery.id])).rows[0].count)).toBe(0);
+    expect((await getMessage(accepted.message.id, identity.serviceId))?.outcome).toBe("canceled")
   });
   it("requires duplicate-risk acknowledgement before retrying an unknown outcome", async () => {
     const accepted = await acceptMessage({
@@ -574,13 +588,13 @@ describe("durable message pipeline", () => {
     const delivery = (await query<{
       id: string
     }>("SELECT id FROM deliveries WHERE message_id=$1", [accepted.message.id])).rows[0];
-    expect(await prepareSubmission(delivery.id)).toBeTruthy();
-    await query("UPDATE delivery_attempts SET submission_deadline_at=now()-interval '1 second' WHERE delivery_id=$1", [delivery.id]);
-    expect(await prepareSubmission(delivery.id)).toHaveProperty("reconcileAttemptId");
-    await expect(retryMessage(accepted.message.id, identity.serviceId, false)).rejects.toBeInstanceOf(DuplicateRiskError);
-    expect((await retryMessage(accepted.message.id, identity.serviceId, true))?.queued).toBe(1);
+    expect(await prepareRecipientSubmission(delivery.id)).toBeTruthy();
+    await query("UPDATE submission_attempts SET submission_deadline_at=now()-interval '1 second' WHERE submission_id IN (SELECT submission_id FROM submission_deliveries WHERE delivery_id=$1)", [delivery.id]);
+    expect(await prepareRecipientSubmission(delivery.id)).toHaveProperty("reconcileAttemptId");
+    await expect(retryMessage(accepted.message.id, identity.serviceId, { acknowledgeDuplicateRisk: false }, crypto.randomUUID())).rejects.toBeInstanceOf(DuplicateRiskError);
+    expect((await retryMessage(accepted.message.id, identity.serviceId, { acknowledgeDuplicateRisk: true }, crypto.randomUUID()))?.queued).toBe(1);
     const attempt = (await query<{ status: string; authorized: string | null }>(`SELECT status,retry_authorized_at AS authorized
-      FROM delivery_attempts WHERE delivery_id=$1 ORDER BY attempt_number DESC LIMIT 1`, [delivery.id])).rows[0];
+      FROM submission_attempts WHERE submission_id IN (SELECT submission_id FROM submission_deliveries WHERE delivery_id=$1) ORDER BY attempt_number DESC LIMIT 1`, [delivery.id])).rows[0];
     expect(attempt.status).toBe("unknown");
     expect(attempt.authorized).toBeTruthy()
   });
@@ -616,12 +630,12 @@ describe("durable message pipeline", () => {
     const delivery = (await query<{
       id: string
     }>("SELECT id FROM deliveries WHERE message_id=$1", [accepted.message.id])).rows[0];
-    const job = { data: { deliveryId: delivery.id } } as Job<{ deliveryId: string }>;
+    const job = { data: { submissionId: await submissionIdForDelivery(delivery.id) } } as Job<{ submissionId: string }>;
     await processDelivery(job);
     await processDelivery(job);
     const attempts = await query<{
       count: string
-    }>("SELECT count(*) FROM delivery_attempts WHERE delivery_id=$1", [delivery.id]);
+    }>("SELECT count(*) FROM submission_attempts WHERE submission_id IN (SELECT submission_id FROM submission_deliveries WHERE delivery_id=$1)", [delivery.id]);
     expect(Number(attempts.rows[0].count)).toBe(1);
     const status = await query<{
       lifecycle_status: string
@@ -638,14 +652,15 @@ describe("durable message pipeline", () => {
     const delivery = (await query<{
       id: string
     }>("SELECT id FROM deliveries WHERE message_id=$1", [accepted.message.id])).rows[0];
-    await processDelivery({ data: { deliveryId: delivery.id } } as Job<{ deliveryId: string }>);
+    await processDelivery({ data: { submissionId: await submissionIdForDelivery(delivery.id) } } as Job<{ submissionId: string }>);
     const attempt = (await query<{
       external_message_id: string
-    }>("SELECT external_message_id FROM delivery_attempts WHERE delivery_id=$1", [delivery.id])).rows[0];
+    }>("SELECT external_message_id FROM submission_attempts WHERE submission_id IN (SELECT submission_id FROM submission_deliveries WHERE delivery_id=$1)", [delivery.id])).rows[0];
     const now = new Date();
     await applyCanonicalEvent("pa_mock", null, {
       id: "delivered-new",
       externalMessageId: attempt.external_message_id,
+      recipient: "events@example.net",
       type: "delivered",
       occurredAt: now,
       metadata: {}
@@ -653,6 +668,7 @@ describe("durable message pipeline", () => {
     await applyCanonicalEvent("pa_mock", null, {
       id: "deferred-old",
       externalMessageId: attempt.external_message_id,
+      recipient: "events@example.net",
       type: "deferred",
       occurredAt: new Date(now.getTime() - 60_000),
       metadata: {}
@@ -710,13 +726,13 @@ describe("durable message pipeline", () => {
     }>("SELECT id FROM deliveries WHERE message_id=$1", [accepted.message.id])).rows[0];
     await query("UPDATE provider_accounts SET quota=$2 WHERE id=$1", ["pa_mock", { monthlyLimit: 0 }]);
     try {
-      await processDelivery({ data: { deliveryId: delivery.id } } as Job<{ deliveryId: string }>);
+      await processDelivery({ data: { submissionId: await submissionIdForDelivery(delivery.id) } } as Job<{ submissionId: string }>);
       expect((await query<{
         lifecycle_status: string
       }>("SELECT lifecycle_status FROM deliveries WHERE id=$1", [delivery.id])).rows[0].lifecycle_status).toBe("deferred");
       expect(Number((await query<{
         count: string
-      }>("SELECT count(*) FROM delivery_attempts WHERE delivery_id=$1", [delivery.id])).rows[0].count)).toBe(0)
+      }>("SELECT count(*) FROM submission_attempts WHERE submission_id IN (SELECT submission_id FROM submission_deliveries WHERE delivery_id=$1)", [delivery.id])).rows[0].count)).toBe(0)
     } finally {
       await query("UPDATE provider_accounts SET quota=$2 WHERE id=$1", ["pa_mock", { monthlyLimit: 100000 }])
     }
@@ -731,11 +747,11 @@ describe("durable message pipeline", () => {
     const delivery = (await query<{
       id: string
     }>("SELECT id FROM deliveries WHERE message_id=$1", [accepted.message.id])).rows[0];
-    const first = await prepareSubmission(delivery.id);
+    const first = await prepareRecipientSubmission(delivery.id);
     expect(first && !("reconcileAttemptId" in first)).toBe(true);
-    expect(await prepareSubmission(delivery.id)).toBeNull();
-    await query("UPDATE delivery_attempts SET submission_deadline_at=now()-interval '1 second' WHERE delivery_id=$1", [delivery.id]);
-    const second = await prepareSubmission(delivery.id);
+    expect(await prepareRecipientSubmission(delivery.id)).toBeNull();
+    await query("UPDATE submission_attempts SET submission_deadline_at=now()-interval '1 second' WHERE submission_id IN (SELECT submission_id FROM submission_deliveries WHERE delivery_id=$1)", [delivery.id]);
+    const second = await prepareRecipientSubmission(delivery.id);
     expect(second && "reconcileAttemptId" in second).toBe(true);
     expect((await query<{
       lifecycle_status: string
@@ -753,15 +769,15 @@ describe("durable message pipeline", () => {
     const delivery = (await query<{
       id: string
     }>("SELECT id FROM deliveries WHERE message_id=$1", [accepted.message.id])).rows[0];
-    await processDelivery({ data: { deliveryId: delivery.id } } as Job<{ deliveryId: string }>);
+    await processDelivery({ data: { submissionId: await submissionIdForDelivery(delivery.id) } } as Job<{ submissionId: string }>);
     expect((await query<{
       lifecycle_status: string
     }>("SELECT lifecycle_status FROM deliveries WHERE id=$1", [delivery.id])).rows[0].lifecycle_status).toBe("bounced");
-    expect(await manualRetryDelivery(delivery.id, true, "test-suite")).toMatchObject({ queued: false, reason: "suppressed" });
-    await processDelivery({ data: { deliveryId: delivery.id } } as Job<{ deliveryId: string }>);
+    await expect(manualRetryDelivery(delivery.id, true, "test-suite")).rejects.toMatchObject({ code: "RETRY_NOT_ALLOWED" });
+    await processDelivery({ data: { submissionId: await submissionIdForDelivery(delivery.id) } } as Job<{ submissionId: string }>);
     expect(Number((await query<{
       count: string
-    }>("SELECT count(*) FROM delivery_attempts WHERE delivery_id=$1", [delivery.id])).rows[0].count)).toBe(1)
+    }>("SELECT count(*) FROM submission_attempts WHERE submission_id IN (SELECT submission_id FROM submission_deliveries WHERE delivery_id=$1)", [delivery.id])).rows[0].count)).toBe(1)
   });
   it("opens the target circuit after consecutive retryable failures", async () => {
     const created: string[] = [];
@@ -777,7 +793,7 @@ describe("durable message pipeline", () => {
         const delivery = (await query<{
           id: string
         }>("SELECT id FROM deliveries WHERE message_id=$1", [accepted.message.id])).rows[0];
-        const submission = await prepareSubmission(delivery.id);
+        const submission = await prepareRecipientSubmission(delivery.id);
         if (!submission || "reconcileAttemptId" in submission) throw new Error("Expected a routable submission");
         await markDeterminateFailure(submission.attemptId, {
           category: "provider",

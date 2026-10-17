@@ -1,7 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { z } from "zod";
-import type { CanonicalEventType, ProviderModule } from "../contracts";
-import { accepted, submitRequest, eventDate, stableEventId, checkedJson, decodeJson, event, header } from "../shared";
+import { CanonicalProviderError, type CanonicalEventType, type ProviderModule } from "../contracts";
+import { nativeMailCapabilities, assertMessageCapabilities, formatAddress, messageHeaders, safeDiagnostic, accepted, submitRequest, eventDate, stableEventId, checkedJson, decodeJson, event, header } from "../shared";
 
 const eventMap: Record<string, CanonicalEventType> = {
   Delivery: "delivered",
@@ -29,29 +29,35 @@ export const postmarkModule: ProviderModule = {
       domainManagement: false,
       webhookSecurity: "Basic Auth, opaque URL, IP allowlist, schema validation",
       eventTypes: Object.keys(eventMap),
-      attachments: false,
+      ...nativeMailCapabilities,
       scheduling: false
     }
   },
   sender: {
     async send(message, context) {
+      assertMessageCapabilities(message, postmarkModule.descriptor.capabilities);
       if (context.config.type !== "postmark" || context.secret.type !== "postmark") throw new Error("Invalid Postmark configuration");
       const response = await submitRequest("https://api.postmarkapp.com/email", {
         method: "POST",
         headers: { "x-postmark-server-token": context.secret.serverToken, "content-type": "application/json" },
         body: JSON.stringify({
-          From: `${message.from.name} <${message.from.email}>`,
-          To: message.to.name ? `${message.to.name} <${message.to.email}>` : message.to.email,
-          ReplyTo: message.replyTo,
+          From: formatAddress(message.from),
+          To: message.to.map(formatAddress).join(", "),
+          Cc: message.cc.length ? message.cc.map(formatAddress).join(", ") : undefined,
+          Bcc: message.bcc.length ? message.bcc.map(formatAddress).join(", ") : undefined,
+          ReplyTo: message.replyTo.length ? message.replyTo.map(formatAddress).join(", ") : undefined,
           Subject: message.subject,
           HtmlBody: message.html,
           TextBody: message.text,
+          Headers: Object.entries(messageHeaders(message)).map(([Name, Value]) => ({ Name, Value })),
+          Attachments: message.attachments.map(a => ({ Name: a.fileName, ContentType: a.contentType, Content: Buffer.from(a.content).toString("base64"), ...(a.disposition === "inline" ? { ContentID: `cid:${a.contentId}` } : {}) })),
           MessageStream: context.config.messageStream,
           Metadata: message.tags
         })
       });
       const body = await checkedJson(response);
-      return accepted(body.MessageID, body);
+      if (body.ErrorCode !== undefined && body.ErrorCode !== 0) throw new CanonicalProviderError(safeDiagnostic(body.Message), "policy", "PROVIDER_POLICY_REJECTED", "not_accepted", false, { providerCode: String(body.ErrorCode) });
+      return accepted(body.MessageID);
     }
   },
   webhook: {

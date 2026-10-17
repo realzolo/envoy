@@ -5,9 +5,10 @@ import { providerRegistry } from "@/modules/providers/registry";
 import type { CanonicalMessage, ProviderSendContext, ProviderType } from "@/modules/providers/contracts";
 
 const message: CanonicalMessage = {
-  deliveryId: "dlv_test",
+  submissionId: "sub_test",
   from: { name: "Envoy", email: "hello@example.com" },
-  to: { email: "person@example.net" },
+  to: [{ email: "person@example.net" }],
+  cc: [], bcc: [], replyTo: [], headers: {}, references: [],
   subject: "Contract test",
   html: "<p>Hello</p>",
   text: "Hello",

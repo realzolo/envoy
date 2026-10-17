@@ -6,19 +6,19 @@ import { query } from "@/server/database";
 import { workerHeartbeatAlive } from "@/server/runtime-store";
 
 type EmailRow = {
-  delivery_id: string; message_id: string; recipient_email: string; recipient_name: string | null;
+  delivery_id: string; message_id: string; recipient_email: string; recipient_name: string | null; recipient_role: "to" | "cc" | "bcc"; last_error: Record<string, unknown> | null;
   lifecycle_status: string; compliance_status: string; engagement_status: string;
   accepted_at: Date; cursor_at: string; updated_at: Date; reference_id: string | null; subject: string; category: string;
-  product_name: string; sender_snapshot: { fromName: string; fromEmail: string };
+  product_name: string; sender_snapshot: { fromName?: string; fromEmail: string };
   external_message_id: string | null; current_attempt_id: string | null;
 };
-const emailSelect = `SELECT d.id AS delivery_id,d.recipient_email,d.recipient_name,d.lifecycle_status,d.compliance_status,d.engagement_status,d.message_id,d.current_attempt_id,d.updated_at,m.accepted_at,to_char(m.accepted_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_at,m.reference_id,m.subject,m.message_category AS category,m.sender_snapshot,p.name AS product_name,da.external_message_id FROM deliveries d JOIN messages m ON m.id=d.message_id JOIN products p ON p.id=m.product_id LEFT JOIN delivery_attempts da ON da.id=d.current_attempt_id`;
+const emailSelect = `SELECT d.id AS delivery_id,d.recipient_email,d.recipient_name,d.recipient_role,d.last_error,d.lifecycle_status,d.compliance_status,d.engagement_status,d.message_id,d.current_attempt_id,d.updated_at,m.accepted_at,to_char(m.accepted_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_at,m.reference_id,m.subject,m.message_category AS category,m.sender_snapshot,p.name AS product_name,da.external_message_id FROM deliveries d JOIN messages m ON m.id=d.message_id JOIN products p ON p.id=m.product_id LEFT JOIN submission_attempts da ON da.id=d.current_attempt_id`;
 
 function mapEmail(row: EmailRow): EmailRecord {
   return {
     id: row.delivery_id, messageId: row.message_id, recipient: row.recipient_email,
-    recipientName: row.recipient_name ?? undefined, subject: row.subject, category: row.category,
-    product: row.product_name, from: `${row.sender_snapshot.fromName} <${row.sender_snapshot.fromEmail}>`,
+    recipientName: row.recipient_name ?? undefined, recipientRole: row.recipient_role, lastError: row.last_error, subject: row.subject, category: row.category,
+    product: row.product_name, from: row.sender_snapshot.fromName ? `${row.sender_snapshot.fromName} <${row.sender_snapshot.fromEmail}>` : row.sender_snapshot.fromEmail,
     status: (row.compliance_status === "suppressed" ? "suppressed" : row.lifecycle_status) as DeliveryStatus,
     createdAt: row.accepted_at.toISOString(), relativeTime: row.accepted_at.toISOString(),
     providerId: row.external_message_id ?? undefined, referenceId: row.reference_id ?? undefined
@@ -61,9 +61,12 @@ export async function getDeliveryDetail(id: string) {
   const row = (await query<EmailRow>(`${emailSelect} WHERE d.id=$1`, [id])).rows[0];
   if (!row) return null;
   const [attempts, events, content, eligibility] = await Promise.all([
-    query(`SELECT da.id,da.attempt_number,da.status,da.outcome_determinate,da.external_message_id,da.error_category,da.error_code,da.error_message,da.routing_snapshot,da.started_at,da.finished_at,da.retry_authorized_at,da.retry_authorized_by,da.reconciliation_count,da.reconcile_after,pa.name AS provider_account,pa.type AS provider_type FROM delivery_attempts da JOIN provider_accounts pa ON pa.id=da.provider_account_id WHERE da.delivery_id=$1 ORDER BY da.attempt_number DESC`, [id]),
-    query(`SELECT id,event_type,occurred_at,canonical_payload FROM delivery_events WHERE delivery_id=$1 ORDER BY occurred_at DESC,id DESC`, [id]),
-    query<{ html_body:string|null;text_body:string|null;reply_to:string|null;sender_snapshot:EmailRow["sender_snapshot"];content_purged_at:string|null }>(`SELECT html_body,text_body,reply_to,sender_snapshot,content_purged_at FROM messages WHERE id=$1`, [row.message_id]),
+    query(`SELECT da.id,da.submission_id,da.attempt_number,da.status,da.outcome_determinate,da.external_message_id,da.error_category,da.error_code,da.error_message,da.diagnostic,da.routing_snapshot,da.started_at,da.finished_at,da.retry_authorized_at,da.retry_authorized_by,da.reconciliation_count,da.reconcile_after,pa.name AS provider_account,pa.type AS provider_type FROM submission_attempts da JOIN submission_deliveries sd ON sd.submission_id=da.submission_id JOIN provider_accounts pa ON pa.id=da.provider_account_id WHERE sd.delivery_id=$1 ORDER BY da.attempt_number DESC`, [id]),
+    query(`SELECT id,event_type,occurred_at,canonical_payload,scope FROM (
+      SELECT id,event_type,occurred_at,canonical_payload,'recipient' AS scope FROM delivery_events WHERE delivery_id=$1
+      UNION ALL SELECT e.id,e.event_type,e.occurred_at,e.canonical_payload,'submission' AS scope FROM submission_events e JOIN submission_deliveries sd ON sd.submission_id=e.submission_id WHERE sd.delivery_id=$1
+    ) events ORDER BY occurred_at DESC,id DESC`, [id]),
+    query<{ html_body:string|null;text_body:string|null;reply_to:Array<{email:string;name?:string}>;to_recipients:Array<{email:string;name?:string}>;cc_recipients:Array<{email:string;name?:string}>;bcc_recipients:Array<{email:string;name?:string}>;attachment_snapshot:Array<Record<string,unknown>>;headers:Record<string,string>;in_reply_to:string|null;references_ids:string[];sender_snapshot:EmailRow["sender_snapshot"];content_purged_at:string|null }>(`SELECT html_body,text_body,reply_to,to_recipients,cc_recipients,bcc_recipients,attachment_snapshot,headers,in_reply_to,references_ids,sender_snapshot,content_purged_at FROM messages WHERE id=$1`, [row.message_id]),
     getRetryEligibility(id)
   ]);
   return {
@@ -80,8 +83,8 @@ export async function messageComposerData() {
       FROM services s JOIN products p ON p.id=s.product_id
       WHERE p.status='active'
       ORDER BY p.name,s.name`),
-    query<{ name: string; product_id: string; category: string; from_address: string }>(`SELECT sp.name,sp.product_id,sp.message_category AS category,
-      sp.from_name||' <'||sp.from_local_part||'@'||sd.domain||'>' AS from_address
+    query<{ name: string; product_id: string; category: string; from_address: string; from_name: string; from_email: string; reply_to: string | null }>(`SELECT sp.name,sp.product_id,sp.message_category AS category,
+      sp.from_name||' <'||sp.from_local_part||'@'||sd.domain||'>' AS from_address,sp.from_name,sp.from_local_part||'@'||sd.domain AS from_email,sp.reply_to
       FROM sender_profiles sp JOIN sending_domains sd ON sd.id=sp.sending_domain_id
       WHERE sp.status='active' AND sd.status='active'
       ORDER BY sp.name`)
@@ -108,20 +111,22 @@ export async function dashboardData() {
       (SELECT count(*) FROM callback_deliveries WHERE status='dead_letter') AS dead_letters,
       (SELECT count(*) FROM deliveries WHERE lifecycle_status='unknown') AS unknown,
       (SELECT count(*) FROM raw_provider_events WHERE processed_at IS NULL AND processing_error IS NOT NULL) AS raw_errors`),
-    query<{id:string;product:string;service:string;category:string;sender:string;credential:boolean;provider:boolean;identity:boolean;route:boolean;tested:boolean;observable:boolean;event_seen:boolean}>(`SELECT sp.id||':'||s.id AS id,p.name AS product,s.name AS service,sp.message_category AS category,sp.name AS sender,
+    query<{id:string;product:string;service:string;category:string;sender:string;grant:boolean;credential:boolean;provider:boolean;identity:boolean;route:boolean;tested:boolean;observable:boolean;event_seen:boolean}>(`SELECT sg.id||':'||s.id||':'||cat.category AS id,p.name AS product,s.name AS service,cat.category AS category,
+      coalesce(sg.from_local_part,'*')||'@'||sd.domain AS sender,sg.status='active' AS grant,
       EXISTS(SELECT 1 FROM service_credentials c WHERE c.service_id=s.id AND c.status='active' AND c.valid_from<=now() AND (c.valid_to IS NULL OR c.valid_to>now())) AS credential,
       EXISTS(SELECT 1 FROM provider_identities pi JOIN provider_accounts pa ON pa.id=pi.provider_account_id WHERE pi.sending_domain_id=sd.id AND pa.status='active') AS provider,
       EXISTS(SELECT 1 FROM provider_identities pi JOIN provider_accounts pa ON pa.id=pi.provider_account_id WHERE pi.sending_domain_id=sd.id AND pi.status='verified' AND pa.status='active') AS identity,
       EXISTS(SELECT 1 FROM routing_policies rp JOIN routing_targets rt ON rt.policy_id=rp.id JOIN provider_identities pi ON pi.id=rt.provider_identity_id JOIN provider_accounts pa ON pa.id=rt.provider_account_id
-        WHERE rp.status='active' AND rp.sending_domain_id=sd.id AND (rp.product_id IS NULL OR rp.product_id=p.id) AND (rp.service_id IS NULL OR rp.service_id=s.id) AND (rp.message_category IS NULL OR rp.message_category=sp.message_category)
+        WHERE rp.status='active' AND rp.sending_domain_id=sd.id AND (rp.product_id IS NULL OR rp.product_id=p.id) AND (rp.service_id IS NULL OR rp.service_id=s.id) AND (rp.message_category IS NULL OR rp.message_category=cat.category)
         AND pi.sending_domain_id=sd.id AND pi.status='verified' AND pa.status='active' AND (rt.status='active' OR rt.circuit_open_until<=now())) AS route,
-      EXISTS(SELECT 1 FROM messages m JOIN deliveries d ON d.message_id=m.id WHERE m.service_id=s.id AND m.sender_profile_id=sp.id AND m.message_category=sp.message_category AND d.lifecycle_status IN ('accepted','delivered')) AS tested,
+      EXISTS(SELECT 1 FROM messages m JOIN deliveries d ON d.message_id=m.id WHERE m.service_id=s.id AND m.sending_domain_id=sd.id AND m.message_category=cat.category AND (sg.from_local_part IS NULL OR split_part(m.sender_snapshot->>'fromEmail','@',1)=sg.from_local_part) AND d.lifecycle_status IN ('accepted','delivered')) AS tested,
       EXISTS(SELECT 1 FROM routing_policies rp JOIN routing_targets rt ON rt.policy_id=rp.id JOIN provider_identities pi ON pi.id=rt.provider_identity_id JOIN provider_accounts pa ON pa.id=rt.provider_account_id JOIN provider_webhook_endpoints we ON we.provider_account_id=pa.id
-        WHERE rp.status='active' AND rp.sending_domain_id=sd.id AND (rp.product_id IS NULL OR rp.product_id=p.id) AND (rp.service_id IS NULL OR rp.service_id=s.id) AND (rp.message_category IS NULL OR rp.message_category=sp.message_category)
+        WHERE rp.status='active' AND rp.sending_domain_id=sd.id AND (rp.product_id IS NULL OR rp.product_id=p.id) AND (rp.service_id IS NULL OR rp.service_id=s.id) AND (rp.message_category IS NULL OR rp.message_category=cat.category)
         AND pi.status='verified' AND pa.status='active' AND rt.status='active' AND we.status='active' AND we.security_configured) AS observable,
-      EXISTS(SELECT 1 FROM messages m JOIN deliveries d ON d.message_id=m.id JOIN delivery_events e ON e.delivery_id=d.id WHERE m.service_id=s.id AND m.sender_profile_id=sp.id AND e.raw_provider_event_id IS NOT NULL) AS event_seen
-      FROM sender_profiles sp JOIN products p ON p.id=sp.product_id JOIN services s ON s.product_id=p.id JOIN sending_domains sd ON sd.id=sp.sending_domain_id
-      WHERE p.status='active' AND sp.status='active' AND sd.status='active' ORDER BY p.name,s.name,sp.name LIMIT 100`),
+      EXISTS(SELECT 1 FROM messages m JOIN deliveries d ON d.message_id=m.id JOIN delivery_events e ON e.delivery_id=d.id WHERE m.service_id=s.id AND m.sending_domain_id=sd.id AND m.message_category=cat.category AND (sg.from_local_part IS NULL OR split_part(m.sender_snapshot->>'fromEmail','@',1)=sg.from_local_part) AND e.raw_provider_event_id IS NOT NULL) AS event_seen
+      FROM sender_grants sg JOIN products p ON p.id=sg.product_id JOIN services s ON s.product_id=p.id AND (sg.service_id IS NULL OR sg.service_id=s.id) JOIN sending_domains sd ON sd.id=sg.sending_domain_id
+      CROSS JOIN LATERAL (SELECT 'transactional'::text AS category UNION SELECT rp.message_category FROM routing_policies rp WHERE rp.sending_domain_id=sd.id AND (rp.product_id IS NULL OR rp.product_id=p.id) AND (rp.service_id IS NULL OR rp.service_id=s.id) AND rp.message_category IS NOT NULL) cat
+      WHERE p.status='active' AND sd.status='active' ORDER BY p.name,s.name,sd.domain LIMIT 100`),
     workerHeartbeatAlive()
   ]);
   const c = counts.rows[0];
@@ -170,6 +175,8 @@ const adminQueries = {
   senders: () => query(`SELECT sp.id,sp.name,sp.from_name,sp.from_local_part,sp.reply_to,sp.message_category,sp.status,p.name AS product,p.id AS product_id,sd.domain,sd.id AS domain_id
     FROM sender_profiles sp JOIN products p ON p.id=sp.product_id JOIN sending_domains sd ON sd.id=sp.sending_domain_id
     ORDER BY p.name,sp.name`),
+  grants: () => query(`SELECT sg.id,sg.product_id,sg.service_id,sg.sending_domain_id,sg.from_local_part,sg.status,p.name AS product,s.name AS service,sd.domain
+    FROM sender_grants sg JOIN products p ON p.id=sg.product_id LEFT JOIN services s ON s.id=sg.service_id JOIN sending_domains sd ON sd.id=sg.sending_domain_id ORDER BY p.name,s.name,sd.domain`),
   policies: () => query(`SELECT rp.id,rp.name,rp.priority,rp.status,rp.product_id,rp.service_id,rp.sending_domain_id,p.name AS product,s.name AS service,sd_policy.domain AS sending_domain,rp.message_category,
     json_agg(json_build_object('id',rt.id,'accountId',pa.id,'account',pa.name,'type',pa.type,'identityId',pi.id,'domain',sd.domain,'priority',rt.priority,'weight',rt.weight,'rateLimit',rt.rate_limit_per_minute,'status',rt.status,'circuitOpenUntil',rt.circuit_open_until) ORDER BY rt.priority)
       FILTER(WHERE rt.id IS NOT NULL) AS targets
@@ -197,8 +204,10 @@ const adminQueries = {
     FROM callback_deliveries d JOIN callback_endpoints e ON e.id=d.endpoint_id ORDER BY d.created_at DESC LIMIT 200`),
   rawEvents: () => query(`SELECT r.id,r.native_type,r.provider_event_id,r.signature_valid,r.replay_valid,r.received_at,r.processed_at,r.processing_error,pa.name AS account,pa.type
     FROM raw_provider_events r JOIN provider_accounts pa ON pa.id=r.provider_account_id ORDER BY r.received_at DESC LIMIT 200`),
-  canonicalEvents: () => query(`SELECT de.id,de.event_type,de.occurred_at,de.canonical_payload,d.recipient_email
-    FROM delivery_events de JOIN deliveries d ON d.id=de.delivery_id ORDER BY de.occurred_at DESC LIMIT 200`),
+  canonicalEvents: () => query(`SELECT * FROM (
+    SELECT de.id,de.event_type,de.occurred_at,de.canonical_payload,d.recipient_email,'recipient' AS scope FROM delivery_events de JOIN deliveries d ON d.id=de.delivery_id
+    UNION ALL SELECT e.id,e.event_type,e.occurred_at,e.canonical_payload,NULL AS recipient_email,'submission' AS scope FROM submission_events e
+    ) events ORDER BY occurred_at DESC LIMIT 200`),
   suppressions: () => query(`SELECT s.id,s.scope_type,s.list_id,s.email_normalized,s.reason,s.source,s.bounce_count,s.expires_at,s.created_at,p.name AS product
     FROM suppressions s LEFT JOIN products p ON p.id=s.product_id WHERE s.active=true ORDER BY s.created_at DESC`),
   inbound: () => query(`SELECT i.id,i.service_id,i.content_purged_at,i.from_email,i.to_emails,i.subject,i.status,i.received_at,p.name AS product,count(a.id) AS attachment_count
@@ -234,8 +243,8 @@ export async function adminData(section: AdminSection) {
       return { providers, domains, descriptors: providerDescriptors() };
     }
     case "senders": {
-      const [products, domains, senders] = await Promise.all([rows("products"), rows("domains"), rows("senders")]);
-      return { products, domains, senders };
+      const [products, services, domains, senders, grants] = await Promise.all([rows("products"), rows("services"), rows("domains"), rows("senders"), rows("grants")]);
+      return { products, services, domains, senders, grants };
     }
     case "routing": {
       const [products, services, domains, policies] = await Promise.all([rows("products"), rows("services"), rows("domains"), rows("policies")]);

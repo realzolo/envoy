@@ -5,6 +5,7 @@ import { cleanupOrphanObjects } from "@/server/services/object-cleanup";
 
 const policies = {
   messages: "ENVOY_RETENTION_CONTENT_DAYS",
+  outboundFiles: "ENVOY_RETENTION_CONTENT_DAYS",
   rawEvents: "ENVOY_RETENTION_RAW_DAYS",
   inbound: "ENVOY_RETENTION_INBOUND_DAYS",
   callbacks: "ENVOY_RETENTION_CALLBACK_DAYS",
@@ -31,24 +32,52 @@ export function retentionOptions(env: Partial<NodeJS.ProcessEnv> = process.env, 
 
 const terminal = "('delivered','bounced','failed','canceled')";
 const messageSafe = `NOT EXISTS(SELECT 1 FROM deliveries d WHERE d.message_id=m.id AND d.lifecycle_status NOT IN ${terminal})
-  AND NOT EXISTS(SELECT 1 FROM delivery_attempts a JOIN deliveries d ON d.id=a.delivery_id
-    WHERE d.message_id=m.id AND a.status IN ('submitting','unknown','reconciling') AND a.retry_authorized_at IS NULL)
-  AND NOT EXISTS(SELECT 1 FROM callback_deliveries c JOIN delivery_events e ON e.id=c.delivery_event_id
-    JOIN deliveries d ON d.id=e.delivery_id WHERE d.message_id=m.id AND c.status<>'delivered')`;
+  AND NOT EXISTS(SELECT 1 FROM submission_attempts a JOIN submissions s ON s.id=a.submission_id
+    WHERE s.message_id=m.id AND a.status IN ('submitting','unknown','reconciling')
+      AND (a.retry_authorized_at IS NULL OR EXISTS(SELECT 1 FROM deliveries current_delivery
+        WHERE current_delivery.current_attempt_id=a.id AND current_delivery.current_submission_id=a.submission_id)))
+  AND NOT EXISTS(SELECT 1 FROM callback_deliveries c
+    LEFT JOIN delivery_events e ON e.id=c.delivery_event_id LEFT JOIN deliveries d ON d.id=e.delivery_id
+    LEFT JOIN submission_events se ON se.id=c.submission_event_id LEFT JOIN submissions s ON s.id=se.submission_id
+    WHERE (d.message_id=m.id OR s.message_id=m.id) AND c.status<>'delivered')`;
+const fileSafe = `NOT EXISTS(SELECT 1 FROM messages m WHERE m.content_purged_at IS NULL
+    AND m.attachment_snapshot @> jsonb_build_array(jsonb_build_object('fileId',f.id)))`;
 const rawSafe = `NOT EXISTS(SELECT 1 FROM delivery_events e JOIN deliveries d ON d.id=e.delivery_id
     WHERE e.raw_provider_event_id=r.id AND d.lifecycle_status NOT IN ${terminal})
-  AND NOT EXISTS(SELECT 1 FROM delivery_events e JOIN delivery_attempts a ON a.delivery_id=e.delivery_id
-    WHERE e.raw_provider_event_id=r.id AND a.status IN ('submitting','unknown','reconciling') AND a.retry_authorized_at IS NULL)
+  AND NOT EXISTS(SELECT 1 FROM submission_events e JOIN submission_deliveries sd ON sd.submission_id=e.submission_id JOIN deliveries d ON d.id=sd.delivery_id
+    WHERE e.raw_provider_event_id=r.id AND d.lifecycle_status NOT IN ${terminal})
+  AND NOT EXISTS(SELECT 1 FROM submission_attempts a JOIN submission_deliveries sd ON sd.submission_id=a.submission_id
+    JOIN delivery_events e ON e.delivery_id=sd.delivery_id
+    WHERE e.raw_provider_event_id=r.id AND a.status IN ('submitting','unknown','reconciling')
+      AND (a.retry_authorized_at IS NULL OR EXISTS(SELECT 1 FROM deliveries current_delivery
+        WHERE current_delivery.current_attempt_id=a.id AND current_delivery.current_submission_id=a.submission_id)))
+  AND NOT EXISTS(SELECT 1 FROM submission_events e JOIN submission_attempts a ON a.submission_id=e.submission_id
+    WHERE e.raw_provider_event_id=r.id AND a.status IN ('submitting','unknown','reconciling')
+      AND (a.retry_authorized_at IS NULL OR EXISTS(SELECT 1 FROM deliveries current_delivery
+        WHERE current_delivery.current_attempt_id=a.id AND current_delivery.current_submission_id=a.submission_id)))
   AND NOT EXISTS(SELECT 1 FROM inbound_messages i WHERE i.raw_provider_event_id=r.id AND i.status='scanning')
   AND NOT EXISTS(SELECT 1 FROM callback_deliveries c LEFT JOIN delivery_events e ON e.id=c.delivery_event_id
-    LEFT JOIN inbound_messages i ON i.id=c.inbound_message_id
-    WHERE c.status<>'delivered' AND (e.raw_provider_event_id=r.id OR i.raw_provider_event_id=r.id))`;
+    LEFT JOIN submission_events se ON se.id=c.submission_event_id LEFT JOIN inbound_messages i ON i.id=c.inbound_message_id
+    WHERE c.status<>'delivered' AND (e.raw_provider_event_id=r.id OR se.raw_provider_event_id=r.id OR i.raw_provider_event_id=r.id))`;
 const inboundSafe = "NOT EXISTS(SELECT 1 FROM callback_deliveries c WHERE c.inbound_message_id=i.id AND c.status<>'delivered')";
 const callbackSafe = `NOT EXISTS(SELECT 1 FROM delivery_events e JOIN deliveries d ON d.id=e.delivery_id
-  WHERE e.id=c.delivery_event_id AND d.lifecycle_status NOT IN ${terminal})`;
+  WHERE e.id=c.delivery_event_id AND d.lifecycle_status NOT IN ${terminal})
+  AND NOT EXISTS(SELECT 1 FROM submission_events e JOIN submission_deliveries sd ON sd.submission_id=e.submission_id JOIN deliveries d ON d.id=sd.delivery_id
+    WHERE e.id=c.submission_event_id AND d.lifecycle_status NOT IN ${terminal})
+  AND NOT EXISTS(SELECT 1 FROM submission_attempts a JOIN submission_deliveries sd ON sd.submission_id=a.submission_id
+    JOIN delivery_events e ON e.delivery_id=sd.delivery_id WHERE e.id=c.delivery_event_id
+      AND a.status IN ('submitting','unknown','reconciling')
+      AND (a.retry_authorized_at IS NULL OR EXISTS(SELECT 1 FROM deliveries current_delivery
+        WHERE current_delivery.current_attempt_id=a.id AND current_delivery.current_submission_id=a.submission_id)))
+  AND NOT EXISTS(SELECT 1 FROM submission_events e JOIN submission_attempts a ON a.submission_id=e.submission_id
+    WHERE e.id=c.submission_event_id AND a.status IN ('submitting','unknown','reconciling')
+      AND (a.retry_authorized_at IS NULL OR EXISTS(SELECT 1 FROM deliveries current_delivery
+        WHERE current_delivery.current_attempt_id=a.id AND current_delivery.current_submission_id=a.submission_id)))`;
 
 const selections: Record<RetentionCategory, string> = {
   messages: `SELECT m.id FROM messages m WHERE m.content_purged_at IS NULL AND m.accepted_at<now()-$1*interval '1 day' AND ${messageSafe} ORDER BY m.accepted_at,m.id LIMIT $2`,
+  outboundFiles: `SELECT f.id FROM outbound_files f WHERE f.content_purged_at IS NULL AND f.created_at<now()-$1*interval '1 day'
+    AND ${fileSafe} ORDER BY f.created_at,f.id LIMIT $2`,
   rawEvents: `SELECT r.id FROM raw_provider_events r WHERE r.content_purged_at IS NULL AND r.processed_at IS NOT NULL
     AND r.received_at<now()-$1*interval '1 day' AND ${rawSafe} ORDER BY r.received_at,r.id LIMIT $2`,
   inbound: `SELECT i.id FROM inbound_messages i WHERE i.content_purged_at IS NULL AND i.status IN ('ready','rejected')
@@ -63,10 +92,20 @@ async function purge(client: PoolClient, category: RetentionCategory, id: string
   if (category === "messages") {
     // Serialize with retry/submit and recheck after locks: pending work must keep its original content.
     await client.query("SELECT id FROM messages WHERE id=$1 FOR UPDATE", [id]);
+    await client.query("SELECT id FROM submissions WHERE message_id=$1 ORDER BY id FOR UPDATE", [id]);
     await client.query("SELECT id FROM deliveries WHERE message_id=$1 ORDER BY id FOR UPDATE", [id]);
     const row = await client.query(`SELECT m.id FROM messages m WHERE m.id=$1 AND m.content_purged_at IS NULL AND ${messageSafe} FOR UPDATE`, [id]);
     if (!row.rowCount) return false;
-    await client.query(`UPDATE messages SET subject='',html_body=NULL,text_body='',metadata='{}',provider_tags='{}',content_purged_at=now() WHERE id=$1`, [id]);
+    await client.query(`UPDATE messages SET subject='',html_body=NULL,text_body='',content_purged_at=now() WHERE id=$1`, [id]);
+  } else if (category === "outboundFiles") {
+    // Acceptance takes FOR SHARE on these rows before committing its message
+    // snapshot. Lock first, then recheck references in a fresh statement snapshot.
+    await client.query("SELECT id FROM outbound_files WHERE id=$1 FOR UPDATE", [id]);
+    const row = await client.query<{ object_key: string }>(`SELECT f.object_key FROM outbound_files f
+      WHERE f.id=$1 AND f.content_purged_at IS NULL AND ${fileSafe}`, [id]);
+    if (!row.rowCount) return false;
+    await (store ?? objectStore()).delete(row.rows[0].object_key);
+    await client.query("UPDATE outbound_files SET content_purged_at=now() WHERE id=$1", [id]);
   } else if (category === "rawEvents") {
     const row = await client.query<{ raw_object_key: string | null; receipt_object_key: string | null }>(`SELECT r.raw_object_key,r.verification->>'objectKey' AS receipt_object_key FROM raw_provider_events r
       WHERE r.id=$1 AND r.content_purged_at IS NULL AND r.processed_at IS NOT NULL AND ${rawSafe} FOR UPDATE`, [id]);
@@ -104,7 +143,7 @@ export async function runRetention(options: RetentionOptions, store?: ObjectStor
     locked = Boolean(lock.rows[0]?.locked);
     if (!locked) throw new Error("Another retention pass is already running");
     for (const category of Object.keys(policies) as RetentionCategory[]) {
-      const days = options.days[category];
+      const days = category === "outboundFiles" ? options.days.outboundFiles ?? options.days.messages : options.days[category];
       const summary = result[category] = { enabled: Boolean(days), eligible: 0, applied: 0, failed: 0 };
       if (!days) continue;
       const candidates = await client.query<{ id: string }>(selections[category], [days, options.batchSize]);

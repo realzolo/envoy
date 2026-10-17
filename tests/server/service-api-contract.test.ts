@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMessageSchema, inboundDetailSchema, messageDetailSchema } from "@/lib/contracts";
-import { readJson, serviceRoute } from "@/server/service-api";
+import { apiProblem, readJson, serviceRoute } from "@/server/service-api";
 import { authenticateService } from "@/server/auth";
 import { enforceRateLimit } from "@/server/runtime-store";
 import { query } from "@/server/database";
 import { recordRequest } from "@/server/request-log";
-import { getDelivery, getInboundAttachment, getInboundMessage } from "@/modules/core/resources/service";
+import { getDelivery, getInboundAttachment, getInboundMessage, getRequestDiagnostic } from "@/modules/core/resources/service";
 import { GET as openapi } from "@/app/api/v1/openapi.json/route";
 import { GET as getMessage } from "@/app/api/v1/messages/[id]/route";
 vi.mock("@/server/auth", () => ({ authenticateService: vi.fn() }));
@@ -36,6 +36,19 @@ describe("public API boundary", () => {
     expect(response.status).toBe(401);
     expect(response.headers.get("www-authenticate")).toContain("Bearer");
   });
+  it("logs authenticated pre-acceptance failures with request correlation and an actionable problem", async () => {
+    const response = await serviceRoute(async () => apiProblem("Sender not authorized", 422, "No sender grant matches the requested address.", undefined, "SENDER_NOT_AUTHORIZED"))(new Request("https://envoy.test/api/v1/messages", { method: "POST" }));
+    const problem = await response.json();
+    const call = vi.mocked(query).mock.calls.find(([sql]) => sql.includes("INSERT INTO request_logs"));
+    expect(call?.[1]).toEqual(expect.arrayContaining([identity.serviceId]));
+    expect(call?.[1]?.[0]).toBe(problem.requestId);
+    expect(call?.[1]?.[6]).toMatchObject({ problem: { code: "SENDER_NOT_AUTHORIZED", detail: "No sender grant matches the requested address." } });
+    expect(problem.requestId).toBe(response.headers.get("x-request-id"));
+  });
+  it("scopes request diagnostics to the authenticated service", async () => {
+    expect(await getRequestDiagnostic("req_private", "svc_other")).toBeNull();
+    expect(vi.mocked(query).mock.calls[0]).toEqual([expect.stringContaining("request_id=$1 AND service_id=$2"), ["req_private", "svc_other"]]);
+  });
   it("stops oversized chunked bodies while consuming the stream", async () => {
     let canceled = false;
     const stream = new ReadableStream({ start(controller) { controller.enqueue(new Uint8Array(11)); }, cancel() { canceled = true; } });
@@ -43,8 +56,12 @@ describe("public API boundary", () => {
     await expect(readJson(request, false, 10)).rejects.toMatchObject({ status: 413 });
     expect(canceled).toBe(true);
   });
+  it("requires an exact JSON media type and rejects invalid UTF-8 rather than corrupting content", async () => {
+    await expect(readJson(new Request("https://envoy.test", { method: "POST", headers: { "content-type": "application/jsonp" }, body: "{}" }))).rejects.toMatchObject({ status: 415 });
+    await expect(readJson(new Request("https://envoy.test", { method: "POST", headers: { "content-type": "application/json; charset=utf-8" }, body: new Uint8Array([123,34,120,34,58,34,255,34,125]) }))).rejects.toMatchObject({ status: 400 });
+  });
   it("validates UTF-8 content bytes and metadata cardinality", () => {
-    const input = { to: [{ email: "a@example.net" }], subject: "x", text: "汉".repeat(700000) };
+    const input = { from: { email: "sender@example.net" }, to: [{ email: "a@example.net" }], subject: "x", text: "汉".repeat(700000) };
     expect(createMessageSchema.safeParse(input).success).toBe(false);
     expect(createMessageSchema.safeParse({ ...input, text: "Hello", metadata: Object.fromEntries(Array.from({ length: 21 }, (_, n) => [`k${n}`, "v"])) }).success).toBe(false);
   });
@@ -56,15 +73,16 @@ describe("public API boundary", () => {
     expect(response.status).toBe(202);
     error.mockRestore();
   });
-  it("projects delivery data explicitly without leaking native identifiers or provider diagnostics", async () => {
+  it("exposes actionable diagnostic fields without native identifiers or unrestricted metadata", async () => {
     const at = new Date("2026-10-17T00:00:00Z");
     vi.mocked(query).mockResolvedValueOnce({ rows: [{ id: "d", message_id: "m", queued_at: at, updated_at: at }], rowCount: 1 } as never)
-      .mockResolvedValueOnce({ rows: [{ id: "a", attempt_number: 1, provider: "resend", provider_account: "private", external_message_id: "native-secret", error_message: "native error secret", error_category: "network", started_at: at }], rowCount: 1 } as never)
+      .mockResolvedValueOnce({ rows: [{ id: "a", attempt_number: 1, provider: "resend", provider_account: "private", external_message_id: "native-secret", diagnostic: { code: "PROVIDER_REJECTED", message: "Recipient rejected", stage: "submission", acceptance: "not_accepted", retryable: false, retryDecision: { action: "none" }, private: "secret" }, started_at: at }], rowCount: 1 } as never)
       .mockResolvedValueOnce({ rows: [{ id: "e", event_type: "delivered", occurred_at: at, canonical_payload: { externalMessageId: "native-secret", metadata: { private: "secret" }, recipient: "a@example.net" } }], rowCount: 1 } as never);
     const result = JSON.stringify(await getDelivery("d", "svc"));
     expect(result).not.toContain("native-secret");
     expect(result).not.toContain("private");
-    expect(result).not.toContain("native error");
+    expect(result).toContain("PROVIDER_REJECTED");
+    expect(result).toContain("Recipient rejected");
     expect(result).toContain("a@example.net");
   });
   it("requires ready state, scan policy and service ownership before reading an attachment", async () => {
@@ -83,7 +101,7 @@ describe("public API boundary", () => {
   });
   it.each([null, new Date("2026-10-17T08:00:00+08:00")])("distinguishes retained and purged content with UTC markers (%s)", async contentPurgedAt => {
     const at = new Date("2026-10-16T00:00:00Z");
-    vi.mocked(query).mockResolvedValueOnce({ rows: [{ id: "msg", status: "delivered", product: "Test", category: "transactional", sender_profile: "Default", subject: contentPurgedAt ? "" : "Hello", html_body: null, text_body: contentPurgedAt ? null : "Hello", reply_to: null, metadata: {}, provider_tags: {}, recipient_count: 1, accepted_at: at, reference_id: null, content_purged_at: contentPurgedAt }] } as never)
+    vi.mocked(query).mockResolvedValueOnce({ rows: [{ id: "msg", processing_state: "finished", outcome: "succeeded", counts: Object.fromEntries(["queued", "submitting", "accepted", "deferred", "delivered", "bounced", "failed", "unknown", "canceled", "suppressed"].map(key => [key,key === "delivered" ? 1 : 0])), request_id: "req", sender_snapshot: { fromEmail: "sender@example.net", fromName: "Sender" }, to_recipients: [{ email: "customer@example.net" }], cc_recipients: [], bcc_recipients: [], headers: {}, in_reply_to: null, references_ids: [], attachment_snapshot: [], product: "Test", category: "transactional", subject: contentPurgedAt ? "" : "Hello", html_body: null, text_body: contentPurgedAt ? null : "Hello", reply_to: [], metadata: {}, provider_tags: {}, recipient_count: 1, accepted_at: at, reference_id: null, content_purged_at: contentPurgedAt }] } as never)
       .mockResolvedValueOnce({ rows: [] } as never);
     const response = await getMessage(new Request("https://envoy.test/api/v1/messages/msg"), { params: Promise.resolve({ id: "msg" }) });
     const message = messageDetailSchema.parse(await response.json());

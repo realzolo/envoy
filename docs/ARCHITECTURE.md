@@ -6,8 +6,8 @@ Business services authenticate with service-scoped credentials and know nothing 
 request and callback contracts contain no provider-specific fields. Provider SDKs and native payloads are confined to
 modules under `src/modules/providers`.
 
-Business services own content definitions, localization, and rendering. They submit the final subject, HTML, and/or
-plain text plus a stable message category. Envoy persists only the resulting delivery payload needed for operations;
+Business services own content definitions, localization, and rendering. They submit native sender and recipient fields, the final subject, HTML and/or plain text, optional attachments,
+thread references, and a stable message category (default `transactional`). Envoy persists only the resulting delivery payload needed for operations;
 it has no business content registry, versioning model, or rendering engine.
 
 The core domain imports only `CanonicalMessage`, `CanonicalEvent`, and `CanonicalProviderError`. A provider module
@@ -17,16 +17,29 @@ suppression synchronization, reconciliation, and health checks.
 ## Persistence and queues
 
 PostgreSQL is authoritative. Accepting a message writes the message, one delivery per recipient, and outbox events in
-one transaction. BullMQ job payloads contain only internal identifiers. A lost or duplicated queue job is recoverable
+one transaction. The message retains immutable From, To, Cc, Bcc, Reply-To, headers, thread references, and attachment
+snapshots. A recipient delivery retains its role. A submission groups the actual envelope recipients, and submission
+attempts record provider calls; a submission-to-delivery mapping permits recipient results without changing visible
+headers. Bcc never appears in visible headers. BullMQ job payloads contain only internal identifiers. A lost or duplicated queue job is recoverable
 from PostgreSQL and cannot create an additional attempt after an accepted attempt exists.
 
 Raw MIME, large native payloads, and attachments are written to the configured object store. The database stores
 metadata and object keys. Local object storage is development-only; production should use an encrypted S3-compatible
 bucket.
 
+## Sender authorization and presets
+
+An active sender grant authorizes a product or one of its services to use an active sending domain, optionally restricted
+to one exact local part. Domain verification and caller authorization are independent controls. Acceptance, submission,
+and manual retry enforce the current product, domain, and grant state. Removing a grant blocks future submissions.
+
+Sender profiles are optional console presets. Selecting one expands its From, Reply-To, and category fields into a normal
+mail request. The API accepts complete mail parameters without a preset, and accepted mail does not reference profiles.
+Editing or disabling a preset never mutates queued snapshots or grants/revokes sending permission.
+
 ## Routing
 
-Each routing policy is bound to one sending domain, then evaluated against product, service, and category. It
+Each routing policy is bound to one sending domain, then evaluated against product, service, and category. It matches required mail features against provider capabilities and
 removes targets whose provider account is disabled or unhealthy, whose identity is not verified for that same domain,
 whose circuit is open, or whose quota or account/identity rate limit is exhausted. It then selects the lowest priority
 tier and performs deterministic weighted selection.
@@ -34,7 +47,7 @@ tier and performs deterministic weighted selection.
 Every attempt stores:
 
 - the selected policy and target;
-- all eligible candidates and excluded accounts;
+- candidate eligibility, required capabilities, and routing decisions;
 - the provider account and verified identity;
 - a request fingerprint and provider idempotency key, when supported;
 - the determinate or unknown outcome and canonical error classification.
@@ -119,7 +132,7 @@ persistence and persists the verified receipt and security version. Workers pars
 4. For SendGrid, Mailgun, and Postmark, complete the provider's domain-verification workflow first; Sending Domains
    records the operator-confirmed association and does not invent DNS records or a verification API. A Mailgun
    association must exactly match that account's configured sending domain.
-5. Create sender profiles and routing policies for the same sending domain. Runtime routing rejects disabled domains,
+5. Grant the product or service permission to use the domain or exact sender address, and create routing policies for that domain. Runtime routing rejects disabled domains,
    mismatched policy/account/identity domains, mismatched account/identity pairs, and unverified identities.
 
 SES inbound requires a Receipt Rule that stores MIME in S3 and publishes the receipt event to the configured SNS topic.
@@ -184,8 +197,19 @@ Every service uses the fixed `SERVICE_REQUESTS_PER_MINUTE` request limit. The ef
 
 Message acceptance is asynchronous and idempotent. A successful request commits the message, one delivery per
 recipient, and durable outbox work before returning `202`. The API also exposes cursor-paginated message, delivery,
-event, and inbound collections; sender profile discovery; product suppression management; pre-provider cancellation;
+event, and inbound collections; sender authorization/capability discovery; private attachment upload; product suppression management; pre-provider cancellation;
 and controlled retry. An `unknown` delivery can only be retried when the caller explicitly acknowledges duplicate risk.
+
+## Diagnostics
+
+The service API uses RFC 9457 problem responses with `requestId`. Request records are scoped to the calling service and
+remain queryable when validation or authorization failed before a message ID existed. Message and delivery queries,
+submission attempts, events, and signed callbacks share structured diagnostic fields: stable code, sanitized message,
+failed stage, provider acceptance certainty, retryability, retry decision, occurrence time, and available provider/SMTP codes.
+The console shows the accepted headers, recipient role, failure reason, attempts, and complete event payloads. Internal
+provider routing snapshots remain available to administrators. Retention of content and request/diagnostic history is independent.
+
+See [API.md](API.md) for the final public contract.
 
 ## Operational recovery
 
@@ -222,8 +246,8 @@ pipeline health.
 ## Bounded recovery and retention
 
 Provider calls have one 30-second submission deadline and no implicit non-idempotent SDK retry. A submission execution
-lease lasts two minutes. Only current attempts may commit send outcomes. Unknown attempts keep their uncertainty when
-an operator authorizes a fresh attempt. Current suppression, product, sender, accepted domain and content eligibility
+lease lasts two minutes. Current attempt and submission ownership fence lifecycle projections while historical
+provider facts remain available. Unknown attempts keep their uncertainty when an operator authorizes a fresh submission. Current suppression, product, sender authorization, accepted domain and content eligibility
 are rechecked at the send and retry boundary. Sender and From information are immutable acceptance snapshots.
 
 Missing routes defer for at most 60 cycles. Automatic reconciliation stops at 12 checks. An unassociated accepted raw

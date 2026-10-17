@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 export default defineConfig({
   test: {
     environment: "node",
+    fileParallelism: false,
     include: ["tests/**/*.test.ts"],
     globalSetup: ["tests/global-setup.ts"],
     setupFiles: ["tests/setup.ts"],

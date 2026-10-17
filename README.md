@@ -1,7 +1,7 @@
 # Envoy
 
 Envoy is a provider-neutral email control plane and delivery data plane for internal products and services. Business
-services submit recipients and final rendered subject, HTML, and/or plain text. Envoy owns sender identity, provider
+services submit native From, To, Cc, Bcc, Reply-To, subject, final HTML/plain text, headers, and attachments. Envoy enforces sender authorization and owns provider
 routing, credentials, delivery state, inbound mail, suppressions, and canonical callbacks. Business content definitions,
 localization, and rendering remain in the calling service.
 
@@ -15,8 +15,8 @@ localization, and rendering remain in the calling service.
   data key wrapped by the configured root KEK.
 - Envoy never stores or renders business content definitions. Persisted content is the immutable send payload needed for
   delivery, support, and callbacks.
-- One logical delivery is created per recipient. Every provider call creates an immutable attempt with a complete
-  routing decision snapshot.
+- One delivery tracks each recipient and its To/Cc/Bcc role. Submissions preserve complete visible mail headers
+  while controlling the actual envelope recipients; every provider call creates an immutable submission attempt.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the domain model, failure semantics, provider setup, inbound
 pipeline, and security model.
@@ -62,6 +62,7 @@ curl --request POST http://localhost:6178/api/v1/messages \
   --header 'Idempotency-Key: login-attempt-456' \
   --header 'Content-Type: application/json' \
   --data '{
+    "from": { "email": "security@mail.company.com", "name": "Account Security" },
     "category": "security",
     "to": [{ "email": "recipient@company.com", "name": "Recipient" }],
     "subject": "482901 is your login code",
@@ -74,7 +75,7 @@ curl --request POST http://localhost:6178/api/v1/messages \
 ```
 
 The API returns `202 Accepted` after the message, recipient deliveries, and outbox records commit in one PostgreSQL
-transaction. The request contract rejects provider names, provider accounts, domains, scheduling options, and other
+transaction. The request contract rejects provider names, provider accounts, scheduling options, and other
 provider-specific fields.
 
 The service API is self-describing at `GET /api/v1` and `GET /api/v1/openapi.json`. Authenticated resources include:
@@ -89,8 +90,17 @@ The service API is self-describing at `GET /api/v1` and `GET /api/v1/openapi.jso
 | `/events`               | Read normalized delivery events                                                  |
 | `/inbound-messages`     | List and inspect sanitized inbound mail; download eligible private attachments     |
 | `/suppressions`         | Check, create, and remove product-owned suppressions                             |
-| `/senders`              | Discover sender profiles available to the product                                |
-| `/capabilities`         | Discover limits, content rules, and available senders                            |
+| `/requests/{requestId}` | Query request outcomes, including validation and authorization failures before message creation |
+| `/files` | Upload private, service-owned outbound attachments |
+| `/messages/{id}/events` | Inspect the complete delivery timeline |
+| `/messages/{id}/attempts` | Inspect submission attempts and structured diagnostics |
+| `/capabilities`         | Discover limits, native mail features, and sender authorizations                            |
+
+Sender authorization is configured once under **Senders** for a product or service: either every address in a verified
+domain, or one exact local part. Domain verification proves control; the grant authorizes a caller. Sender presets are
+optional console shortcuts and have no role in the send API or accepted-message lifecycle.
+
+See [the final service API contract](docs/API.md) for full request fields, file upload, result semantics, and failure diagnosis.
 
 Query status with the same service credential:
 
@@ -148,7 +158,7 @@ the advertised fixed-minute rate limit and return request IDs and rate-limit hea
 
 A live submission has a deadline. Duplicate work does not interrupt it; ambiguous outcomes stay unknown and never
 fail over automatically. Manual retry records explicit risk authorization without rewriting the original uncertainty,
-and cannot bypass current suppression or disabled sender/product/domain checks. Deferred routing stops after 60
+and cannot bypass current suppression or revoked sender-authorization or disabled product/domain checks. Deferred routing stops after 60
 cycles; reconciliation stops after 12 checks and leaves unknown outcomes for operator review.
 
 The console searches the full delivery history with URL filters and cursor pagination. CSV applies the same filters

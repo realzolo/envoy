@@ -1,356 +1,242 @@
 import { createHash } from "node:crypto";
 import type { PoolClient } from "pg";
-import { createMessageSchema, type CreateMessageInput } from "@/lib/contracts";
+import { createMessageSchema, type AcceptedMessage, type CreateMessageInput, deliveryStatuses } from "@/lib/contracts";
 import { applyDeliveryEvent } from "@/modules/core/event/service";
+import { diagnostic } from "@/modules/core/diagnostics";
+import { resolveOutboundAttachments } from "@/modules/files/service";
+import { providerRegistry } from "@/modules/providers/registry";
+import type { ProviderType } from "@/modules/providers/contracts";
 import type { ServiceIdentity } from "@/server/auth";
 import { query, transaction } from "@/server/database";
 import { createId } from "@/server/ids";
+import { authorizedDomain, capabilityIssue, subsetEnvelope, type MessageContent } from "./native";
 
 export class MessageValidationError extends Error {
-  constructor(public readonly issues: string[]) {
-    super("Message validation failed");
-  }
+  constructor(public readonly issues: string[], public readonly code = "INVALID_MESSAGE") { super(issues.join(" ")); }
 }
-
 export class IdempotencyConflictError extends Error {
+  constructor() { super("The idempotency key was already used with different content."); }
 }
-
-export class DuplicateRiskError extends Error {
-}
+export class DuplicateRiskError extends Error {}
 
 function stable(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stable);
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>)
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([key, item]) => [key, stable(item)]),
-    );
-  }
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => [key, stable(item)]));
   return value;
 }
-
-function hashPayload(input: CreateMessageInput) {
-  return createHash("sha256").update(JSON.stringify(stable(input))).digest("hex");
-}
-
-function ensureUniqueRecipients(input: CreateMessageInput) {
-  const recipients = new Set<string>();
-  for (const recipient of input.to) {
-    const normalized = recipient.email.trim().toLowerCase();
-    if (recipients.has(normalized)) throw new MessageValidationError([`Recipient ${recipient.email} is duplicated.`]);
-    recipients.add(normalized);
-  }
-}
+function hashPayload(input: unknown) { return createHash("sha256").update(JSON.stringify(stable(input))).digest("hex"); }
 
 export function encodeCursor(row: { accepted_at: Date; id: string; cursor_at?: string }) {
   return Buffer.from(JSON.stringify({ at: row.cursor_at ?? row.accepted_at.toISOString(), id: row.id })).toString("base64url");
 }
-
 export function decodeCursor(value: string | null) {
   if (!value) return null;
   try {
     const parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as { at?: string; id?: string };
     if (typeof parsed.id !== "string" || !parsed.id || typeof parsed.at !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{1,6}Z$/.test(parsed.at) || Number.isNaN(Date.parse(parsed.at))) return null;
-    // Keep PostgreSQL microseconds intact; converting through Date would skip cursor rows.
     return { at: parsed.at, id: parsed.id };
-  } catch {
-    return null;
-  }
+  } catch { return null; }
 }
 
-async function suppression(client: PoolClient, productId: string, email: string, listId?: string) {
-  return Boolean((await client.query(
-    `SELECT 1 FROM suppressions
-     WHERE active=true AND email_normalized=$1 AND (expires_at IS NULL OR expires_at>now())
-       AND (scope_type='global' OR (scope_type='product' AND product_id=$2)
-         OR (scope_type='list' AND product_id=$2 AND list_id=$3)) LIMIT 1`,
-    [email.toLowerCase(), productId, listId ?? null],
-  )).rowCount);
+export async function isSuppressed(client: PoolClient, productId: string, email: string, listId?: string) {
+  return Boolean((await client.query(`SELECT 1 FROM suppressions WHERE active=true AND email_normalized=lower($1)
+    AND (expires_at IS NULL OR expires_at>now()) AND (scope_type='global' OR (scope_type='product' AND product_id=$2)
+    OR (scope_type='list' AND product_id=$2 AND list_id=$3)) LIMIT 1`, [email, productId, listId ?? null])).rowCount);
 }
 
-export async function acceptMessage(args: {
-  identity: ServiceIdentity;
-  idempotencyKey: string;
-  input: CreateMessageInput
-}) {
+export async function assertRoutable(client: PoolClient, message: MessageContent, recipients: { email: string; name?: string }[]) {
+  const rows = (await client.query<{ type: ProviderType }>(`SELECT DISTINCT pa.type FROM routing_policies rp
+    JOIN routing_targets rt ON rt.policy_id=rp.id JOIN provider_accounts pa ON pa.id=rt.provider_account_id
+    JOIN provider_identities pi ON pi.id=rt.provider_identity_id AND pi.provider_account_id=pa.id
+    WHERE rp.sending_domain_id=$1 AND pi.sending_domain_id=$1 AND pi.status='verified' AND rp.status='active'
+      AND (rp.product_id IS NULL OR rp.product_id=$2) AND (rp.service_id IS NULL OR rp.service_id=$3)
+      AND (rp.message_category IS NULL OR rp.message_category=$4)`,
+  [message.sending_domain_id, message.product_id, message.service_id, message.message_category])).rows;
+  if (!rows.length) throw new MessageValidationError(["No verified routing target is configured for this sender and message category."], "NO_ELIGIBLE_ROUTE");
+  const envelope = subsetEnvelope(message, recipients);
+  const issues = rows.map(row => capabilityIssue(message, providerRegistry(row.type).descriptor.capabilities, envelope));
+  if (issues.every(Boolean)) throw new MessageValidationError([...new Set(issues.filter((value): value is string => Boolean(value)))], "UNSUPPORTED_MESSAGE_CAPABILITY");
+}
+
+export async function createSubmission(client: PoolClient, messageId: string, deliveryIds: string[]) {
+  if (!deliveryIds.length) return null;
+  const id = createId("sub");
+  await client.query("INSERT INTO submissions(id,message_id) VALUES ($1,$2)", [id, messageId]);
+  await client.query("INSERT INTO submission_deliveries(submission_id,delivery_id) SELECT $1,unnest($2::text[])", [id, deliveryIds]);
+  await client.query("UPDATE deliveries SET current_submission_id=$1,current_attempt_id=NULL WHERE id=ANY($2::text[])", [id, deliveryIds]);
+  await client.query("INSERT INTO outbox_events(id,aggregate_type,aggregate_id,event_type,payload) VALUES ($1,'submission',$2,'submission.requested',$3)", [createId("out"), id, { submissionId: id }]);
+  return id;
+}
+
+export async function acceptMessage(args: { identity: ServiceIdentity; idempotencyKey: string; input: CreateMessageInput; requestId?: string }) {
   const validated = createMessageSchema.safeParse(args.input);
   if (!validated.success) throw new MessageValidationError(validated.error.issues.map(issue => `${issue.path.join(".")}: ${issue.message}`));
-  args = { ...args, input: validated.data };
+  const input = validated.data;
   if (!args.idempotencyKey.trim() || args.idempotencyKey.length > 256) throw new MessageValidationError(["A valid idempotency key is required."]);
-  ensureUniqueRecipients(args.input);
-  const payloadHash = hashPayload(args.input);
+  const payloadHash = hashPayload(input);
   return transaction(async client => {
-    // A row lock cannot protect the first insert. Serialize the service/key pair, then read.
     await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [JSON.stringify([args.identity.serviceId, args.idempotencyKey])]);
-    const existing = await client.query<{ id: string; payload_hash: string; accepted_at: Date; product: string; message_category: string; recipient_count: number; reference_id: string | null }>(
-      "SELECT id,payload_hash,accepted_at,sender_snapshot->>'product' AS product,message_category,recipient_count,reference_id FROM messages WHERE service_id=$1 AND idempotency_key=$2 FOR UPDATE",
-      [args.identity.serviceId, args.idempotencyKey],
-    );
-    if (existing.rows[0]) {
-      if (existing.rows[0].payload_hash !== payloadHash) throw new IdempotencyConflictError();
-      return {
-        duplicate: true,
-        message: {
-          id: existing.rows[0].id,
-          status: "queued" as const,
-          product: existing.rows[0].product,
-          category: existing.rows[0].message_category,
-          recipientCount: existing.rows[0].recipient_count,
-          acceptedAt: existing.rows[0].accepted_at.toISOString(),
-          referenceId: existing.rows[0].reference_id ?? undefined,
-        },
-      };
+    const existing = (await client.query<{ id: string; payload_hash: string; accepted_at: Date; product: string; message_category: string; recipient_count: number; reference_id: string | null }>(
+      "SELECT id,payload_hash,accepted_at,sender_snapshot->>'product' AS product,message_category,recipient_count,reference_id FROM messages WHERE service_id=$1 AND idempotency_key=$2 FOR UPDATE", [args.identity.serviceId, args.idempotencyKey])).rows[0];
+    const receipt = (row: { id: string; accepted_at: Date; product: string; message_category: string; recipient_count: number; reference_id: string | null }): AcceptedMessage => ({
+      id: row.id, processingState: "queued", outcome: "pending", product: row.product, category: row.message_category,
+      recipientCount: row.recipient_count, acceptedAt: row.accepted_at.toISOString(), ...(row.reference_id ? { referenceId: row.reference_id } : {}),
+    });
+    if (existing) {
+      if (existing.payload_hash !== payloadHash) throw new IdempotencyConflictError();
+      return { duplicate: true, message: receipt(existing) };
     }
-
-    const sender = (await client.query<{ id: string; reply_to: string | null; from_name: string; from_email: string; name: string; sending_domain_id: string }>(
-      `SELECT sp.id,sp.reply_to,sp.name,sp.from_name,sp.from_local_part||'@'||sd.domain AS from_email,sp.sending_domain_id FROM sender_profiles sp
-       JOIN sending_domains sd ON sd.id=sp.sending_domain_id AND sd.status='active'
-       JOIN products p ON p.id=sp.product_id AND p.status='active'
-       JOIN services s ON s.id=$4 AND s.product_id=p.id
-       WHERE sp.product_id=$1 AND sp.message_category=$2 AND sp.status='active'
-         AND ($3::text IS NULL OR sp.name=$3)
-       ORDER BY sp.created_at,sp.id LIMIT 1`,
-      [args.identity.productId, args.input.category, args.input.senderProfile ?? null, args.identity.serviceId],
-    )).rows[0];
-    if (!sender) {
-      throw new MessageValidationError([
-        args.input.senderProfile
-          ? `Sender profile ${args.input.senderProfile} is unavailable for category ${args.input.category}.`
-          : `No active sender profile is available for category ${args.input.category}.`,
-      ]);
-    }
-
+    const domainId = await authorizedDomain(client, args.identity, input.from.email);
+    if (!domainId) throw new MessageValidationError(["This service is not authorized to send from the supplied address."], "SENDER_NOT_AUTHORIZED");
+    const attachments = await resolveOutboundAttachments(args.identity.serviceId, input.attachments, client);
     const id = createId("msg");
-    const accepted = await client.query<{ accepted_at: Date }>(
-      `INSERT INTO messages(
-        id,product_id,service_id,sender_profile_id,idempotency_key,payload_hash,reference_id,metadata,
-        recipient_count,subject,html_body,text_body,message_category,reply_to,provider_tags,sender_snapshot
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING accepted_at`,
-      [
-        id,
-        args.identity.productId,
-        args.identity.serviceId,
-        sender.id,
-        args.idempotencyKey,
-        payloadHash,
-        args.input.referenceId ?? null,
-        args.input.metadata ?? {},
-        args.input.to.length,
-        args.input.subject,
-        args.input.html ?? null,
-        args.input.text ?? null,
-        args.input.category,
-        args.input.replyTo ?? sender.reply_to,
-        args.input.tags ?? {},
-        { product: args.identity.product, fromName: sender.from_name, fromEmail: sender.from_email, senderProfile: sender.name, domainId: sender.sending_domain_id },
-      ],
-    );
-    for (const recipient of args.input.to) {
-      const deliveryId = createId("dlv");
-      const blocked = await suppression(client, args.identity.productId, recipient.email, args.input.metadata?.listId);
-      await client.query(
-        `INSERT INTO deliveries(id,message_id,recipient_email,recipient_name,lifecycle_status,compliance_status)
-         VALUES ($1,$2,$3,$4,$5,$6)`,
-        [deliveryId, id, recipient.email.toLowerCase(), recipient.name ?? null, blocked ? "failed" : "queued", blocked ? "suppressed" : "clean"],
-      );
-      await client.query(
-        "INSERT INTO outbox_events(id,aggregate_type,aggregate_id,event_type,payload) VALUES ($1,'delivery',$2,$3,$4)",
-        [createId("out"), deliveryId, blocked ? "delivery.suppressed" : "delivery.requested", { deliveryId }],
-      );
-    }
-    return {
-      duplicate: false,
-      message: {
-        id,
-        status: "queued" as const,
-        product: args.identity.product,
-        category: args.input.category,
-        recipientCount: args.input.to.length,
-        acceptedAt: accepted.rows[0].accepted_at.toISOString(),
-        referenceId: args.input.referenceId,
-      },
+    const content: MessageContent = {
+      id, product_id: args.identity.productId, service_id: args.identity.serviceId, sending_domain_id: domainId,
+      sender_snapshot: { product: args.identity.product, fromName: input.from.name, fromEmail: input.from.email, domainId },
+      to_recipients: input.to, cc_recipients: input.cc, bcc_recipients: input.bcc, reply_to: input.replyTo,
+      subject: input.subject, html_body: input.html ?? null, text_body: input.text ?? null,
+      headers: input.headers, in_reply_to: input.inReplyTo ?? null, references_ids: input.references,
+      attachment_snapshot: attachments, provider_tags: input.tags ?? {}, message_category: input.category,
+      content_purged_at: null, metadata: input.metadata ?? {},
     };
+    const recipients = [];
+    for (const role of ["to", "cc", "bcc"] as const) for (const address of input[role]) recipients.push({ ...address, role, blocked: await isSuppressed(client, args.identity.productId, address.email, input.metadata?.listId) });
+    const allowed = recipients.filter(item => !item.blocked);
+    if (allowed.length) await assertRoutable(client, content, allowed);
+    const accepted = (await client.query<{ accepted_at: Date }>(`INSERT INTO messages(id,product_id,service_id,sending_domain_id,request_id,idempotency_key,payload_hash,
+      reference_id,metadata,recipient_count,subject,html_body,text_body,message_category,reply_to,provider_tags,sender_snapshot,
+      to_recipients,cc_recipients,bcc_recipients,headers,in_reply_to,references_ids,attachment_snapshot)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24) RETURNING accepted_at`,
+    [id, content.product_id, content.service_id, domainId, args.requestId ?? null, args.idempotencyKey, payloadHash, input.referenceId ?? null,
+      content.metadata, recipients.length, input.subject, content.html_body, content.text_body, input.category, JSON.stringify(input.replyTo), content.provider_tags,
+      content.sender_snapshot, JSON.stringify(input.to), JSON.stringify(input.cc), JSON.stringify(input.bcc), input.headers, input.inReplyTo ?? null, input.references, JSON.stringify(attachments)])).rows[0];
+    const deliveryIds: string[] = [];
+    for (const recipient of recipients) {
+      const deliveryId = createId("dlv");
+      await client.query("INSERT INTO deliveries(id,message_id,recipient_email,recipient_name,recipient_role) VALUES ($1,$2,$3,$4,$5)", [deliveryId, id, recipient.email, recipient.name ?? null, recipient.role]);
+      if (!recipient.blocked) deliveryIds.push(deliveryId);
+      await applyDeliveryEvent(client, deliveryId, {
+        id: deliveryId, type: recipient.blocked ? "suppressed" : "queued", occurredAt: accepted.accepted_at,
+        metadata: recipient.blocked ? { diagnostic: diagnostic("RECIPIENT_SUPPRESSED", "The recipient is blocked by the current suppression policy.", "policy") } : {},
+      }, `message:${id}:${deliveryId}:accepted`);
+    }
+    await createSubmission(client, id, deliveryIds);
+    return { duplicate: false, message: receipt({ id, accepted_at: accepted.accepted_at, product: args.identity.product, message_category: input.category, recipient_count: recipients.length, reference_id: input.referenceId ?? null }) };
   });
 }
 
-const aggregateStatus = `CASE
-  WHEN bool_and(d.lifecycle_status='canceled') THEN 'canceled'
-  WHEN bool_and(d.lifecycle_status='delivered') THEN 'delivered'
-  WHEN bool_or(d.lifecycle_status=ANY(ARRAY['queued','submitting','accepted','deferred','unknown'])) THEN 'in_progress'
-  ELSE 'completed' END`;
-
-type MessageRow = {
-  id: string;
-  product: string;
-  category: string;
-  subject: string;
-  recipient_count: number;
-  accepted_at: Date;
-  cursor_at?: string;
-  reference_id: string | null;
-  sender_profile: string;
-  status: string;
+const stats = `JOIN LATERAL (SELECT count(*)::int AS total,
+  count(*) FILTER(WHERE lifecycle_status='queued')::int AS queued,
+  count(*) FILTER(WHERE lifecycle_status=ANY(ARRAY['queued','submitting','accepted','deferred']))::int AS active,
+  count(*) FILTER(WHERE lifecycle_status='unknown')::int AS unknown,
+  count(*) FILTER(WHERE lifecycle_status='delivered')::int AS delivered,
+  count(*) FILTER(WHERE lifecycle_status='canceled')::int AS canceled,
+  jsonb_build_object(${deliveryStatuses.map(status => `'${status}',count(*) FILTER(WHERE lifecycle_status='${status}')`).join(",")},'suppressed',count(*) FILTER(WHERE compliance_status='suppressed')) AS counts
+  FROM deliveries WHERE message_id=m.id) ds ON true`;
+const projection = `SELECT m.*,m.sender_snapshot->>'product' AS product,m.message_category AS category,ds.counts,
+  CASE WHEN ds.queued=ds.total THEN 'queued' WHEN ds.active>0 OR ds.unknown>0 THEN 'processing' ELSE 'finished' END AS processing_state,
+  CASE WHEN ds.unknown>0 THEN 'unknown' WHEN ds.active>0 THEN 'pending' WHEN ds.delivered=ds.total THEN 'succeeded'
+    WHEN ds.canceled=ds.total THEN 'canceled' WHEN ds.delivered>0 THEN 'partially_failed' ELSE 'failed' END AS outcome,
+  to_char(m.accepted_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_at
+  FROM messages m ${stats}`;
+export type MessageRow = MessageContent & {
+  request_id: string | null; accepted_at: Date; recipient_count: number; reference_id: string | null;
+  product: string; category: string; counts: Record<string, number>; processing_state: "queued" | "processing" | "finished";
+  outcome: "pending" | "succeeded" | "partially_failed" | "failed" | "canceled" | "unknown"; cursor_at: string;
 };
-
-export async function listMessages(serviceId: string, options: {
-  limit: number;
-  cursor?: { at: Date | string; id: string } | null;
-  status?: string | null;
-  referenceId?: string | null;
-}) {
-  const rows = (await query<MessageRow>(
-    `WITH summaries AS (
-       SELECT m.id,p.name AS product,m.message_category AS category,m.subject,m.recipient_count,m.accepted_at,
-         m.reference_id,to_char(m.accepted_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_at,m.sender_snapshot->>'senderProfile' AS sender_profile,${aggregateStatus} AS status
-       FROM messages m JOIN products p ON p.id=m.product_id
-       JOIN sender_profiles sp ON sp.id=m.sender_profile_id
-       JOIN deliveries d ON d.message_id=m.id
-       WHERE m.service_id=$1
-       GROUP BY m.id,p.name
-     ) SELECT * FROM summaries
-     WHERE ($2::timestamptz IS NULL OR (accepted_at,id)<($2,$3))
-       AND ($4::text IS NULL OR status=$4)
-       AND ($5::text IS NULL OR reference_id=$5)
-     ORDER BY accepted_at DESC,id DESC LIMIT $6`,
-    [serviceId, options.cursor?.at ?? null, options.cursor?.id ?? null, options.status ?? null, options.referenceId ?? null, options.limit + 1],
-  )).rows;
-  const hasMore = rows.length > options.limit;
-  const data = hasMore ? rows.slice(0, options.limit) : rows;
-  return {
-    data: data.map(row => ({
-      id: row.id,
-      status: row.status,
-      product: row.product,
-      category: row.category,
-      senderProfile: row.sender_profile,
-      subject: row.subject,
-      recipientCount: row.recipient_count,
-      acceptedAt: row.accepted_at.toISOString(),
-      referenceId: row.reference_id,
-    })),
-    nextCursor: hasMore ? encodeCursor(data[data.length - 1]) : null,
-  };
+export async function listMessages(serviceId: string, options: { limit: number; cursor?: { at: Date | string; id: string } | null; processingState?: string | null; outcome?: string | null; referenceId?: string | null }) {
+  const rows = (await query<MessageRow>(`SELECT * FROM (${projection} WHERE m.service_id=$1
+    AND ($2::text IS NULL OR m.reference_id=$2) AND ($3::timestamptz IS NULL OR (m.accepted_at,m.id)<($3,$4))) result
+    WHERE ($5::text IS NULL OR processing_state=$5) AND ($6::text IS NULL OR outcome=$6)
+    ORDER BY accepted_at DESC,id DESC LIMIT $7`, [serviceId, options.referenceId ?? null, options.cursor?.at ?? null, options.cursor?.id ?? null, options.processingState ?? null, options.outcome ?? null, options.limit + 1])).rows;
+  const more = rows.length > options.limit;
+  const data = (more ? rows.slice(0, options.limit) : rows).map(row => ({
+    id: row.id, processingState: row.processing_state, outcome: row.outcome, counts: row.counts,
+    product: row.product, category: row.category, from: { email: row.sender_snapshot.fromEmail, name: row.sender_snapshot.fromName },
+    subject: row.subject, referenceId: row.reference_id, recipientCount: row.recipient_count, acceptedAt: row.accepted_at.toISOString(),
+  }));
+  return { data, nextCursor: more ? encodeCursor(rows[options.limit - 1]) : null };
 }
-
 export async function getMessage(id: string, serviceId: string) {
-  const message = (await query<MessageRow & {
-    html_body: string | null;
-    text_body: string | null;
-    reply_to: string | null;
-    metadata: Record<string, string>;
-    provider_tags: Record<string, string>;
-    content_purged_at: Date | null;
-  }>(
-    `SELECT m.id,p.name AS product,m.message_category AS category,m.subject,m.html_body,m.text_body,m.reply_to,
-       m.metadata,m.provider_tags,m.content_purged_at,m.recipient_count,m.accepted_at,m.reference_id,m.sender_snapshot->>'senderProfile' AS sender_profile,
-       ${aggregateStatus} AS status
-     FROM messages m JOIN products p ON p.id=m.product_id
-     JOIN sender_profiles sp ON sp.id=m.sender_profile_id
-     JOIN deliveries d ON d.message_id=m.id
-     WHERE m.id=$1 AND m.service_id=$2
-     GROUP BY m.id,p.name`,
-    [id, serviceId],
-  )).rows[0];
+  const message = (await query<MessageRow>(`${projection} WHERE m.id=$1 AND m.service_id=$2`, [id, serviceId])).rows[0];
   if (!message) return null;
-  const deliveries = (await query<{
-    id: string;
-    recipient_email: string;
-    recipient_name: string | null;
-    lifecycle_status: string;
-    engagement_status: string;
-    compliance_status: string;
-    updated_at: Date;
-  }>(
-    "SELECT id,recipient_email,recipient_name,lifecycle_status,engagement_status,compliance_status,updated_at FROM deliveries WHERE message_id=$1 ORDER BY queued_at,id",
-    [id],
-  )).rows;
+  const deliveries = (await query<{ id: string; recipient_email: string; recipient_name: string | null; recipient_role: "to" | "cc" | "bcc"; lifecycle_status: string; engagement_status: string; compliance_status: string; last_error: unknown; updated_at: Date }>("SELECT id,recipient_email,recipient_name,recipient_role,lifecycle_status,engagement_status,compliance_status,last_error,updated_at FROM deliveries WHERE message_id=$1 ORDER BY queued_at,id", [id])).rows;
   return { ...message, deliveries };
 }
 
 export async function cancelMessage(id: string, serviceId: string) {
   return transaction(async client => {
-    const owned = await client.query("SELECT 1 FROM messages WHERE id=$1 AND service_id=$2 FOR UPDATE", [id, serviceId]);
-    if (!owned.rowCount) return null;
-    const canceled = await client.query<{ id: string }>(
-      `UPDATE deliveries SET lifecycle_status='canceled',updated_at=now()
-       WHERE message_id=$1 AND lifecycle_status IN ('queued','deferred','failed')
-         AND compliance_status='clean'
-         AND NOT EXISTS (
-           SELECT 1 FROM delivery_attempts da WHERE da.delivery_id=deliveries.id
-             AND (da.status IN ('accepted','reconciled','unknown','reconciling') OR da.outcome_determinate=false)
-         ) RETURNING id`,
-      [id],
-    );
-    for (const delivery of canceled.rows) {
-      await applyDeliveryEvent(client, delivery.id, { id: delivery.id, type: "canceled", occurredAt: new Date(), metadata: { source: "service_api" } }, `delivery:${delivery.id}:canceled`, { forceLifecycle: true });
-      await client.query(
-        "UPDATE outbox_events SET status='published',published_at=COALESCE(published_at,now()) WHERE status='pending' AND event_type='delivery.requested' AND payload->>'deliveryId'=$1",
-        [delivery.id],
-      );
-    }
-    return { messageId: id, canceled: canceled.rowCount ?? 0 };
+    if (!(await client.query("SELECT id FROM messages WHERE id=$1 AND service_id=$2 FOR UPDATE", [id, serviceId])).rowCount) return null;
+    await client.query("SELECT id FROM submissions WHERE message_id=$1 ORDER BY id FOR UPDATE", [id]);
+    const rows = (await client.query<{ id: string }>(`SELECT d.id FROM deliveries d LEFT JOIN submission_attempts a ON a.id=d.current_attempt_id
+      WHERE d.message_id=$1 AND d.lifecycle_status IN ('queued','deferred')
+      AND (a.id IS NULL OR (a.outcome_determinate AND a.status='failed')) ORDER BY d.id FOR UPDATE OF d`, [id])).rows;
+    for (const row of rows) await applyDeliveryEvent(client, row.id, { id: createId("cancel"), type: "canceled", occurredAt: new Date(), metadata: { source: "service_api" } }, `cancel:${createId("evt")}`, { forceLifecycle: true });
+    await client.query(`UPDATE submissions s SET status='canceled',updated_at=now() WHERE message_id=$1 AND status IN ('queued','deferred')
+      AND NOT EXISTS(SELECT 1 FROM submission_deliveries sd JOIN deliveries d ON d.id=sd.delivery_id WHERE sd.submission_id=s.id AND d.lifecycle_status IN ('queued','deferred','submitting'))`, [id]);
+    return { messageId: id, canceled: rows.length };
   });
 }
 
 export type RetryOptions = { acknowledgeUnknown: boolean; actor: string };
-
-async function readRetryState(client: PoolClient, deliveryId: string) {
-  await client.query("SELECT m.id FROM messages m JOIN deliveries d ON d.message_id=m.id WHERE d.id=$1 FOR UPDATE OF m", [deliveryId]);
-  return (await client.query<{
-    id: string; lifecycle_status: string; compliance_status: string; current_attempt_id: string | null;
-    blocked: boolean; enabled: boolean; uncertain: boolean; content_expired: boolean
-  }>(`SELECT d.id,d.lifecycle_status,d.compliance_status,d.current_attempt_id,
-      EXISTS(SELECT 1 FROM suppressions su WHERE su.active AND su.email_normalized=d.recipient_email
-        AND (su.expires_at IS NULL OR su.expires_at>now()) AND (su.scope_type='global'
-          OR (su.product_id=m.product_id AND (su.scope_type='product' OR su.list_id=m.metadata->>'listId')))) AS blocked,
-      (p.status='active' AND sp.status='active' AND sd.status='active') AS enabled,
-      m.content_purged_at IS NOT NULL AS content_expired,
-      COALESCE(a.status IN ('unknown','reconciling','submitting') OR NOT a.outcome_determinate,false) AS uncertain
-    FROM deliveries d JOIN messages m ON m.id=d.message_id JOIN products p ON p.id=m.product_id
-    JOIN services s ON s.id=m.service_id JOIN sender_profiles sp ON sp.id=m.sender_profile_id
-    JOIN sending_domains sd ON sd.id=sp.sending_domain_id LEFT JOIN delivery_attempts a ON a.id=d.current_attempt_id
-    WHERE d.id=$1 FOR UPDATE OF d`, [deliveryId])).rows[0];
+async function retryState(client: PoolClient, deliveryId: string) {
+  return (await client.query<{ id: string; message_id: string; service_id: string; lifecycle_status: string; compliance_status: string; current_attempt_id: string | null; uncertain: boolean; live: boolean; provider_pending: boolean; content_expired: boolean; enabled: boolean; blocked: boolean }>(`SELECT d.id,d.message_id,m.service_id,d.lifecycle_status,d.compliance_status,d.current_attempt_id,
+    COALESCE(NOT a.outcome_determinate,false) AS uncertain,(a.status='submitting') IS TRUE AS live,(a.status IN ('accepted','reconciled') AND d.lifecycle_status='deferred') IS TRUE AS provider_pending,m.content_purged_at IS NOT NULL AS content_expired,
+    EXISTS(SELECT 1 FROM sender_grants g JOIN sending_domains sd ON sd.id=g.sending_domain_id JOIN products p ON p.id=g.product_id
+      WHERE sd.id=m.sending_domain_id AND sd.status='active' AND p.status='active' AND g.status='active' AND g.product_id=m.product_id
+        AND (g.service_id IS NULL OR g.service_id=m.service_id) AND (g.from_local_part IS NULL OR g.from_local_part=split_part(m.sender_snapshot->>'fromEmail','@',1))) AS enabled,
+    EXISTS(SELECT 1 FROM suppressions su WHERE su.active AND su.email_normalized=lower(d.recipient_email) AND (su.expires_at IS NULL OR su.expires_at>now())
+      AND (su.scope_type='global' OR (su.product_id=m.product_id AND (su.scope_type='product' OR su.list_id=m.metadata->>'listId')))) AS blocked
+    FROM deliveries d JOIN messages m ON m.id=d.message_id LEFT JOIN submission_attempts a ON a.id=d.current_attempt_id WHERE d.id=$1 FOR UPDATE OF d`, [deliveryId])).rows[0];
 }
-
-function eligibility(row: Awaited<ReturnType<typeof readRetryState>>) {
+function eligibility(row: Awaited<ReturnType<typeof retryState>>) {
   if (!row) return { allowed: false, reason: "not_found", requiresUnknownAcknowledgement: false };
-  const reason = row.content_expired ? "content_expired" : row.blocked || row.compliance_status !== "clean" ? "suppressed" : !row.enabled ? "configuration_disabled" : !["failed", "deferred", "unknown", "bounced"].includes(row.lifecycle_status) ? "status_not_retryable" : null;
-  return { allowed: !reason, reason, requiresUnknownAcknowledgement: row.uncertain };
+  const reason = row.live ? "submission_in_progress" : row.provider_pending ? "provider_delivery_pending" : row.content_expired ? "content_expired" : row.blocked || row.compliance_status !== "clean" ? "suppressed" : !row.enabled ? "sender_not_authorized" : !["failed", "deferred", "unknown", "bounced"].includes(row.lifecycle_status) ? "status_not_retryable" : null;
+  return { allowed: !reason, reason, requiresUnknownAcknowledgement: row.uncertain || row.lifecycle_status === "unknown" };
 }
-
 export async function getDeliveryRetryEligibility(deliveryId: string) {
-  return transaction(async client => eligibility(await readRetryState(client, deliveryId)));
-}
-
-async function retryLockedDelivery(client: PoolClient, deliveryId: string, options: RetryOptions) {
-  const row = await readRetryState(client, deliveryId);
-  const check = eligibility(row);
-  if (!check.allowed || !row) return { deliveryId, queued: false, reason: check.reason };
-  if (row.uncertain && !options.acknowledgeUnknown) throw new DuplicateRiskError("Unknown outcomes require duplicate-risk acknowledgement.");
-  if (row.current_attempt_id) await client.query(
-    "UPDATE delivery_attempts SET retry_authorized_at=now(),retry_authorized_by=$2,reconcile_after=NULL WHERE id=$1",
-    [row.current_attempt_id, options.actor],
-  );
-  await applyDeliveryEvent(client, deliveryId, {
-    id: createId("retry"), type: "queued", occurredAt: new Date(), metadata: { source: "authorized_retry", actor: options.actor }
-  }, `retry:${createId("req")}`, { forceLifecycle: true });
-  await client.query("UPDATE deliveries SET defer_count=0 WHERE id=$1", [deliveryId]);
-  await client.query("INSERT INTO outbox_events(id,aggregate_type,aggregate_id,event_type,payload) VALUES ($1,'delivery',$2,'delivery.requested',$3)", [createId("out"), deliveryId, { deliveryId }]);
-  return { deliveryId, queued: true, reason: null };
-}
-
-export async function retryDelivery(deliveryId: string, options: RetryOptions) {
-  return transaction(client => retryLockedDelivery(client, deliveryId, options));
-}
-
-export async function retryMessage(id: string, serviceId: string, acknowledgeUnknown: boolean) {
   return transaction(async client => {
-    const owned = await client.query("SELECT 1 FROM messages WHERE id=$1 AND service_id=$2 FOR UPDATE", [id, serviceId]);
-    if (!owned.rowCount) return null;
-    const candidates = await client.query<{ id: string }>("SELECT id FROM deliveries WHERE message_id=$1 ORDER BY id", [id]);
-    const results = [];
-    for (const delivery of candidates.rows) results.push(await retryLockedDelivery(client, delivery.id, { acknowledgeUnknown, actor: `service:${serviceId}` }));
-    return { messageId: id, queued: results.filter(result => result.queued).length, skipped: results.filter(result => !result.queued) };
+    await client.query("SELECT m.id FROM messages m JOIN deliveries d ON d.message_id=m.id WHERE d.id=$1 FOR UPDATE OF m", [deliveryId]);
+    return eligibility(await retryState(client, deliveryId));
   });
+}
+export async function retryMessage(id: string, serviceId: string, input: { deliveryIds?: string[]; acknowledgeDuplicateRisk: boolean }, idempotencyKey: string, actor = `service:${serviceId}`) {
+  if (!idempotencyKey?.trim() || idempotencyKey.length > 256) throw new MessageValidationError(["Idempotency-Key is required for retry."]);
+  const payloadHash = hashPayload(input);
+  return transaction(async client => {
+    const message = (await client.query<MessageContent>("SELECT * FROM messages WHERE id=$1 AND service_id=$2 FOR UPDATE", [id, serviceId])).rows[0];
+    if (!message) return null;
+    const prior = (await client.query<{ payload_hash: string; result: { messageId: string; submissionId: string | null; queued: number; skipped: { deliveryId: string; reason: string | null }[] } }>("SELECT payload_hash,result FROM message_retries WHERE message_id=$1 AND idempotency_key=$2", [id, idempotencyKey])).rows[0];
+    if (prior) { if (prior.payload_hash !== payloadHash) throw new IdempotencyConflictError(); return prior.result; }
+    await client.query("SELECT id FROM submissions WHERE message_id=$1 ORDER BY id FOR UPDATE", [id]);
+    const all = (await client.query<{ id: string; recipient_email: string; recipient_name: string | null }>("SELECT id,recipient_email,recipient_name FROM deliveries WHERE message_id=$1 ORDER BY id", [id])).rows;
+    const wanted = input.deliveryIds ? new Set(input.deliveryIds) : null;
+    if (wanted && (!wanted.size || wanted.size !== input.deliveryIds!.length || [...wanted].some(target => !all.some(row => row.id === target)))) throw new MessageValidationError(["deliveryIds must be unique recipients belonging to this message."], "INVALID_RETRY_TARGET");
+    const eligible = [];
+    const skipped = [];
+    for (const row of all) {
+      if (wanted && !wanted.has(row.id)) continue;
+      const state = await retryState(client, row.id);
+      const check = eligibility(state);
+      if (!check.allowed) { skipped.push({ deliveryId: row.id, reason: check.reason }); continue; }
+      if (check.requiresUnknownAcknowledgement && !input.acknowledgeDuplicateRisk) throw new DuplicateRiskError("Unknown outcomes require duplicate-risk acknowledgement.");
+      eligible.push({ ...row, state: state! });
+    }
+    if (wanted && skipped.length) throw new MessageValidationError(skipped.map(row => `${row.deliveryId}: ${row.reason}`), "RETRY_NOT_ALLOWED");
+    if (eligible.length) await assertRoutable(client, message, eligible.map(row => ({ email: row.recipient_email, name: row.recipient_name ?? undefined })));
+    for (const row of eligible) {
+      if (row.state.current_attempt_id) await client.query("UPDATE submission_attempts SET retry_authorized_at=now(),retry_authorized_by=$2 WHERE id=$1", [row.state.current_attempt_id, actor]);
+      await applyDeliveryEvent(client, row.id, { id: createId("retry"), type: "queued", occurredAt: new Date(), metadata: { source: "authorized_retry", actor } }, `retry:${createId("evt")}`, { forceLifecycle: true });
+    }
+    const submissionId = await createSubmission(client, id, eligible.map(row => row.id));
+    const result = { messageId: id, submissionId, queued: eligible.length, skipped };
+    await client.query("INSERT INTO message_retries(message_id,idempotency_key,payload_hash,result) VALUES ($1,$2,$3,$4)", [id, idempotencyKey, payloadHash, result]);
+    return result;
+  });
+}
+export async function retryDelivery(deliveryId: string, options: RetryOptions) {
+  const message = (await query<{ id: string; service_id: string }>("SELECT m.id,m.service_id FROM messages m JOIN deliveries d ON d.message_id=m.id WHERE d.id=$1", [deliveryId])).rows[0];
+  if (!message) return { deliveryId, queued: false, reason: "not_found" };
+  const result = await retryMessage(message.id, message.service_id, { deliveryIds: [deliveryId], acknowledgeDuplicateRisk: options.acknowledgeUnknown }, createId("retry"), options.actor);
+  return { deliveryId, queued: Boolean(result?.queued), reason: result?.skipped[0]?.reason ?? null };
 }

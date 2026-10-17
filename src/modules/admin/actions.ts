@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { createMessageSchema, type CreateMessageInput } from "@/lib/contracts";
 import { z } from "zod";
 import {
   providerConfigSchema,
@@ -385,7 +386,7 @@ export async function createSenderProfile(input: {
     if (!product.rows[0]) throw new Error("Product not found");
     if (!domain.rows[0]) throw new Error("Sending domain not found");
     if (domain.rows[0].status !== "active" || !verifiedIdentity.rows[0]) throw new Error("An active sending domain with a verified provider identity is required");
-    if (existing.rows[0]) throw new Error("A sender profile with this name already exists for the product");
+    if (existing.rows[0]) throw new Error("A sender preset with this name already exists for the product");
     await client.query("INSERT INTO sender_profiles(id,product_id,sending_domain_id,name,from_name,from_local_part,reply_to,message_category) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)", [id, validated.productId, validated.domainId, validated.name, validated.fromName, validated.fromLocalPart, validated.replyTo ?? null, validated.category]);
     await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id) VALUES ($1,'sender_profile.create','sender_profile',$2)", [actor, id]);
   });
@@ -493,7 +494,7 @@ export async function simulateRouting(input: {
     usage.monthly_usage::text,usage.daily_usage::text
     FROM routing_policies rp JOIN routing_targets rt ON rt.policy_id=rp.id JOIN provider_accounts pa ON pa.id=rt.provider_account_id
     JOIN provider_identities pi ON pi.id=rt.provider_identity_id AND pi.provider_account_id=pa.id JOIN sending_domains sd ON sd.id=pi.sending_domain_id
-    CROSS JOIN LATERAL(SELECT count(*)FILTER(WHERE da.started_at>=date_trunc('month',now())AND da.status IN('submitting','accepted','reconciled','unknown','reconciling'))monthly_usage,count(*)FILTER(WHERE da.started_at>=date_trunc('day',now())AND da.status IN('submitting','accepted','reconciled','unknown','reconciling'))daily_usage FROM delivery_attempts da WHERE da.provider_account_id=pa.id)usage
+    CROSS JOIN LATERAL(SELECT count(*)FILTER(WHERE da.started_at>=date_trunc('month',now())AND da.status IN('submitting','accepted','reconciled','unknown','reconciling'))monthly_usage,count(*)FILTER(WHERE da.started_at>=date_trunc('day',now())AND da.status IN('submitting','accepted','reconciled','unknown','reconciling'))daily_usage FROM submission_attempts da JOIN submission_deliveries sm ON sm.submission_id=da.submission_id WHERE da.provider_account_id=pa.id)usage
     WHERE rp.status='active' AND rp.sending_domain_id=$1 AND pi.sending_domain_id=$1 AND (rp.product_id IS NULL OR rp.product_id=$2) AND (rp.service_id IS NULL OR rp.service_id=$3) AND (rp.message_category IS NULL OR rp.message_category=$4) ORDER BY rp.priority,rt.priority,rt.id`, [domainId, input.productId || null, input.serviceId || null, input.category || null]);
   const candidates = result.rows.map(row => {
     const reasons = evaluateCandidate(row);
@@ -550,47 +551,62 @@ export async function removeSuppression(id: string, actor: string) {
 
 export async function sendTestMessage(input: {
   serviceId: string;
-  recipient: string;
-  category: string;
-  senderProfile?: string;
-  subject: string;
-  html?: string;
-  text?: string;
-  idempotencyKey: string
+  message: CreateMessageInput;
+  idempotencyKey: string;
 }, actor: string) {
   const row = (await query<{
-    service_id: string;
-    service_name: string;
-    product_id: string;
-    product_name: string
+    service_id: string; service_name: string; product_id: string; product_name: string;
   }>(`SELECT s.id AS service_id,s.name AS service_name,p.id AS product_id,p.name AS product_name
       FROM services s JOIN products p ON p.id=s.product_id
       WHERE s.id=$1 AND p.status='active'`, [input.serviceId])).rows[0];
   if (!row) throw new Error("The selected service is unavailable");
+  const message = createMessageSchema.parse(input.message);
   const result = await acceptMessage({
     identity: {
-      serviceId: row.service_id,
-      serviceName: row.service_name,
-      productId: row.product_id,
-      product: row.product_name,
-      rateLimitPerMinute: SERVICE_REQUESTS_PER_MINUTE
+      serviceId: row.service_id, serviceName: row.service_name,
+      productId: row.product_id, product: row.product_name,
+      rateLimitPerMinute: SERVICE_REQUESTS_PER_MINUTE,
     },
     idempotencyKey: `admin-test-${z.string().uuid().parse(input.idempotencyKey)}`,
-    input: {
-      category: input.category,
-      senderProfile: input.senderProfile,
-      to: [{ email: input.recipient }],
-      subject: input.subject,
-      html: input.html,
-      text: input.text,
-      metadata: { source: "admin_test" }
+    input: message,
+  });
+  await audit(actor, "message.test_send", "message", result.message.id, { serviceId: input.serviceId });
+  return result.message;
+}
+
+const senderGrantInputSchema = z.object({
+  productId: identifierSchema,
+  serviceId: optionalIdentifierSchema,
+  domainId: identifierSchema,
+  fromLocalPart: z.preprocess(value => value === "" ? undefined : value,
+    z.string().trim().min(1).max(64).regex(/^[^@\s]+$/, "Local part cannot contain whitespace or @").optional()),
+}).strict();
+
+export async function createSenderGrant(input: z.input<typeof senderGrantInputSchema>, actor: string) {
+  const validated = senderGrantInputSchema.parse(input);
+  return transaction(async client => {
+    const product = await client.query("SELECT id FROM products WHERE id=$1 AND status='active'", [validated.productId]);
+    if (!product.rows[0]) throw new Error("An active product is required");
+    const domain = await client.query("SELECT id FROM sending_domains WHERE id=$1 AND status='active'", [validated.domainId]);
+    if (!domain.rows[0]) throw new Error("An active sending domain is required");
+    if (validated.serviceId) {
+      const service = await client.query("SELECT id FROM services WHERE id=$1 AND product_id=$2", [validated.serviceId, validated.productId]);
+      if (!service.rows[0]) throw new Error("The selected service does not belong to the product");
     }
+    const id = createId("sg");
+    await client.query("INSERT INTO sender_grants(id,product_id,service_id,sending_domain_id,from_local_part) VALUES ($1,$2,$3,$4,$5)",
+      [id, validated.productId, validated.serviceId ?? null, validated.domainId, validated.fromLocalPart ?? null]);
+    await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES ($1,'sender_grant.create','sender_grant',$2,$3)", [actor, id, validated]);
+    return id;
   });
-  await audit(actor, "message.test_send", "message", result.message.id, {
-    recipient: input.recipient,
-    serviceId: input.serviceId
+}
+
+export async function toggleSenderGrant(id: string, enabled: boolean, actor: string) {
+  await transaction(async client => {
+    const result = await client.query("UPDATE sender_grants SET status=$2,updated_at=now() WHERE id=$1 RETURNING id", [id, enabled ? "active" : "disabled"]);
+    if (!result.rows[0]) throw new Error("Sender grant not found");
+    await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES ($1,'sender_grant.toggle','sender_grant',$2,$3)", [actor, id, { enabled }]);
   });
-  return result.message
 }
 
 export async function createServiceCredential(input: { productId: string; serviceName: string }, actor: string) {

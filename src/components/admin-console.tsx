@@ -123,6 +123,39 @@ function Domains({ data }: { data: Data }) {
   );
 }
 
+function SenderGrants({ data }: { data: Data }) {
+  const action = useAction();
+  const products = rows(data.products).filter(item => item.status === "active");
+  const domains = rows(data.domains).filter(item => item.status === "active");
+  const [productId, setProductId] = useState(value(products[0] ?? {}, "id"));
+  const services = rows(data.services).filter(item => item.product_id === productId);
+  async function submit(values: FormValues) {
+    try {
+      await action.run({ action: "grant.create", productId, serviceId: formValue(values, "serviceId"), domainId: formValue(values, "domainId"), fromLocalPart: formValue(values, "fromLocalPart") });
+    } catch { /* Inline notice owns this request. */ }
+  }
+  return <Space direction="vertical" size="large" className={styles.stack}>
+    <Panel title="Authorize sender addresses" description="Grant a product or service permission to use a domain or exact address. Domain verification alone does not grant permission." defaultExpanded={!rows(data.grants).length}>
+      {products.length && domains.length ? <ActionForm key={productId} fieldErrors={action.fields} layout="vertical" onSubmit={values => void submit(values as FormValues)} initialValues={{ serviceId: "", domainId: value(domains[0], "id"), fromLocalPart: "" }}>
+        <Grid.Row gutter={[16, 0]}>
+          <Grid.Col md={12} xs={24}><Field label="Product" required><Select value={productId} onChange={next => setProductId(String(next))} options={products.map(item => ({ value: value(item, "id"), label: value(item, "name") }))} /></Field></Grid.Col>
+          <Grid.Col md={12} xs={24}><Field field="serviceId" label="Service"><Select options={[{ value: "", label: "All services in product" }, ...services.map(item => ({ value: value(item, "id"), label: value(item, "name") }))]} /></Field></Grid.Col>
+          <Grid.Col md={12} xs={24}><Field field="domainId" label="Domain" required rules={requiredRule}><Select options={domains.map(item => ({ value: value(item, "id"), label: value(item, "domain") }))} /></Field></Grid.Col>
+          <Grid.Col md={12} xs={24}><Field field="fromLocalPart" label="Exact local part" hint="Leave empty to authorize any address in the domain"><Input placeholder="orders" /></Field></Grid.Col>
+          <Grid.Col xs={24}><Submit pending={action.pending} labelText="Grant permission" /></Grid.Col>
+        </Grid.Row>
+      </ActionForm> : <Typography.Text>Create a product and sending domain first.</Typography.Text>}
+      <Notice notice={action.notice} />
+    </Panel>
+    <TableCard title="Sender permissions"><DataTable data={rows(data.grants)} emptyText="No sender permissions. Authorize a domain or address before sending." columns={[
+      { title: "Product / service", render: (_, grant) => `${value(grant, "product")} / ${value(grant, "service") || "All services"}` },
+      { title: "Authorized From", render: (_, grant) => `${value(grant, "from_local_part") || "*"}@${value(grant, "domain")}` },
+      { title: "Status", render: (_, grant) => <StatusTag>{value(grant, "status")}</StatusTag> },
+      { title: "Action", render: (_, grant) => <ActionButton body={{ action: "grant.toggle", id: grant.id, enabled: grant.status !== "active" }} confirmText={grant.status === "active" ? "Revoke this permission? Queued messages using it will be checked again before sending." : undefined}>{grant.status === "active" ? "Revoke" : "Activate"}</ActionButton> },
+    ]} /></TableCard>
+  </Space>;
+}
+
 function Senders({ data }: { data: Data }) {
   const [editingSender, setEditingSender] = useState<Row | null>(null);
   const action = useAction();
@@ -148,14 +181,15 @@ function Senders({ data }: { data: Data }) {
   }
 
   if (!products.length || !domains.length) {
-    return <Prerequisite title="Create the sender prerequisites" description={products.length ? "Verify a sending domain before creating a sender profile." : "Create a product and verify a sending domain before creating a sender profile."} href={products.length ? "/domains" : "/api-keys"} action={products.length ? "Manage domains" : "Create a product"} />;
+    return <Space direction="vertical" size="large" className={styles.stack}><SenderGrants data={data} /><Typography.Text type="secondary">Optional sender presets become available after a provider identity is verified.</Typography.Text></Space>;
   }
 
   return (
     <Space direction="vertical" size="large" className={styles.stack}>
+      <SenderGrants data={data} />
       <Panel
-        title="Create sender profile"
-        description="Visible From identity resolved before queuing"
+        title="Create optional sender preset"
+        description="A console shortcut that fills standard From, Reply-To, and category fields. Sending authorization is configured separately."
         defaultExpanded={senders.length === 0}
       >
         <ActionForm fieldErrors={action.fields} layout="vertical" onSubmit={values => void submit(values as FormValues)}>
@@ -170,22 +204,22 @@ function Senders({ data }: { data: Data }) {
                 <Select options={domains.map(domain => ({ value: value(domain, "id"), label: value(domain, "domain") }))} />
               </Field>
             </Grid.Col>
-            <Grid.Col md={8} xs={24}><Field field="name" label="Profile name" required rules={requiredRule}><Input /></Field></Grid.Col>
+            <Grid.Col md={8} xs={24}><Field field="name" label="Preset name" required rules={requiredRule}><Input /></Field></Grid.Col>
             <Grid.Col md={8} xs={24}><Field field="fromName" label="From name" required rules={requiredRule}><Input /></Field></Grid.Col>
             <Grid.Col md={8} xs={24}><Field field="fromLocalPart" label="From local part" required rules={requiredRule}><Input /></Field></Grid.Col>
             <Grid.Col md={8} xs={24}><Field field="category" label="Category" initialValue="transactional" required rules={requiredRule}><Input /></Field></Grid.Col>
             <Grid.Col md={16} xs={24}><Field field="replyTo" label="Reply-To" rules={[{ type: "email" }]}><Input type="email" /></Field></Grid.Col>
-            <Grid.Col md={8} xs={24}><Space><Submit pending={action.pending} labelText="Create profile" /></Space></Grid.Col>
+            <Grid.Col md={8} xs={24}><Space><Submit pending={action.pending} labelText="Create preset" /></Space></Grid.Col>
           </Grid.Row>
         </ActionForm>
         <Notice notice={action.notice} />
       </Panel>
-      <TableCard title="Sender profiles">
+      <TableCard title="Optional sender presets">
         <DataTable
           data={senders}
-          emptyText="No sender profiles configured."
+          emptyText="No optional sender presets configured."
           columns={[
-            { title: "Profile", render: (_, sender) => value(sender, "name") },
+            { title: "Preset", render: (_, sender) => value(sender, "name") },
             { title: "Product", render: (_, sender) => value(sender, "product") },
             { title: "From", render: (_, sender) => <Typography.Text code>{value(sender, "from_name")} &lt;{value(sender, "from_local_part")}@{value(sender, "domain")}&gt;</Typography.Text> },
             { title: "Category", render: (_, sender) => value(sender, "message_category") },
@@ -471,7 +505,7 @@ function Events({ data }: { data: Data }) {
           minWidth="900px"
           columns={[
             { title: "Type", render: (_, event) => <Typography.Text code>{value(event, "event_type")}</Typography.Text> },
-            { title: "Recipient", render: (_, event) => value(event, "recipient_email") },
+            { title: "Scope / recipient", render: (_, event) => `${value(event, "scope")} / ${value(event, "recipient_email") || "Entire submission"}` },
             { title: "Occurred", render: (_, event) => date(event.occurred_at) },
             { title: "Canonical payload", render: (_, event) => <JsonPreview data={event.canonical_payload} title="Canonical event payload" /> },
           ]}

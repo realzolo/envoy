@@ -1,21 +1,22 @@
 import type { PoolClient } from "pg";
 import { db, query, transaction } from "@/server/database";
 
-export type RateLimitRequest = { scope: string; key: string; limit: number; windowSeconds?: number };
+export type RateLimitRequest = { scope: string; key: string; limit: number; windowSeconds?: number; units?: number };
 
 async function consume(client: Pick<PoolClient, "query">, request: RateLimitRequest) {
   const seconds = Math.max(1, Math.floor(request.windowSeconds ?? 60));
   const limit = Math.max(0, Math.floor(request.limit));
+  const units = Math.max(1, Math.floor(request.units ?? 1));
   const result = await client.query<{ count: string; reset_at: Date }>(
     `WITH rate_window AS (
        SELECT to_timestamp(floor(extract(epoch FROM statement_timestamp()) / $3) * $3) AS starts
      )
      INSERT INTO rate_limit_counters(scope,key,window_start,count,expires_at)
-     SELECT $1,$2,starts,1,starts+($3+10)*interval '1 second' FROM rate_window WHERE $4 > 0
-     ON CONFLICT(scope,key,window_start) DO UPDATE SET count=rate_limit_counters.count+1
-       WHERE rate_limit_counters.count < $4
+     SELECT $1,$2,starts,$5::bigint,starts+($3+10)*interval '1 second' FROM rate_window WHERE $4::bigint >= $5::bigint
+     ON CONFLICT(scope,key,window_start) DO UPDATE SET count=rate_limit_counters.count+$5::bigint
+       WHERE rate_limit_counters.count+$5::bigint <= $4::bigint
      RETURNING count,window_start+$3*interval '1 second' AS reset_at`,
-    [request.scope, request.key, seconds, limit],
+    [request.scope, request.key, seconds, limit, units],
   );
   const row = result.rows[0];
   if (row) return { allowed: true, remaining: Math.max(0, limit - Number(row.count)), limit, resetAt: row.reset_at };

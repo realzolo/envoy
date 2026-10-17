@@ -8,7 +8,7 @@ import { PageHeader } from "@/components/page-header";
 import styles from "./mail-views.module.css";
 
 type Service = { id: string; name: string; product: string; product_id: string };
-type Sender = { name: string; product_id: string; category: string; from_address: string };
+type Sender = { name: string; product_id: string; category: string; from_address: string; from_name: string; from_email: string; reply_to: string | null };
 
 export function ComposeMessageView({ services, senders }: { services: Service[]; senders: Sender[] }) {
   const router = useRouter();

@@ -15,7 +15,7 @@ import {
   type ProviderModule,
   type ProviderSendContext
 } from "../contracts";
-import { accepted, decodeJson, event, eventDate, stableEventId } from "../shared";
+import { nativeMailCapabilities, assertMessageCapabilities, buildMimeMessage, messageRecipients, safeDiagnostic, providerErrorCode, accepted, decodeJson, event, eventDate, stableEventId } from "../shared";
 import { isTrustedSnsSigningCertificateUrl, snsSignatureAlgorithm } from "./sns-security";
 
 function credentials(context: ProviderSendContext) {
@@ -95,35 +95,37 @@ export const sesModule: ProviderModule = {
       domainManagement: true,
       webhookSecurity: "SNS certificate signature and TopicArn",
       eventTypes: Object.keys(eventMap),
-      attachments: false,
+      ...nativeMailCapabilities,
+      envelopeRecipients: true,
+      requiresTo: false,
+      maxMessageBytes: 40_000_000,
       scheduling: false
     }
   },
   sender: {
     async send(message, context) {
+      assertMessageCapabilities(message, sesModule.descriptor.capabilities);
       if (context.config.type !== "ses") throw new Error("Invalid SES configuration");
       try {
         const result = await ses(context).send(new SendEmailCommand({
-          FromEmailAddress: `${message.from.name} <${message.from.email}>`,
-          Destination: { ToAddresses: [message.to.email] },
-          ReplyToAddresses: message.replyTo ? [message.replyTo] : undefined,
-          Content: {
-            Simple: {
-              Subject: { Data: message.subject, Charset: "UTF-8" },
-              Body: { Html: { Data: message.html, Charset: "UTF-8" }, Text: { Data: message.text, Charset: "UTF-8" } }
-            }
-          },
+          FromEmailAddress: message.from.email,
+          // Destination is the SMTP envelope. Visible To/Cc remain in MIME;
+          // Bcc is omitted from MIME and only appears in this envelope.
+          Destination: { ToAddresses: messageRecipients(message).map(a => a.email) },
+          Content: { Raw: { Data: buildMimeMessage(message) } },
           ConfigurationSetName: context.config.configurationSet,
           EmailTags: Object.entries(message.tags).map(([Name, Value]) => ({ Name, Value }))
         }));
         return accepted(result.MessageId)
       } catch (error) {
+        if (error instanceof CanonicalProviderError) throw error;
         const value = error as { $metadata?: { httpStatusCode?: number }; name?: string; message?: string };
         const status = value.$metadata?.httpStatusCode;
-        if (!status) throw new CanonicalProviderError(value.message ?? "SES request outcome is unknown", "network", value.name ?? "ses_transport_error", "unknown", true);
-        if (status >= 500 || status === 408) throw new CanonicalProviderError(value.message ?? `SES returned HTTP ${status}`, "provider", value.name ?? `http_${status}`, "unknown", false);
+        const details = { providerCode: value.name ?? `http_${status ?? "unknown"}` };
+        if (!status) throw new CanonicalProviderError(safeDiagnostic(value.message ?? "SES request outcome is unknown"), "network", "SUBMISSION_OUTCOME_UNKNOWN", "unknown", false, details);
+        if (status >= 500 || status === 408) throw new CanonicalProviderError(safeDiagnostic(value.message ?? `SES returned HTTP ${status}`), "provider", "SUBMISSION_OUTCOME_UNKNOWN", "unknown", false, details);
         const category = status === 429 ? "rate_limit" : status === 401 || status === 403 ? "authentication" : status >= 500 ? "provider" : "policy";
-        throw new CanonicalProviderError(value.message ?? `SES returned HTTP ${status}`, category, value.name ?? `http_${status}`, "not_accepted", status === 429 || status >= 500)
+        throw new CanonicalProviderError(safeDiagnostic(value.message ?? `SES returned HTTP ${status}`), category, providerErrorCode(category), "not_accepted", status === 429, details)
       }
     }
   },
@@ -168,7 +170,10 @@ export const sesModule: ProviderModule = {
       const detailsKey: Record<string, string> = { Delivery: "delivery", Bounce: "bounce", Complaint: "complaint", Reject: "reject", RenderingFailure: "failure", "Rendering Failure": "failure", DeliveryDelay: "deliveryDelay", Open: "open", Click: "click", Send: "send", Subscription: "subscription", Received: "receipt" };
       const details = (p[detailsKey[native]] ?? {}) as Record<string, unknown>;
       const recipientsKey = native === "Bounce" ? "bouncedRecipients" : native === "Complaint" ? "complainedRecipients" : native === "DeliveryDelay" ? "delayedRecipients" : "recipients";
-      const recipients = Array.isArray(details[recipientsKey]) ? details[recipientsKey] as unknown[] : Array.isArray(mail.destination) ? mail.destination : [];
+      // Open/Click only identify a message: mail.destination does not prove
+      // which member of a grouped email engaged with it.
+      const engagement = type === "opened" || type === "clicked";
+      const recipients = engagement ? [] : Array.isArray(details[recipientsKey]) ? details[recipientsKey] as unknown[] : Array.isArray(mail.destination) ? mail.destination : [];
       const occurredAt = eventDate(details.timestamp ?? mail.timestamp);
       return (recipients.length ? recipients : [undefined]).map((recipient, index) => {
         const info = recipient && typeof recipient === "object" ? recipient as Record<string, unknown> : {};
@@ -184,6 +189,10 @@ export const sesModule: ProviderModule = {
             code: String(info.status ?? details.bounceSubType ?? ""),
             message: typeof info.diagnosticCode === "string" ? info.diagnosticCode : undefined
           } : undefined,
+          metadata: type === "failed" || type === "deferred" ? {
+            reason: safeDiagnostic(info.diagnosticCode ?? details.reason ?? details.errorMessage ?? details.delayType ?? "Provider delivery failed"),
+            ...(info.status || details.errorCode ? { providerCode: String(info.status ?? details.errorCode) } : {}),
+          } : {},
           inboundReference: type === "inbound.received" ? String(mail.messageId ?? "") : undefined
         });
       });

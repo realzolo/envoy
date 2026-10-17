@@ -38,15 +38,14 @@ instance where that database may be removed.
 - Prefer small, reviewable pull requests with tests covering behavior changes.
 - Keep provider-specific behavior inside `src/modules/providers`; do not expose provider credentials or payloads to
   the service API.
-- Add an ordered migration for a normal schema change. Alter the baseline migration only for an explicitly documented
-  fresh-database release; that release must not claim in-place upgrade compatibility.
+- Keep the initial schema authoritative for this new project. Do not add compatibility branches or migration-history
+  documents. Update the final API contract and schema together.
 - Update the relevant deployment, architecture, or operator documentation when runtime behavior changes.
 - Run formatting only on files you intentionally changed. Preserve unrelated work in a shared checkout.
 
 ## Pull Requests
 
-Explain the user-visible impact, testing performed, operational considerations, and any migration or configuration
-steps. Keep the CI checks green. Maintainers may ask for a smaller scope when a proposal combines independent changes.
+Explain the user-visible impact, testing performed, operational considerations, and configuration requirements. Keep the CI checks green. Maintainers may ask for a smaller scope when a proposal combines independent changes.
 
 ## Security Issues
 

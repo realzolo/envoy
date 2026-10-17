@@ -1,3 +1,4 @@
+import { markReconciled, recordWorkflowFailure } from "@/modules/core/routing/engine";
 import { createId } from "@/server/ids";
 import { db } from "@/server/database";
 import { PROVIDER_EVENT_RECEIVED } from "@/server/outbox-events";
@@ -17,22 +18,27 @@ export async function recoverWorkBatch(limit = 100) {
     locked = Boolean(lock.rows[0]?.locked);
     if (!locked) return 0;
     // The final claim itself can crash before recording exhaustion. Close that lease once due.
-    await client.query(`UPDATE delivery_attempts SET status='unknown',reconcile_after=NULL,error_code='reconciliation_exhausted'
-      WHERE id IN(SELECT id FROM delivery_attempts WHERE status IN ('unknown','reconciling')
-        AND reconciliation_count>=12 AND reconcile_after<=now() LIMIT $1)`, [limit]);
+    const exhausted = await client.query<{ id: string }>(`SELECT a.id FROM submission_attempts a
+      WHERE a.status IN ('unknown','reconciling') AND a.reconciliation_count>=12 AND a.reconcile_after<=now()
+        AND EXISTS(SELECT 1 FROM submission_deliveries sd JOIN deliveries d ON d.id=sd.delivery_id
+          WHERE sd.submission_id=a.submission_id AND d.current_attempt_id=a.id)
+      ORDER BY a.reconcile_after,a.id LIMIT $1`, [limit]);
+    for (const attempt of exhausted.rows) await markReconciled(attempt.id, "unknown");
     await client.query(`UPDATE raw_provider_events SET processing_error=COALESCE(processing_error,'Processing attempts exhausted; manual replay required')
       WHERE id IN(SELECT id FROM raw_provider_events WHERE processed_at IS NULL AND processing_attempt_count>=20
         AND next_attempt_at<=now() AND processing_error IS NULL LIMIT $1)`, [limit]);
     const candidates = await client.query<Work>(
       `SELECT * FROM (
-        SELECT 'delivery'::text AS aggregate_type,d.id AS aggregate_id,'delivery.requested'::text AS event_type,
-          jsonb_build_object('deliveryId',d.id) AS payload,(d.lifecycle_status='submitting') AS expired_submission,false AS reset_raw
-        FROM deliveries d LEFT JOIN delivery_attempts a ON a.id=d.current_attempt_id
-        WHERE ((d.lifecycle_status IN ('queued','deferred') AND d.updated_at<now()-interval '2 minutes')
-          OR (d.lifecycle_status='submitting' AND a.status='submitting' AND a.submission_deadline_at<=now()))
+        SELECT 'submission'::text AS aggregate_type,s.id AS aggregate_id,'submission.requested'::text AS event_type,
+          jsonb_build_object('submissionId',s.id) AS payload,(s.status='submitting') AS expired_submission,false AS reset_raw
+        FROM submissions s LEFT JOIN submission_attempts a ON a.id=s.current_attempt_id
+        WHERE ((s.status IN ('queued','deferred') AND s.updated_at<now()-interval '2 minutes')
+          OR (s.status='submitting' AND a.status='submitting' AND a.submission_deadline_at<=now()))
         UNION ALL
-        SELECT 'attempt',a.id,'delivery.reconcile',jsonb_build_object('attemptId',a.id),false,false
-        FROM delivery_attempts a WHERE a.status IN ('unknown','reconciling') AND a.reconcile_after<=now()
+        SELECT 'attempt',a.id,'submission.reconcile',jsonb_build_object('attemptId',a.id),false,false
+        FROM submission_attempts a WHERE a.status IN ('unknown','reconciling') AND a.reconcile_after<=now()
+          AND EXISTS(SELECT 1 FROM submission_deliveries sd JOIN deliveries d ON d.id=sd.delivery_id
+            WHERE sd.submission_id=a.submission_id AND d.current_attempt_id=a.id)
         UNION ALL
         SELECT 'raw_provider_event',r.id,$2,jsonb_build_object('rawEventId',r.id),false,(r.processed_at IS NOT NULL)
         FROM raw_provider_events r WHERE (r.processed_at IS NULL OR EXISTS(SELECT 1 FROM inbound_messages i
@@ -60,13 +66,20 @@ export async function recoverWorkBatch(limit = 100) {
       );
       const latest = previous.rows[0];
       // Exhausted tasks remain visible until an operator retries them; never restart a poison task forever.
-      if (latest?.status === "failed" || latest?.recent) continue;
+      if (latest?.status === "failed") {
+        // Heal a crash after the failed outbox marker committed but before its
+        // public workflow diagnostic was recorded. The event key is idempotent.
+        if (work.event_type === "submission.requested") await recordWorkflowFailure(work.payload.submissionId, "The task exhausted infrastructure retries. Review the failed task before resuming.");
+        continue;
+      }
+      if (latest?.recent) continue;
       if (latest && !work.expired_submission) {
         const job = await queueForEvent(work.event_type).getJob(latest.id);
         const state = job ? await job.getState() : "unknown";
         if (["active", "waiting", "delayed", "prioritized", "waiting-children"].includes(state)) continue;
         if (state === "failed") {
           await client.query("UPDATE outbox_events SET status='failed' WHERE id=$1", [latest.id]);
+          if (work.event_type === "submission.requested") await recordWorkflowFailure(work.payload.submissionId, "The worker task exhausted its infrastructure retries. Review the failed task before resuming.");
           continue;
         }
       }

@@ -13,7 +13,7 @@ import styles from "./mail-views.module.css";
 type DeliveryDetail = EmailRecord & {
   updatedAt: string;
   retry: { allowed: boolean; reason: string | null; requiresUnknownAcknowledgement: boolean };
-  content: { html_body: string | null; text_body: string | null; reply_to: string | null; content_purged_at: string | null };
+  content: { html_body: string | null; text_body: string | null; reply_to: Array<{email: string; name?: string}>; to_recipients: Array<{email: string; name?: string}>; cc_recipients: Array<{email: string; name?: string}>; bcc_recipients: Array<{email: string; name?: string}>; attachment_snapshot: Array<Record<string, unknown>>; headers: Record<string,string>; in_reply_to: string | null; references_ids: string[]; content_purged_at: string | null };
   lifecycle: string;
   engagement: string;
   compliance: string;
@@ -29,7 +29,7 @@ const statusColors: Record<DeliveryStatus, string> = {
 const retryReasons: Record<string, string> = {
   content_expired: "The saved message content has expired.",
   suppressed: "This recipient is suppressed or has a compliance restriction.",
-  configuration_disabled: "The product, sender profile, or sending domain is disabled.",
+  configuration_disabled: "The product, sender authorization, or sending domain is unavailable.",
   status_not_retryable: "The current delivery status does not allow a manual retry.",
   not_found: "This delivery is no longer available.",
 };
@@ -75,9 +75,10 @@ export function DeliveryDetailView({ detail, back = "/emails" }: { detail: Deliv
         title="Delivery outcome is unknown"
         type="warning"
       />}
+      {detail.lastError && <Alert type="error" showIcon title={String(detail.lastError.code ?? "Delivery failed")} content={String(detail.lastError.message ?? "Inspect activity and submission attempts for diagnostics.")} />}
       <Card className={styles.card} bordered={false} title="Delivery overview" extra={<Tag color={statusColors[detail.status]} bordered={false}>{labelForStatus(detail.status)}</Tag>}>
         <Descriptions className={styles.descriptions} column={{ xs: 1, md: 2, xl: 3 }} layout="vertical" tableLayout="fixed" data={[
-          { label: "Recipient", value: detail.recipient },
+          { label: "Recipient", value: `${detail.recipient} (${detail.recipientRole ?? "to"})` },
           { label: "From", value: detail.from },
           { label: "Product / category", value: `${detail.product} / ${detail.category}` },
           { label: "Accepted at", value: <LocalTime value={detail.createdAt} /> },
@@ -101,6 +102,7 @@ export function DeliveryDetailView({ detail, back = "/emails" }: { detail: Deliv
                   <div className={styles.eventContent}>
                     <div className={styles.eventHeading}>
                       <Typography.Text bold>{labelForStatus(type)}</Typography.Text>
+                      {event.scope === "submission" && <Tag>Submission event</Tag>}
                       <Typography.Text type="secondary"><LocalTime value={timestamp(event.occurred_at)} /></Typography.Text>
                     </div>
                     <Collapse bordered={false}>
@@ -117,8 +119,12 @@ export function DeliveryDetailView({ detail, back = "/emails" }: { detail: Deliv
             {detail.content.content_purged_at ? <Alert showIcon type="info" content="Message content has expired under the retention policy. Identifiers and delivery history are retained." /> : <div className={styles.tabPanel}>
               <Descriptions className={styles.descriptions} column={{ xs: 1, md: 2 }} data={[
                 { label: "From", value: detail.from },
-                { label: "Reply-To", value: detail.content.reply_to ?? "Not set" },
+                ...([ ["To", detail.content.to_recipients], ["Cc", detail.content.cc_recipients], ["Bcc", detail.content.bcc_recipients], ["Reply-To", detail.content.reply_to] ] as const).map(([label, addresses]) => ({ label, value: addresses.map(address => address.name ? `${address.name} <${address.email}>` : address.email).join(", ") || "Not set" })),
+                { label: "Attachments", value: detail.content.attachment_snapshot.map(item => String(item.fileName ?? item.fileId)).join(", ") || "None" },
+                { label: "In-Reply-To", value: detail.content.in_reply_to ?? "Not set" },
+                { label: "References", value: detail.content.references_ids.join(" ") || "Not set" },
               ]} />
+              {Object.keys(detail.content.headers).length > 0 && <Collapse><Collapse.Item name="headers" header="Custom mail headers"><JsonDetails value={detail.content.headers} /></Collapse.Item></Collapse>}
               {detail.content.html_body || detail.content.text_body ? <Tabs type="capsule" defaultActiveTab={detail.content.html_body ? "html" : "text"}>
                 {detail.content.html_body && <Tabs.TabPane key="html" title="HTML preview">
                   <iframe className={styles.previewFrame} title="Accepted HTML content" sandbox="" srcDoc={detail.content.html_body} />
@@ -141,6 +147,7 @@ export function DeliveryDetailView({ detail, back = "/emails" }: { detail: Deliv
                   <div className={styles.tabPanel}>
                     {Boolean(attempt.error_message) && <Alert showIcon type="error" content={displayValue(attempt.error_message)} />}
                     <Descriptions className={styles.descriptions} layout="vertical" tableLayout="fixed" column={{ xs: 1, md: 2, xl: 3 }} data={[
+                      { label: "Submission ID", value: displayValue(attempt.submission_id) },
                       { label: "Provider", value: displayValue(attempt.provider_type) },
                       { label: "External message ID", value: displayValue(attempt.external_message_id) },
                       { label: "Outcome confirmed", value: attempt.outcome_determinate === true ? "Yes" : attempt.outcome_determinate === false ? "No" : "Not reported" },
