@@ -67,10 +67,23 @@ export async function mutate(body: AdminAction) {
 
 export function actionResultText(result: unknown) {
   const details = record(result);
+  if (Array.isArray(details.identities)) {
+    const failed = rows(details.identities).filter(identity => identity.status === "failed");
+    if (failed.length) {
+      const errors = [...new Set(failed.map(identity => value(identity, "error")).filter(Boolean))];
+      return `Domain saved, but ${failed.length} provider ${failed.length === 1 ? "identity failed" : "identities failed"}. ${errors.join("; ") || "Refresh the failed identities to retry."}`;
+    }
+    return "Domain saved. Provider identities are associated; refresh DNS for any pending verification.";
+  }
   if (details.queued === false) return `No new work queued: ${String(details.reason ?? "not eligible").replaceAll("_", " ")}.`;
   if (typeof details.count === "number") return `${details.count} records queued for retry.`;
   if (typeof details.id === "string") return `Saved ${details.id}.`;
   return "Action completed successfully.";
+}
+
+function actionResultFailed(result: unknown) {
+  const details = record(result);
+  return details.queued === false || rows(details.identities).some(identity => identity.status === "failed");
 }
 
 export function useAction() {
@@ -85,7 +98,7 @@ export function useAction() {
     setNoticeState(null);
     try {
       const result = await mutate(body);
-      setNoticeState({ kind: record(result).queued === false ? "error" : "success", text: actionResultText(result) });
+      setNoticeState({ kind: actionResultFailed(result) ? "error" : "success", text: actionResultText(result) });
       router.refresh();
       return result;
     } catch (error) {
@@ -211,7 +224,7 @@ export function ActionButton({
   async function run() {
     try {
       const result = await action.run(body);
-      if (record(result).queued === false) Message.warning(actionResultText(result));
+      if (actionResultFailed(result)) Message.warning(actionResultText(result));
       else Message.success(actionResultText(result));
     } catch (error) {
       Message.error(error instanceof Error ? error.message : "Action failed");

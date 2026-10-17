@@ -70,7 +70,7 @@ function Domains({ data }: { data: Data }) {
               <Field
                 field="accountIds"
                 label="Provider accounts"
-                hint="Resend and Amazon SES create the provider identity and show DNS records. For SendGrid, Mailgun, and Postmark, select only an account where this domain is already verified in its official dashboard. A Mailgun account can use only its configured sending domain."
+                hint="Resend reuses an existing domain or creates one if needed. Amazon SES creates the provider identity. Both show DNS records. For SendGrid, Mailgun, and Postmark, select only an account where this domain is already verified in its official dashboard. A Mailgun account can use only its configured sending domain."
               >
                 <Checkbox.Group
                   options={providers.map(provider => {

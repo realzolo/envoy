@@ -314,11 +314,11 @@ export async function createDomain(input: {
     }
     try {
       const created = await identity.createIdentity(domain, account.context);
-      await query("INSERT INTO provider_identities(id,sending_domain_id,provider_account_id,external_identity_id,status,dns_records,last_checked_at) VALUES ($1,$2,$3,$4,$5,$6,now())", [identityId, domainId, accountId, created.externalIdentityId, created.status, created.dnsRecords]);
+      await query("INSERT INTO provider_identities(id,sending_domain_id,provider_account_id,external_identity_id,status,dns_records,last_checked_at) VALUES ($1,$2,$3,$4,$5,$6,now())", [identityId, domainId, accountId, created.externalIdentityId, created.status, JSON.stringify(created.dnsRecords)]);
       results.push({ accountId, status: created.status })
-    } catch {
+    } catch (error) {
       await query("INSERT INTO provider_identities(id,sending_domain_id,provider_account_id,status,dns_records,last_checked_at) VALUES ($1,$2,$3,'failed','[]',now())", [identityId, domainId, accountId]);
-      results.push({ accountId, status: "failed" })
+      results.push({ accountId, status: "failed", error: error instanceof Error ? error.message : "Identity setup failed" })
     }
   }
   await audit(actor, "sending_domain.create", "sending_domain", domainId, {
@@ -346,12 +346,12 @@ export async function refreshIdentity(id: string, actor: string) {
   if (!account.module.identity) throw new Error("This domain is verified in the provider dashboard and cannot be refreshed by Envoy");
   if (!row.external_identity_id) {
     const result = await account.module.identity.createIdentity(row.domain, account.context);
-    await query("UPDATE provider_identities SET external_identity_id=$2,status=$3,dns_records=$4,last_checked_at=now(),updated_at=now() WHERE id=$1", [id, result.externalIdentityId, result.status, result.dnsRecords]);
+    await query("UPDATE provider_identities SET external_identity_id=$2,status=$3,dns_records=$4,last_checked_at=now(),updated_at=now() WHERE id=$1", [id, result.externalIdentityId, result.status, JSON.stringify(result.dnsRecords)]);
     await audit(actor, "provider_identity.refresh", "provider_identity", id, { status: result.status });
     return result
   }
   const result = await account.module.identity.checkIdentity(row.external_identity_id, account.context);
-  await query("UPDATE provider_identities SET status=$2,dns_records=$3,last_checked_at=now(),updated_at=now() WHERE id=$1", [id, result.status, result.dnsRecords]);
+  await query("UPDATE provider_identities SET status=$2,dns_records=$3,last_checked_at=now(),updated_at=now() WHERE id=$1", [id, result.status, JSON.stringify(result.dnsRecords)]);
   await audit(actor, "provider_identity.refresh", "provider_identity", id, { status: result.status });
   return result
 }

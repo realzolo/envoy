@@ -38,7 +38,7 @@ export function AddDomainProvider({ domain, providers, onClose }: { domain: Row;
     try { await action.run({ action: "domain.create", domain: domain.domain, accountIds: selected }); onClose(); } catch { /* Keep the selection for correction. */ }
   }}>
     <Space direction="vertical" size="large" className={styles.stack}>
-      <Typography.Text>Resend and SES identities are provisioned automatically. For other providers, confirm this domain is verified in the provider dashboard before associating it.</Typography.Text>
+      <Typography.Text>Resend reuses an existing domain or creates one if needed. SES identities are provisioned automatically. For other providers, confirm this domain is verified in the provider dashboard before associating it.</Typography.Text>
       {available.length ? <Checkbox.Group value={selected} onChange={next => setSelected(next.map(String))} options={available.map(row => ({ value: value(row, "id"), label: `${value(row, "name")} (${value(row, "type")})` }))} /> : <Typography.Text type="secondary">Every eligible provider is already associated.</Typography.Text>}
       <Notice notice={action.notice} />
     </Space>

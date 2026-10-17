@@ -105,7 +105,23 @@ export const resendModule: ProviderModule = {
   },
   identity: {
     async createIdentity(domain, context) {
-      const result = await client(context.secret).domains.create({ name: domain, region: "us-east-1" });
+      const resend = client(context.secret);
+      let after: string | undefined;
+      for (;;) {
+        const listed = await resend.domains.list({ limit: 100, ...(after ? { after } : {}) });
+        if (listed.error || !listed.data) throw new Error(listed.error?.message ?? "Domain lookup failed");
+        const existing = listed.data.data.find(item => item.name.toLowerCase() === domain.toLowerCase());
+        if (existing) {
+          const result = await resend.domains.get(existing.id);
+          if (result.error || !result.data) throw new Error(result.error?.message ?? "Identity lookup failed");
+          return { externalIdentityId: result.data.id, status: resendIdentityStatus(result.data.status), dnsRecords: result.data.records ?? [] };
+        }
+        if (!listed.data.has_more) break;
+        const next = listed.data.data.at(-1)?.id;
+        if (!next || next === after) throw new Error("Domain lookup returned an invalid pagination cursor");
+        after = next;
+      }
+      const result = await resend.domains.create({ name: domain, region: "us-east-1" });
       if (result.error || !result.data) throw new Error(result.error?.message ?? "Identity creation failed");
       return { externalIdentityId: result.data.id, status: resendIdentityStatus(result.data.status), dnsRecords: result.data.records ?? [] };
     },

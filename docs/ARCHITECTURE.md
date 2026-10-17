@@ -65,8 +65,10 @@ Create a provider account in the operations console, enter its public configurat
 connectivity. Credentials are never returned by the API. Rotation creates a new credential version, disables its routing
 eligibility until a successful fresh connection test, and revokes the prior version in one transaction.
 
-Create a sending domain in **Sending Domains** and select the provider accounts that should carry it. For Resend and
-Amazon SES, Envoy creates the provider identity and displays its DNS records. For SendGrid, Mailgun, and Postmark,
+Create a sending domain in **Sending Domains** and select the provider accounts that should carry it. For Resend,
+Envoy searches the account's domains with the official SDK, retrieves an existing domain's current status and DNS
+records, and creates a domain only when no match exists. **Refresh DNS** also recovers a failed association this way.
+For Amazon SES, Envoy creates the provider identity and displays its DNS records. For SendGrid, Mailgun, and Postmark,
 operators first verify the domain in the provider dashboard, then explicitly associate that existing verification with
 the account. Mailgun can be associated only with the exact sending domain configured on its account. Routing targets
 become eligible only after the relevant identity is verified.
