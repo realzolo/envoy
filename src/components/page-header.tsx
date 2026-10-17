@@ -1,15 +1,10 @@
 "use client";
 
-import { PageHeader as ArcoPageHeader, Space, Typography } from "@arco-design/web-react";
+import { Button, Space, Typography } from "@arco-design/web-react";
+import { IconArrowLeft } from "@arco-design/web-react/icon";
 import type { ReactNode } from "react";
 
-export function PageHeader({
-  title,
-  description,
-  actions,
-  backIcon = false,
-  onBack,
-}: {
+export function PageHeader({title, description, actions, backIcon = false, onBack}: {
   title: ReactNode;
   description?: ReactNode;
   actions?: ReactNode;
@@ -17,17 +12,15 @@ export function PageHeader({
   onBack?: () => void;
 }) {
   return (
-    <ArcoPageHeader
-      className="page-header arco-page-header-wrap"
-      backIcon={backIcon}
-      extra={actions ? <Space size="small" wrap>{actions}</Space> : undefined}
-      onBack={onBack}
-      subTitle={description}
-      title={(
-        <Typography.Title className="page-header__title" heading={4}>
-          {title}
-        </Typography.Title>
-      )}
-    />
+    <header className="page-header">
+      <div className="page-header__main">
+        {backIcon && <Button aria-label="Go back" icon={<IconArrowLeft />} onClick={onBack} type="text" />}
+        <div className="page-header__copy">
+          <Typography.Title className="page-header__title" heading={4}>{title}</Typography.Title>
+          {description && <Typography.Paragraph className="page-header__description">{description}</Typography.Paragraph>}
+        </div>
+      </div>
+      {actions && <Space className="page-header__actions" size="small" wrap>{actions}</Space>}
+    </header>
   );
 }

@@ -1,400 +1,23 @@
 "use client";
 
-import {
-  Alert,
-  Button,
-  Card,
-  Checkbox,
-  Collapse,
-  Empty,
-  Form,
-  Grid,
-  Input,
-  List,
-  Message,
-  Modal,
-  Select,
-  Space,
-  Table,
-  Tag,
-  Tooltip,
-  Typography,
-  type PaginationProps,
-  type TableColumnProps,
-} from "@arco-design/web-react";
-import {
-  IconCheck,
-  IconDelete,
-  IconDown,
-  IconExclamationCircle,
-  IconRefresh,
-  IconRotateLeft,
-  IconSend,
-  IconUp,
-} from "@arco-design/web-react/icon";
-import { useRouter } from "next/navigation";
-import { type ReactNode, useState } from "react";
+import styles from "@/components/admin-views.module.css";
+
+import { Button, Card, Checkbox, Collapse, Form, Grid, Input, List, Select, Space, Typography } from "@arco-design/web-react";
+import { IconDelete, IconExclamationCircle, IconRefresh, IconRotateLeft } from "@arco-design/web-react/icon";
+
+import { useState } from "react";
 import { ProviderAccounts } from "@/components/provider-accounts";
 
-type Row = Record<string, unknown>;
-type Data = Record<string, unknown>;
-type FormValues = Record<string, unknown>;
-type ActionNotice = { kind: "success" | "error"; text: string } | null;
-
-const requiredRule = [{ required: true }];
-const rows = (input: unknown) => Array.isArray(input) ? input as Row[] : [];
-const record = (input: unknown) => input && typeof input === "object" && !Array.isArray(input) ? input as Row : {};
-const value = (row: Row, key: string) => String(row[key] ?? "");
-const formValue = (values: FormValues, key: string) => String(values[key] ?? "");
-const formValues = (values: FormValues, key: string) => Array.isArray(values[key]) ? values[key].map(String) : [];
-const optionalValue = (values: FormValues, key: string) => {
-  const result = formValue(values, key).trim();
-  return result || undefined;
-};
-const date = (input: unknown) => input ? new Date(String(input)).toLocaleString("en-GB", { timeZone: "UTC" }) : "Never";
-
-function statusColor(status: string) {
-  const normalized = status.toLowerCase();
-  if (["active", "verified", "processed", "delivered", "ready", "completed"].some(item => normalized.includes(item))) return "green";
-  if (["disabled", "failed", "error", "rejected", "revoked", "suspended"].some(item => normalized.includes(item))) return "red";
-  if (["pending", "unknown", "degraded", "needs"].some(item => normalized.includes(item))) return "orange";
-  return "arcoblue";
-}
-
-function StatusTag({ children }: { children: ReactNode }) {
-  const status = String(children ?? "Unknown");
-  return <Tag color={statusColor(status)} size="small">{status || "Unknown"}</Tag>;
-}
-
-async function mutate(body: Row) {
-  const response = await fetch("/api/admin/actions", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  const payload = await response.json() as { error?: string; result?: unknown };
-  if (!response.ok) throw new Error(payload.error ?? "Action failed");
-  return payload.result;
-}
-
-function useAction() {
-  const router = useRouter();
-  const [pending, setPending] = useState(false);
-  const [notice, setNoticeState] = useState<ActionNotice>(null);
-
-  async function run(body: Row) {
-    setPending(true);
-    setNoticeState(null);
-    try {
-      const result = await mutate(body);
-      setNoticeState({ kind: "success", text: "Action completed successfully." });
-      router.refresh();
-      return result;
-    } catch (error) {
-      setNoticeState({
-        kind: "error",
-        text: error instanceof Error ? error.message : "Action failed",
-      });
-      throw error;
-    } finally {
-      setPending(false);
-    }
-  }
-
-  return {
-    run,
-    pending,
-    notice,
-    setNotice: (text: string) => setNoticeState({ kind: "success", text }),
-  };
-}
-
-function Field({
-  label,
-  field,
-  required = false,
-  hint,
-  initialValue,
-  rules,
-  children,
-}: {
-  label: ReactNode;
-  field?: string;
-  required?: boolean;
-  hint?: ReactNode;
-  initialValue?: string | number | string[];
-  rules?: { required?: boolean; type?: string }[];
-  children: ReactNode;
-}) {
-  return (
-    <Form.Item
-      label={label}
-      field={field}
-      required={required}
-      initialValue={initialValue}
-      rules={rules}
-      extra={hint}
-    >
-      {children}
-    </Form.Item>
-  );
-}
-
-function Panel({ title, description, children, defaultExpanded = true }: {
-  title: string;
-  description: string;
-  children: ReactNode;
-  defaultExpanded?: boolean;
-}) {
-  const [expanded, setExpanded] = useState(defaultExpanded);
-
-  return (
-    <Card
-      title={title}
-      extra={(
-        <Tooltip content={expanded ? "Hide form" : "Show form"}>
-          <Button
-            aria-label={expanded ? `Hide ${title} form` : `Show ${title} form`}
-            icon={expanded ? <IconUp /> : <IconDown />}
-            onClick={() => setExpanded((current) => !current)}
-            shape="circle"
-            type="text"
-          />
-        </Tooltip>
-      )}
-    >
-      <Space direction="vertical" size={expanded ? "large" : "small"} className="admin-panel">
-        <Typography.Text type="secondary">{description}</Typography.Text>
-        {expanded && <div className="admin-panel__content">{children}</div>}
-      </Space>
-    </Card>
-  );
-}
-
-function Submit({ pending, labelText, disabled = false }: { pending: boolean; labelText: string; disabled?: boolean }) {
-  return <Button htmlType="submit" type="primary" icon={<IconCheck />} loading={pending} disabled={disabled}>{labelText}</Button>;
-}
-
-function Notice({ notice }: { notice: ActionNotice }) {
-  if (!notice) return null;
-  return (
-    <Alert
-      type={notice.kind}
-      title={notice.kind === "success" ? "Action completed" : "Action failed"}
-      content={notice.text}
-      showIcon
-    />
-  );
-}
-
-function ActionButton({
-  body,
-  children,
-  danger = false,
-  confirmText,
-  confirmTitle,
-  confirmOkText,
-}: {
-  body: Row;
-  children: ReactNode;
-  danger?: boolean;
-  confirmText?: string;
-  confirmTitle?: string;
-  confirmOkText?: string;
-}) {
-  const action = useAction();
-
-  async function run() {
-    try {
-      await action.run(body);
-      Message.success("Action completed successfully.");
-    } catch (error) {
-      Message.error(error instanceof Error ? error.message : "Action failed");
-      throw error;
-    }
-  }
-
-  function request() {
-    if (!confirmText) {
-      void run().catch(() => undefined);
-      return;
-    }
-    Modal.confirm({
-      title: confirmTitle ?? (danger ? "Confirm destructive action" : "Confirm action"),
-      content: confirmText,
-      okText: confirmOkText ?? (danger ? "Confirm" : "Continue"),
-      cancelText: "Cancel",
-      okButtonProps: { status: danger ? "danger" : "default" },
-      onOk: run,
-    });
-  }
-
-  return (
-    <Button
-      type={danger ? "outline" : "secondary"}
-      status={danger ? "danger" : "default"}
-      size="small"
-      loading={action.pending}
-      onClick={event => {
-        event.stopPropagation();
-        request();
-      }}
-    >
-      {children}
-    </Button>
-  );
-}
-
-function EmptyState({ text }: { text: string }) {
-  return <Empty description={text} />;
-}
-
-function Prerequisite({ title, description, href, action }: {
-  title: string;
-  description: string;
-  href: string;
-  action: string;
-}) {
-  return (
-    <Card>
-      <Empty
-        description={(
-          <Space direction="vertical" align="center">
-            <Typography.Text bold>{title}</Typography.Text>
-            <Typography.Text type="secondary">{description}</Typography.Text>
-            <Button href={href} type="primary">{action}</Button>
-          </Space>
-        )}
-      />
-    </Card>
-  );
-}
-
-const dataTablePagination: PaginationProps = {
-  defaultPageSize: 10,
-  hideOnSinglePage: true,
-  showTotal: true,
-};
-
-function DataTable({
-  data,
-  columns,
-  minWidth,
-  emptyText = "No records found.",
-  bordered = false,
-  pagination = dataTablePagination,
-}: {
-  data: Row[];
-  columns: TableColumnProps<Row>[];
-  minWidth?: string;
-  emptyText?: string;
-  bordered?: boolean;
-  pagination?: PaginationProps | false;
-}) {
-  return (
-    <Table<Row>
-      border={bordered}
-      data={data}
-      columns={columns}
-      rowKey={row => value(row, "id") || JSON.stringify(row)}
-      pagination={pagination}
-      scroll={minWidth ? { x: minWidth } : undefined}
-      noDataElement={<EmptyState text={emptyText} />}
-    />
-  );
-}
-
-function TableCard({ title, children }: { title: ReactNode; children: ReactNode }) {
-  return (
-    <Card title={title}>
-      {children}
-    </Card>
-  );
-}
-
-function CopyableValue({ text, label }: { text: string; label: string }) {
-  if (!text) return <Typography.Text type="secondary">Not reported</Typography.Text>;
-  return (
-    <Typography.Text
-      code
-      copyable={{ text, tooltips: [`Copy ${label}`, `Copied ${label}`] }}
-    >
-      {text}
-    </Typography.Text>
-  );
-}
-
-function DnsRecords({ records }: { records: unknown }) {
-  const entries = rows(records).map(item => {
-    const dns = record(item);
-    return {
-      id: `${value(dns, "type")}:${value(dns, "name")}:${value(dns, "value")}`,
-      type: value(dns, "type"),
-      name: value(dns, "name"),
-      dnsValue: value(dns, "value"),
-      status: value(dns, "status"),
-    };
-  }).filter(item => item.type || item.name || item.dnsValue);
-  if (!entries.length) return null;
-  return (
-    <DataTable
-      bordered
-      data={entries}
-      minWidth="620px"
-      columns={[
-        { title: "Type", render: (_, entry) => <Typography.Text>{value(entry, "type") || "DNS"}</Typography.Text> },
-        { title: "Name", render: (_, entry) => <CopyableValue text={value(entry, "name")} label="DNS name" /> },
-        { title: "Value", render: (_, entry) => <CopyableValue text={value(entry, "dnsValue")} label="DNS value" /> },
-        { title: "Status", render: (_, entry) => <StatusTag>{value(entry, "status") || "Not reported"}</StatusTag> },
-      ]}
-    />
-  );
-}
-
-function routingReason(reason: string) {
-  const labels: Record<string, string> = {
-    circuit_open: "Temporarily paused after recent failures",
-    account_unavailable: "Provider account is unavailable",
-    account_unhealthy: "Provider connection is unhealthy",
-    identity_unverified: "Provider identity is not verified",
-    domain_disabled: "Sending domain is disabled",
-    monthly_quota_exhausted: "Monthly provider limit reached",
-    daily_quota_exhausted: "Daily provider limit reached",
-  };
-  return labels[reason] ?? reason.replaceAll("_", " ");
-}
-
-function RoutingSimulation({ result }: { result: Row | null }) {
-  if (!result) return null;
-  const chosen = record(result.chosen);
-  const rejected = rows(result.candidates).filter(candidate => candidate.eligible !== true);
-  const selectedAccount = value(chosen, "account") || value(chosen, "provider_name");
-  const selectedDomain = value(chosen, "domain");
-  return (
-    <Alert
-      type={selectedAccount ? "success" : "warning"}
-      title={selectedAccount ? "Routing target selected" : "No eligible routing target"}
-      content={(
-        <Space direction="vertical" size="small">
-          <Typography.Text>
-            {selectedAccount ? <>Selected <Typography.Text bold>{selectedAccount}</Typography.Text>{selectedDomain ? <> for <Typography.Text code>{selectedDomain}</Typography.Text>.</> : "."}</> : "No eligible routing target was found."}
-          </Typography.Text>
-          {rejected.map(candidate => {
-            const reasons = rows(record(candidate).reasons).map(String).map(routingReason);
-            return <Typography.Text type="secondary" key={value(candidate, "target_id")}>{value(candidate, "account") || "Provider target"}{reasons.length ? `: ${reasons.join(", ")}` : ": Not eligible"}</Typography.Text>;
-          })}
-        </Space>
-      )}
-      showIcon
-    />
-  );
-}
-
+import { ActionForm, type Row, type Data, type FormValues, requiredRule, rows, record, value, formValue, formValues, optionalValue, date, StatusTag, useAction, Field, Panel, Submit, Notice, ActionButton, EmptyState, Prerequisite, DataTable, TableCard, DnsRecords, RoutingSimulation, Secret, CopyableValue, JsonPreview } from "@/components/admin-console-shared";
+import { EditSender, EditRouting, AddDomainProvider } from "@/components/admin-config-editors";
+import { Callbacks } from "@/components/admin-callbacks";
+import { Inbound } from "@/components/admin-inbound";
 function Providers({ data }: { data: Data }) {
   return <ProviderAccounts data={data} />;
 }
 
 function Domains({ data }: { data: Data }) {
+  const [addingProvider, setAddingProvider] = useState<Row | null>(null);
   const action = useAction();
   const [draftDomain, setDraftDomain] = useState("");
   const domains = rows(data.domains);
@@ -424,13 +47,13 @@ function Domains({ data }: { data: Data }) {
   }
 
   return (
-    <Space direction="vertical" size="large" className="admin-stack">
+    <Space direction="vertical" size="large" className={styles.stack}>
       <Panel
         title="Add sending domain"
         description="Provision or associate identities on selected providers"
         defaultExpanded={domains.length === 0}
       >
-        <Form
+        <ActionForm fieldErrors={action.fields}
           layout="vertical"
           onSubmit={values => void submit(values as FormValues)}
           onValuesChange={changed => {
@@ -467,14 +90,15 @@ function Domains({ data }: { data: Data }) {
               <Space><Submit pending={action.pending} labelText="Create domain and identities" /></Space>
             </Grid.Col>
           </Grid.Row>
-        </Form>
+        </ActionForm>
         <Notice notice={action.notice} />
       </Panel>
       {domains.map(domain => (
         <Card
+          className={styles.card}
           key={value(domain, "id")}
           title={<Typography.Text code>{value(domain, "domain")}</Typography.Text>}
-          extra={<ActionButton body={{ action: "domain.toggle", id: domain.id, enabled: domain.status !== "active" }}>{domain.status === "active" ? "Disable" : "Enable"}</ActionButton>}
+          extra={<Space><Button size="small" onClick={() => setAddingProvider(domain)}>Add provider</Button><ActionButton body={{ action: "domain.toggle", id: domain.id, enabled: domain.status !== "active" }}>{domain.status === "active" ? "Disable" : "Enable"}</ActionButton></Space>}
         >
           <Collapse bordered>
             {rows(domain.identities).map(identity => (
@@ -494,11 +118,13 @@ function Domains({ data }: { data: Data }) {
           </Collapse>
         </Card>
       ))}
+      {addingProvider && <AddDomainProvider key={value(addingProvider, "id")} domain={addingProvider} providers={providers} onClose={() => setAddingProvider(null)} />}
     </Space>
   );
 }
 
 function Senders({ data }: { data: Data }) {
+  const [editingSender, setEditingSender] = useState<Row | null>(null);
   const action = useAction();
   const products = rows(data.products).filter(product => product.status === "active");
   const domains = rows(data.domains).filter(domain => domain.status === "active" && rows(domain.identities).some(identity => identity.status === "verified" && identity.accountStatus === "active"));
@@ -526,14 +152,14 @@ function Senders({ data }: { data: Data }) {
   }
 
   return (
-    <Space direction="vertical" size="large" className="admin-stack">
+    <Space direction="vertical" size="large" className={styles.stack}>
       <Panel
         title="Create sender profile"
         description="Visible From identity resolved before queuing"
         defaultExpanded={senders.length === 0}
       >
-        <Form layout="vertical" onSubmit={values => void submit(values as FormValues)}>
-          <Grid.Row align="end" gutter={[16, 0]}>
+        <ActionForm fieldErrors={action.fields} layout="vertical" onSubmit={values => void submit(values as FormValues)}>
+          <Grid.Row gutter={[16, 0]}>
             <Grid.Col md={8} xs={24}>
               <Field field="productId" label="Product" initialValue={value(products[0], "id")} required rules={requiredRule}>
                 <Select options={products.map(product => ({ value: value(product, "id"), label: value(product, "name") }))} />
@@ -551,7 +177,7 @@ function Senders({ data }: { data: Data }) {
             <Grid.Col md={16} xs={24}><Field field="replyTo" label="Reply-To" rules={[{ type: "email" }]}><Input type="email" /></Field></Grid.Col>
             <Grid.Col md={8} xs={24}><Space><Submit pending={action.pending} labelText="Create profile" /></Space></Grid.Col>
           </Grid.Row>
-        </Form>
+        </ActionForm>
         <Notice notice={action.notice} />
       </Panel>
       <TableCard title="Sender profiles">
@@ -564,15 +190,17 @@ function Senders({ data }: { data: Data }) {
             { title: "From", render: (_, sender) => <Typography.Text code>{value(sender, "from_name")} &lt;{value(sender, "from_local_part")}@{value(sender, "domain")}&gt;</Typography.Text> },
             { title: "Category", render: (_, sender) => value(sender, "message_category") },
             { title: "Status", render: (_, sender) => <StatusTag>{value(sender, "status")}</StatusTag> },
-            { title: "Action", render: (_, sender) => <ActionButton body={{ action: "sender.toggle", id: sender.id, enabled: sender.status !== "active" }}>{sender.status === "active" ? "Disable" : "Enable"}</ActionButton> },
+            { title: "Action", render: (_, sender) => <Space><Button size="small" onClick={() => setEditingSender(sender)}>Edit</Button><ActionButton body={{ action: "sender.toggle", id: sender.id, enabled: sender.status !== "active" }}>{sender.status === "active" ? "Disable" : "Enable"}</ActionButton></Space> },
           ]}
         />
       </TableCard>
+      {editingSender && <EditSender key={value(editingSender, "id")} sender={editingSender} data={data} onClose={() => setEditingSender(null)} />}
     </Space>
   );
 }
 
 function Routing({ data }: { data: Data }) {
+  const [editingPolicy, setEditingPolicy] = useState<Row | null>(null);
   const create = useAction();
   const simulate = useAction();
   const [simulationResult, setSimulationResult] = useState<Row | null>(null);
@@ -634,13 +262,13 @@ function Routing({ data }: { data: Data }) {
   const serviceOptions = [{ value: "", label: "Any" }, ...rows(data.services).map(service => ({ value: value(service, "id"), label: `${value(service, "product")} / ${value(service, "name")}` }))];
 
   return (
-    <Space direction="vertical" size="large" className="admin-stack">
+    <Space direction="vertical" size="large" className={styles.stack}>
       <Panel
         title="Create routing policy"
         description="Match a verified identity to a sending domain"
         defaultExpanded={policies.length === 0}
       >
-        <Form layout="vertical" onSubmit={values => void submit(values as FormValues)} initialValues={{ productId: "", serviceId: "" }}>
+        <ActionForm fieldErrors={create.fields} layout="vertical" onSubmit={values => void submit(values as FormValues)} initialValues={{ productId: "", serviceId: "" }}>
           <Grid.Row gutter={[16, 0]}>
             <Grid.Col md={8} xs={24}><Field field="name" label="Name" required rules={requiredRule}><Input /></Field></Grid.Col>
             <Grid.Col md={8} xs={24}><Field field="productId" label="Product"><Select options={productOptions} /></Field></Grid.Col>
@@ -650,7 +278,7 @@ function Routing({ data }: { data: Data }) {
             <Grid.Col md={8} xs={24}><Field label="Provider identity" required><Select value={selectedIdentityId} options={eligibleIdentities.map(identity => ({ value: value(identity, "id"), label: `${value(identity, "account")} / ${value(identity, "status")}` }))} onChange={next => setIdentityId(String(next))} /></Field></Grid.Col>
             <Grid.Col xs={24}><Space><Submit pending={create.pending} labelText="Create policy" /></Space></Grid.Col>
           </Grid.Row>
-        </Form>
+        </ActionForm>
         <Notice notice={create.notice} />
       </Panel>
       <Panel
@@ -658,7 +286,7 @@ function Routing({ data }: { data: Data }) {
         description="Read-only deterministic eligibility inspection"
         defaultExpanded={false}
       >
-        <Form layout="vertical" onSubmit={values => void simulateSubmit(values as FormValues)} initialValues={{ productId: "", serviceId: "" }}>
+        <ActionForm fieldErrors={simulate.fields} layout="vertical" onSubmit={values => void simulateSubmit(values as FormValues)} initialValues={{ productId: "", serviceId: "" }}>
           <Grid.Row gutter={[16, 0]}>
             <Grid.Col md={8} xs={24}><Field label="Sending domain" required><Select value={selectedDomainId} options={eligibleDomains.map(domain => ({ value: value(domain, "id"), label: value(domain, "domain") }))} onChange={changeDomain} /></Field></Grid.Col>
             <Grid.Col md={8} xs={24}><Field field="productId" label="Product"><Select options={productOptions} /></Field></Grid.Col>
@@ -666,15 +294,16 @@ function Routing({ data }: { data: Data }) {
             <Grid.Col md={8} xs={24}><Field field="category" label="Category"><Input /></Field></Grid.Col>
             <Grid.Col xs={24}><Space><Submit pending={simulate.pending} labelText="Simulate" /></Space></Grid.Col>
           </Grid.Row>
-        </Form>
+        </ActionForm>
         <RoutingSimulation result={simulationResult} />
         <Notice notice={simulate.notice?.kind === "error" ? simulate.notice : null} />
       </Panel>
       {policies.map(policy => (
         <Card
+          className={styles.card}
           key={value(policy, "id")}
           title={value(policy, "name")}
-          extra={<ActionButton body={{ action: "routing.toggle", id: policy.id, enabled: policy.status !== "active" }}>{policy.status === "active" ? "Disable" : "Enable"}</ActionButton>}
+          extra={<Space><Button size="small" onClick={() => setEditingPolicy(policy)}>Edit targets</Button><ActionButton body={{ action: "routing.toggle", id: policy.id, enabled: policy.status !== "active" }}>{policy.status === "active" ? "Disable" : "Enable"}</ActionButton></Space>}
         >
           <Space direction="vertical" size="medium">
             <Typography.Text type="secondary">{value(policy, "sending_domain")} / {value(policy, "product") || "Any product"} / {value(policy, "service") || "Any service"} / {value(policy, "message_category") || "Any category"}</Typography.Text>
@@ -694,22 +323,8 @@ function Routing({ data }: { data: Data }) {
           </Space>
         </Card>
       ))}
+      {editingPolicy && <EditRouting key={value(editingPolicy, "id")} policy={editingPolicy} data={data} onClose={() => setEditingPolicy(null)} />}
     </Space>
-  );
-}
-
-function Secret({ value: secret, label = "Copy this value now. It cannot be shown again." }: { value: string; label?: string }) {
-  return (
-    <Alert
-      type="warning"
-      title={label}
-      content={(
-        <Typography.Text code copyable={{ text: secret, tooltips: ["Copy secret", "Copied"] }}>
-          {secret}
-        </Typography.Text>
-      )}
-      showIcon
-    />
   );
 }
 
@@ -753,18 +368,18 @@ function Credentials({ data }: { data: Data }) {
   }
 
   return (
-    <Space direction="vertical" size="large" className="admin-stack">
+    <Space direction="vertical" size="large" className={styles.stack}>
       <Panel
         title="Create product"
         description="A product owns its services, senders, and delivery rules."
         defaultExpanded={products.length === 0}
       >
-        <Form form={productForm} layout="vertical" onSubmit={values => void createProduct(values as FormValues)}>
+        <ActionForm fieldErrors={productAction.fields} form={productForm} layout="vertical" onSubmit={values => void createProduct(values as FormValues)}>
           <Grid.Row gutter={[16, 0]}>
             <Grid.Col xs={24}><Field field="name" label="Name" required rules={requiredRule}><Input /></Field></Grid.Col>
             <Grid.Col xs={24}><Space><Submit pending={productAction.pending} labelText="Create product" /></Space></Grid.Col>
           </Grid.Row>
-        </Form>
+        </ActionForm>
         <Notice notice={productAction.notice} />
       </Panel>
       {products.length ? (
@@ -787,13 +402,13 @@ function Credentials({ data }: { data: Data }) {
             description="The plaintext key is shown once"
             defaultExpanded={credentials.length === 0}
           >
-            <Form layout="vertical" onSubmit={values => void submit(values as FormValues)}>
+            <ActionForm fieldErrors={action.fields} layout="vertical" onSubmit={values => void submit(values as FormValues)}>
               <Grid.Row gutter={[16, 0]}>
                 <Grid.Col md={12} xs={24}><Field field="productId" label="Product" initialValue={value(activeProducts[0], "id")} required rules={requiredRule}><Select options={activeProducts.map(product => ({ value: value(product, "id"), label: value(product, "name") }))} /></Field></Grid.Col>
                 <Grid.Col md={12} xs={24}><Field field="serviceName" label="Service name" required rules={requiredRule}><Input /></Field></Grid.Col>
                 <Grid.Col xs={24}><Space><Submit pending={action.pending} labelText="Issue credential" /></Space></Grid.Col>
               </Grid.Row>
-            </Form>
+            </ActionForm>
             {key && <Secret value={key} />}
             <Notice notice={action.notice} />
           </Panel>
@@ -832,126 +447,9 @@ function Credentials({ data }: { data: Data }) {
   );
 }
 
-function RotateCallback({ id }: { id: string }) {
-  const action = useAction();
-  const [secret, setSecret] = useState("");
-  return (
-    <Collapse bordered={false}>
-      <Collapse.Item name="rotate" header="Rotate secret">
-        <Space direction="vertical" size="small">
-          <Typography.Text type="secondary">Rotating invalidates the previous signing secret immediately.</Typography.Text>
-          <Button
-            size="small"
-            icon={<IconRotateLeft />}
-            loading={action.pending}
-            onClick={async () => {
-              try {
-                const result = await action.run({ action: "callback.rotate_secret", id }) as { secret?: string };
-                setSecret(result.secret ?? "");
-                action.setNotice("A new signing secret was generated.");
-              } catch {
-                // Inline notice owns failures from this request.
-              }
-            }}
-          >
-            Rotate secret
-          </Button>
-          {secret && <Secret value={secret} />}
-          <Notice notice={action.notice} />
-        </Space>
-      </Collapse.Item>
-    </Collapse>
-  );
-}
-
-function Callbacks({ data }: { data: Data }) {
-  const action = useAction();
-  const services = rows(data.services).filter(service => service.product_status === "active");
-  const callbacks = rows(data.callbacks);
-  const [events, setEvents] = useState(["email.delivered", "email.bounced", "email.failed"]);
-  const [secret, setSecret] = useState("");
-  const eventOptions = [
-    ["email.accepted", "Accepted"],
-    ["email.delivered", "Delivered"],
-    ["email.bounced", "Bounced"],
-    ["email.failed", "Failed"],
-    ["email.suppressed", "Suppressed"],
-    ["inbound.received", "Inbound received"],
-  ] as const;
-
-  async function submit(values: FormValues) {
-    try {
-      const result = await action.run({ action: "callback.create", serviceId: formValue(values, "serviceId"), name: formValue(values, "name"), url: formValue(values, "url"), events }) as { secret?: string };
-      setSecret(result.secret ?? "");
-      action.setNotice("Callback endpoint created. Copy the generated signing secret below.");
-    } catch {
-      // Inline notice owns failures from this request.
-    }
-  }
-
-  if (!services.length) {
-    return <Prerequisite title="Create an active service first" description="Callbacks are owned by a service so recipients can identify the product that emitted each event." href="/api-keys" action="Create a service credential" />;
-  }
-
-  return (
-    <Space direction="vertical" size="large" className="admin-stack">
-      <Panel
-        title="Add callback endpoint"
-        description="Canonical events with HMAC signatures"
-        defaultExpanded={callbacks.length === 0}
-      >
-        <Form layout="vertical" onSubmit={values => void submit(values as FormValues)}>
-          <Grid.Row gutter={[16, 0]}>
-            <Grid.Col md={12} xs={24}><Field field="serviceId" label="Service" initialValue={value(services[0], "id")} required rules={requiredRule}><Select options={services.map(service => ({ value: value(service, "id"), label: `${value(service, "product")} / ${value(service, "name")}` }))} /></Field></Grid.Col>
-            <Grid.Col md={12} xs={24}><Field field="name" label="Name" required rules={requiredRule}><Input /></Field></Grid.Col>
-            <Grid.Col md={12} xs={24}><Field field="url" label="URL" required rules={requiredRule}><Input type="url" placeholder="https://api.example.com/envoy/events" /></Field></Grid.Col>
-            <Grid.Col md={12} xs={24}><Field label="Events" required><Checkbox.Group value={events} options={eventOptions.map(([event, title]) => ({ value: event, label: title }))} onChange={next => setEvents(next.map(String))} /></Field></Grid.Col>
-            <Grid.Col xs={24}><Space><Submit pending={action.pending} disabled={!events.length} labelText="Add endpoint" /></Space></Grid.Col>
-          </Grid.Row>
-        </Form>
-        <Notice notice={action.notice} />
-        {secret && <Secret value={secret} label="Generated signing secret. Store it in the callback consumer now." />}
-      </Panel>
-      <Space wrap>
-        <ActionButton
-          body={{ action: "callback.replay_dlq" }}
-          confirmOkText="Replay"
-          confirmText="Replay every dead letter belonging to an active callback endpoint?"
-          confirmTitle="Replay eligible dead letters?"
-        >
-          <IconRotateLeft />Replay eligible dead letters
-        </ActionButton>
-      </Space>
-      <TableCard title="Callback endpoints">
-        <DataTable
-          data={callbacks}
-          minWidth="980px"
-          columns={[
-            { title: "Endpoint", render: (_, callback) => <Space direction="vertical" size="mini"><Typography.Text>{value(callback, "name")}</Typography.Text><StatusTag>{value(callback, "status")}</StatusTag></Space> },
-            { title: "Service", render: (_, callback) => `${value(callback, "product")} / ${value(callback, "service")}` },
-            { title: "URL", render: (_, callback) => <Typography.Text code>{value(callback, "url")}</Typography.Text> },
-            { title: "Events", render: (_, callback) => Array.isArray(callback.subscribed_events) ? callback.subscribed_events.join(", ") : "" },
-            { title: "DLQ", render: (_, callback) => value(callback, "dead_letters") },
-            {
-              title: "Actions",
-              render: (_, callback) => (
-                <Space align="start" size="small">
-                  {callback.status === "active" && <ActionButton body={{ action: "callback.test", id: callback.id }}><IconSend />Test</ActionButton>}
-                  <ActionButton body={{ action: "callback.toggle", id: callback.id, enabled: callback.status !== "active" }}>{callback.status === "active" ? "Disable" : "Enable"}</ActionButton>
-                  <RotateCallback id={value(callback, "id")} />
-                </Space>
-              ),
-            },
-          ]}
-        />
-      </TableCard>
-    </Space>
-  );
-}
-
 function Events({ data }: { data: Data }) {
   return (
-    <Space direction="vertical" size="large" className="admin-stack">
+    <Space direction="vertical" size="large" className={styles.stack}>
       <TableCard title="Raw provider events">
         <DataTable
           data={rows(data.rawEvents)}
@@ -975,10 +473,7 @@ function Events({ data }: { data: Data }) {
             { title: "Type", render: (_, event) => <Typography.Text code>{value(event, "event_type")}</Typography.Text> },
             { title: "Recipient", render: (_, event) => value(event, "recipient_email") },
             { title: "Occurred", render: (_, event) => date(event.occurred_at) },
-            { title: "Canonical payload", render: (_, event) => {
-              const payload = JSON.stringify(event.canonical_payload);
-              return <Typography.Text code copyable={{ text: payload, tooltips: ["Copy canonical payload", "Copied"] }} ellipsis={{ showTooltip: true }}>{payload}</Typography.Text>;
-            } },
+            { title: "Canonical payload", render: (_, event) => <JsonPreview data={event.canonical_payload} title="Canonical event payload" /> },
           ]}
         />
       </TableCard>
@@ -1010,13 +505,13 @@ function Suppressions({ data }: { data: Data }) {
   }
 
   return (
-    <Space direction="vertical" size="large" className="admin-stack">
+    <Space direction="vertical" size="large" className={styles.stack}>
       <Panel
         title="Add suppression"
         description="Global, product, or list scope"
         defaultExpanded={suppressions.length === 0}
       >
-        <Form layout="vertical" onSubmit={values => void submit(values as FormValues)}>
+        <ActionForm fieldErrors={action.fields} layout="vertical" onSubmit={values => void submit(values as FormValues)}>
           <Grid.Row gutter={[16, 0]}>
             <Grid.Col md={8} xs={24}><Field field="email" label="Email" required rules={[{ required: true, type: "email" }]}><Input type="email" /></Field></Grid.Col>
             <Grid.Col md={8} xs={24}><Field label="Scope" required><Select value={scope} options={[{ value: "global", label: "Global" }, { value: "product", label: "Product" }, { value: "list", label: "List" }]} onChange={next => setScope(next as typeof scope)} /></Field></Grid.Col>
@@ -1026,7 +521,7 @@ function Suppressions({ data }: { data: Data }) {
             <Grid.Col md={8} xs={24}><Field field="expiresAt" label="Expires at" hint="Optional"><Input type="datetime-local" /></Field></Grid.Col>
             <Grid.Col xs={24}><Space><Submit pending={action.pending} disabled={scope !== "global" && !products.length} labelText="Add suppression" /></Space></Grid.Col>
           </Grid.Row>
-        </Form>
+        </ActionForm>
         <Notice notice={action.notice} />
       </Panel>
       <TableCard title="Suppressions">
@@ -1059,126 +554,19 @@ function Suppressions({ data }: { data: Data }) {
   );
 }
 
-function Inbound({ data }: { data: Data }) {
-  const action = useAction();
-  const items = rows(data.inbound);
-  const inboundRoutes = rows(data.inboundRoutes);
-  const endpoints = rows(data.webhooks).filter(endpoint => endpoint.status === "active" && endpoint.security_configured);
-  const products = rows(data.products).filter(product => product.status === "active");
-  const availableDomains = rows(data.domains).filter(domain => domain.status === "active" && rows(domain.identities).some(identity => identity.status === "verified" && endpoints.some(endpoint => endpoint.provider_account_id === identity.accountId)));
-  const initialEndpoint = endpoints.find(endpoint => availableDomains.some(domain => rows(domain.identities).some(identity => identity.status === "verified" && identity.accountId === endpoint.provider_account_id)));
-  const [webhookEndpointId, setWebhookEndpointId] = useState(value(initialEndpoint ?? endpoints[0] ?? {}, "id"));
-  const [productId, setProductId] = useState(value(products[0] ?? {}, "id"));
-  const [serviceId, setServiceId] = useState("");
-  const [callbackId, setCallbackId] = useState("");
-  const selectedEndpoint = endpoints.find(endpoint => endpoint.id === webhookEndpointId);
-  const domains = availableDomains.filter(domain => rows(domain.identities).some(identity => identity.status === "verified" && identity.accountId === selectedEndpoint?.provider_account_id));
-  const [domainId, setDomainId] = useState(value(domains[0] ?? {}, "id"));
-  const selectedDomainId = domains.some(domain => value(domain, "id") === domainId) ? domainId : value(domains[0] ?? {}, "id");
-  const services = rows(data.services).filter(service => service.product_status === "active" && service.product_id === productId);
-  const callbacks = rows(data.callbacks).filter(callback => callback.product_id === productId && callback.service_id === serviceId && callback.status === "active" && Array.isArray(callback.subscribed_events) && callback.subscribed_events.includes("inbound.received"));
-
-  function selectEndpoint(next: string | number) {
-    const nextId = String(next);
-    setWebhookEndpointId(nextId);
-    const endpoint = endpoints.find(item => value(item, "id") === nextId);
-    const nextDomains = availableDomains.filter(domain => rows(domain.identities).some(identity => identity.status === "verified" && identity.accountId === endpoint?.provider_account_id));
-    setDomainId(value(nextDomains[0] ?? {}, "id"));
-  }
-
-  function selectProduct(next: string | number) {
-    setProductId(String(next));
-    setServiceId("");
-    setCallbackId("");
-  }
-
-  function selectService(next: string | number) {
-    setServiceId(String(next));
-    setCallbackId("");
-  }
-
-  async function submit(values: FormValues) {
-    try {
-      await action.run({
-        action: "inbound_route.create",
-        webhookEndpointId,
-        domainId: selectedDomainId,
-        productId,
-        serviceId: serviceId || undefined,
-        callbackId: serviceId ? callbackId : undefined,
-        localPartPattern: formValue(values, "localPartPattern"),
-      });
-    } catch {
-      // Inline notice owns failures from this request.
-    }
-  }
-
-  if (!endpoints.length || !products.length || !availableDomains.length) {
-    return <Prerequisite title="Create inbound route prerequisites" description={!endpoints.length ? "Configure event verification on an active provider account before accepting inbound mail." : !availableDomains.length ? "Verify a sending domain with the selected provider account." : "Create an active product before routing inbound mail."} href={!endpoints.length ? "/providers" : !availableDomains.length ? "/domains" : "/api-keys"} action={!endpoints.length ? "Configure provider webhooks" : !availableDomains.length ? "Manage domains" : "Create a product"} />;
-  }
-
-  return (
-    <Space direction="vertical" size="large" className="admin-stack">
-      <Panel
-        title="Create inbound route"
-        description="Route provider ingress by domain and local part"
-        defaultExpanded={inboundRoutes.length === 0}
-      >
-        <Form layout="vertical" onSubmit={values => void submit(values as FormValues)}>
-          <Grid.Row gutter={[16, 0]}>
-            <Grid.Col md={8} xs={24}><Field label="Provider endpoint" required><Select value={webhookEndpointId} options={endpoints.map(endpoint => ({ value: value(endpoint, "id"), label: `${value(endpoint, "account")} / ${value(endpoint, "type")}` }))} onChange={selectEndpoint} /></Field></Grid.Col>
-            <Grid.Col md={8} xs={24}><Field label="Inbound domain" required><Select value={selectedDomainId} options={domains.map(domain => ({ value: value(domain, "id"), label: value(domain, "domain") }))} onChange={next => setDomainId(String(next))} /></Field></Grid.Col>
-            <Grid.Col md={8} xs={24}><Field field="localPartPattern" label="Local-part pattern" initialValue="*" required rules={requiredRule}><Input /></Field></Grid.Col>
-            <Grid.Col md={8} xs={24}><Field label="Product" required><Select value={productId} options={products.map(product => ({ value: value(product, "id"), label: value(product, "name") }))} onChange={selectProduct} /></Field></Grid.Col>
-            <Grid.Col md={8} xs={24}><Field label="Service"><Select value={serviceId} options={[{ value: "", label: "None" }, ...services.map(service => ({ value: value(service, "id"), label: value(service, "name") }))]} onChange={selectService} /></Field></Grid.Col>
-            <Grid.Col md={8} xs={24}><Field label="Callback"><Select disabled={!serviceId} value={callbackId} options={[{ value: "", label: serviceId ? "None" : "Choose a service first" }, ...callbacks.map(callback => ({ value: value(callback, "id"), label: value(callback, "name") }))]} onChange={next => setCallbackId(String(next))} /></Field></Grid.Col>
-            <Grid.Col xs={24}><Space><Submit pending={action.pending} labelText="Create route" /></Space></Grid.Col>
-          </Grid.Row>
-        </Form>
-        <Notice notice={action.notice} />
-      </Panel>
-      <TableCard title="Inbound routes">
-        <DataTable
-          data={inboundRoutes}
-          columns={[
-            { title: "Pattern", render: (_, route) => <Typography.Text code>{value(route, "local_part_pattern")}@{value(route, "domain")}</Typography.Text> },
-            { title: "Domain", render: (_, route) => value(route, "domain") },
-            { title: "Product", render: (_, route) => value(route, "product") },
-            { title: "Service", render: (_, route) => value(route, "service") || "None" },
-            { title: "Provider", render: (_, route) => value(route, "provider_type") },
-            { title: "Callback", render: (_, route) => value(route, "callback") || "None" },
-            { title: "Status", render: (_, route) => <StatusTag>{value(route, "status")}</StatusTag> },
-            { title: "Action", render: (_, route) => <ActionButton body={{ action: "inbound_route.toggle", id: route.id, enabled: route.status !== "active" }}>{route.status === "active" ? "Disable" : "Enable"}</ActionButton> },
-          ]}
-        />
-      </TableCard>
-      {items.length ? (
-        <TableCard title="Inbound messages">
-          <DataTable
-            data={items}
-            columns={[
-              { title: "From", render: (_, item) => value(item, "from_email") },
-              { title: "To", render: (_, item) => Array.isArray(item.to_emails) ? item.to_emails.join(", ") : "" },
-              { title: "Subject", render: (_, item) => value(item, "subject") },
-              { title: "Product", render: (_, item) => value(item, "product") },
-              { title: "Attachments", render: (_, item) => value(item, "attachment_count") },
-              { title: "Status", render: (_, item) => <StatusTag>{value(item, "status")}</StatusTag> },
-              { title: "Received", render: (_, item) => date(item.received_at) },
-            ]}
-          />
-        </TableCard>
-      ) : (
-        <Card title="Inbound messages">
-          <EmptyState text="No inbound messages have been received." />
-        </Card>
-      )}
-    </Space>
-  );
-}
-
 function Logs({ data }: { data: Data }) {
   return (
-    <Space direction="vertical" size="large" className="admin-stack">
+    <Space direction="vertical" size="large" className={styles.stack}>
+      <TableCard title="Failed and overdue work (latest 200)">
+        <DataTable data={rows(data.failedWork)} minWidth="900px" columns={[
+          { title: "Work", render: (_, item) => <Space direction="vertical" size="mini"><Typography.Text code>{value(item, "event_type")}</Typography.Text><CopyableValue text={value(item, "id")} label="work ID" /></Space> },
+          { title: "Resource", render: (_, item) => `${value(item, "aggregate_type")} / ${value(item, "aggregate_id")}` },
+          { title: "Status", render: (_, item) => <StatusTag>{value(item, "status")}</StatusTag> },
+          { title: "Attempts", render: (_, item) => value(item, "attempt_count") },
+          { title: "Due", render: (_, item) => date(item.available_at) },
+          { title: "Action", render: (_, item) => item.status === "failed" ? <ActionButton body={{ action: "outbox.retry", id: item.id }} confirmText="Retry publishing this failed work item?">Retry work</ActionButton> : <Typography.Text type="secondary">Recovery scan will inspect overdue work</Typography.Text> },
+        ]} />
+      </TableCard>
       <TableCard title="Audit log">
         <DataTable
           data={rows(data.audit)}
@@ -1187,7 +575,7 @@ function Logs({ data }: { data: Data }) {
             { title: "Actor", render: (_, audit) => value(audit, "actor") },
             { title: "Action", render: (_, audit) => <Typography.Text code>{value(audit, "action")}</Typography.Text> },
             { title: "Resource", render: (_, audit) => `${value(audit, "resource_type")} / ${value(audit, "resource_id")}` },
-            { title: "Details", render: (_, audit) => <Typography.Text code>{JSON.stringify(audit.details)}</Typography.Text> },
+            { title: "Details", render: (_, audit) => <JsonPreview data={audit.details} title="Audit details" /> },
             { title: "Time", render: (_, audit) => date(audit.created_at) },
           ]}
         />

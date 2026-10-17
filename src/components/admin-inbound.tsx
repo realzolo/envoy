@@ -1,0 +1,158 @@
+"use client";
+
+import styles from "@/components/admin-views.module.css";
+
+import { Alert, Button, Collapse, Card, Descriptions, Grid, Input, Select, Space, Typography } from "@arco-design/web-react";
+
+import { useState } from "react";
+
+import { ActionForm, type Data, type FormValues, requiredRule, rows, value, formValue, date, StatusTag, useAction, Field, Panel, Submit, Notice, ActionButton, EmptyState, Prerequisite, DataTable, TableCard, CopyableValue } from "@/components/admin-console-shared";
+import { ResourceDetail } from "@/components/admin-resource-detail";
+
+export function Inbound({ data }: { data: Data }) {
+  const action = useAction();
+  const items = rows(data.inbound);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const inboundRoutes = rows(data.inboundRoutes);
+  const endpoints = rows(data.webhooks).filter(endpoint => endpoint.status === "active" && endpoint.security_configured);
+  const products = rows(data.products).filter(product => product.status === "active");
+  const availableDomains = rows(data.domains).filter(domain => domain.status === "active" && rows(domain.identities).some(identity => identity.status === "verified" && endpoints.some(endpoint => endpoint.provider_account_id === identity.accountId)));
+  const initialEndpoint = endpoints.find(endpoint => availableDomains.some(domain => rows(domain.identities).some(identity => identity.status === "verified" && identity.accountId === endpoint.provider_account_id)));
+  const [webhookEndpointId, setWebhookEndpointId] = useState(value(initialEndpoint ?? endpoints[0] ?? {}, "id"));
+  const [productId, setProductId] = useState(value(products[0] ?? {}, "id"));
+  const [serviceId, setServiceId] = useState("");
+  const [callbackId, setCallbackId] = useState("");
+  const selectedEndpoint = endpoints.find(endpoint => endpoint.id === webhookEndpointId);
+  const domains = availableDomains.filter(domain => rows(domain.identities).some(identity => identity.status === "verified" && identity.accountId === selectedEndpoint?.provider_account_id));
+  const [domainId, setDomainId] = useState(value(domains[0] ?? {}, "id"));
+  const selectedDomainId = domains.some(domain => value(domain, "id") === domainId) ? domainId : value(domains[0] ?? {}, "id");
+  const services = rows(data.services).filter(service => service.product_status === "active" && service.product_id === productId);
+  const callbacks = rows(data.callbacks).filter(callback => callback.product_id === productId && callback.service_id === serviceId && callback.status === "active" && Array.isArray(callback.subscribed_events) && callback.subscribed_events.includes("inbound.received"));
+
+  function selectEndpoint(next: string | number) {
+    const nextId = String(next);
+    setWebhookEndpointId(nextId);
+    const endpoint = endpoints.find(item => value(item, "id") === nextId);
+    const nextDomains = availableDomains.filter(domain => rows(domain.identities).some(identity => identity.status === "verified" && identity.accountId === endpoint?.provider_account_id));
+    setDomainId(value(nextDomains[0] ?? {}, "id"));
+  }
+
+  function selectProduct(next: string | number) {
+    setProductId(String(next));
+    setServiceId("");
+    setCallbackId("");
+  }
+
+  function selectService(next: string | number) {
+    setServiceId(String(next));
+    setCallbackId("");
+  }
+
+  async function submit(values: FormValues) {
+    try {
+      await action.run({
+        action: "inbound_route.create",
+        webhookEndpointId,
+        domainId: selectedDomainId,
+        productId,
+        serviceId: serviceId || undefined,
+        callbackId: serviceId ? callbackId : undefined,
+        localPartPattern: formValue(values, "localPartPattern"),
+      });
+    } catch {
+      // Inline notice owns failures from this request.
+    }
+  }
+
+  if (!endpoints.length || !products.length || !availableDomains.length) {
+    return <Prerequisite title="Create inbound route prerequisites" description={!endpoints.length ? "Configure event verification on an active provider account before accepting inbound mail." : !availableDomains.length ? "Verify a sending domain with the selected provider account." : "Create an active product before routing inbound mail."} href={!endpoints.length ? "/providers" : !availableDomains.length ? "/domains" : "/api-keys"} action={!endpoints.length ? "Configure provider webhooks" : !availableDomains.length ? "Manage domains" : "Create a product"} />;
+  }
+
+  return (
+    <Space direction="vertical" size="large" className={styles.stack}>
+      <Panel
+        title="Create inbound route"
+        description="Route provider ingress by domain and local part"
+        defaultExpanded={inboundRoutes.length === 0}
+      >
+        <ActionForm fieldErrors={action.fields} layout="vertical" onSubmit={values => void submit(values as FormValues)}>
+          <Grid.Row gutter={[16, 0]}>
+            <Grid.Col md={8} xs={24}><Field label="Provider endpoint" required><Select value={webhookEndpointId} options={endpoints.map(endpoint => ({ value: value(endpoint, "id"), label: `${value(endpoint, "account")} / ${value(endpoint, "type")}` }))} onChange={selectEndpoint} /></Field></Grid.Col>
+            <Grid.Col md={8} xs={24}><Field label="Inbound domain" required><Select value={selectedDomainId} options={domains.map(domain => ({ value: value(domain, "id"), label: value(domain, "domain") }))} onChange={next => setDomainId(String(next))} /></Field></Grid.Col>
+            <Grid.Col md={8} xs={24}><Field field="localPartPattern" label="Local-part pattern" initialValue="*" required rules={requiredRule}><Input /></Field></Grid.Col>
+            <Grid.Col md={8} xs={24}><Field label="Product" required><Select value={productId} options={products.map(product => ({ value: value(product, "id"), label: value(product, "name") }))} onChange={selectProduct} /></Field></Grid.Col>
+            <Grid.Col md={8} xs={24}><Field label="Service"><Select value={serviceId} options={[{ value: "", label: "None" }, ...services.map(service => ({ value: value(service, "id"), label: value(service, "name") }))]} onChange={selectService} /></Field></Grid.Col>
+            <Grid.Col md={8} xs={24}><Field label="Callback"><Select disabled={!serviceId} value={callbackId} options={[{ value: "", label: serviceId ? "None" : "Choose a service first" }, ...callbacks.map(callback => ({ value: value(callback, "id"), label: value(callback, "name") }))]} onChange={next => setCallbackId(String(next))} /></Field></Grid.Col>
+            <Grid.Col xs={24}><Space><Submit pending={action.pending} labelText="Create route" /></Space></Grid.Col>
+          </Grid.Row>
+        </ActionForm>
+        <Notice notice={action.notice} />
+      </Panel>
+      <TableCard title="Inbound routes">
+        <DataTable
+          data={inboundRoutes}
+          columns={[
+            { title: "Pattern", render: (_, route) => <Typography.Text code>{value(route, "local_part_pattern")}@{value(route, "domain")}</Typography.Text> },
+            { title: "Domain", render: (_, route) => value(route, "domain") },
+            { title: "Product", render: (_, route) => value(route, "product") },
+            { title: "Service", render: (_, route) => value(route, "service") || "None" },
+            { title: "Provider", render: (_, route) => value(route, "provider_type") },
+            { title: "Callback", render: (_, route) => value(route, "callback") || "None" },
+            { title: "Status", render: (_, route) => <StatusTag>{value(route, "status")}</StatusTag> },
+            { title: "Action", render: (_, route) => <ActionButton body={{ action: "inbound_route.toggle", id: route.id, enabled: route.status !== "active" }}>{route.status === "active" ? "Disable" : "Enable"}</ActionButton> },
+          ]}
+        />
+      </TableCard>
+      {items.length ? (
+        <TableCard title="Inbound messages">
+          <DataTable
+            data={items}
+            columns={[
+              { title: "From", render: (_, item) => value(item, "from_email") },
+              { title: "To", render: (_, item) => Array.isArray(item.to_emails) ? item.to_emails.join(", ") : "" },
+              { title: "Subject", render: (_, item) => <Button type="text" onClick={() => setSelectedId(value(item, "id"))}>{value(item, "subject") || "(No subject)"}</Button> },
+              { title: "Product / visibility", render: (_, item) => <Space direction="vertical" size="mini"><Typography.Text>{value(item, "product") || "Unrouted"}</Typography.Text>{!item.service_id && <Typography.Text type="secondary">Administrator only</Typography.Text>}</Space> },
+              { title: "Attachments", render: (_, item) => value(item, "attachment_count") },
+              { title: "Status", render: (_, item) => <StatusTag>{value(item, "status")}</StatusTag> },
+              { title: "Received", render: (_, item) => date(item.received_at) },
+            ]}
+          />
+        </TableCard>
+      ) : (
+        <Card className={styles.card} title="Inbound messages">
+          <EmptyState text="No inbound messages have been received." />
+        </Card>
+      )}
+      {selectedId && <ResourceDetail key={selectedId} title="Inbound message" path={`/api/admin/inbound/${encodeURIComponent(selectedId)}`} onClose={() => setSelectedId(null)}>{item => <>
+        <div className={styles.section}>
+        <Typography.Text bold>{value(item, "subject") || "(No subject)"}</Typography.Text>
+        <Descriptions column={1} labelStyle={{ width: 112 }} data={[
+          { label: "Status", value: <StatusTag>{value(item, "status")}</StatusTag> },
+          { label: "Received", value: date(item.received_at) },
+          { label: "Message ID", value: <CopyableValue text={value(item, "id")} label="inbound message ID" /> },
+          { label: "From", value: value(item, "from_email") },
+          { label: "To", value: Array.isArray(item.to_emails) ? item.to_emails.join(", ") : "" },
+          { label: "Product", value: value(item, "product") || "Unrouted" },
+          { label: "Service", value: value(item, "service") || "Administrator only" },
+          { label: "Route", value: value(item, "route") ? `${value(item, "route")}@${value(item, "domain")}` : "No route matched" },
+        ]} />
+        </div>
+        {item.rejection_reason ? <Alert type="error" content={value(item, "rejection_reason")} showIcon /> : null}
+        {item.content_purged_at ? <Alert type="info" content="Message content was removed under the retention policy." /> : <>
+          <Collapse defaultActiveKey={["text"]}>
+            <Collapse.Item name="text" header="Plain-text content"><pre className={styles.code}>{value(item, "text_body") || "No plain-text content."}</pre></Collapse.Item>
+            {item.sanitized_html ? <Collapse.Item name="html" header="Isolated HTML preview"><iframe title="Inbound HTML preview" className={styles.preview} sandbox="" referrerPolicy="no-referrer" srcDoc={`<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'">${value(item, "sanitized_html")}`} /></Collapse.Item> : null}
+          </Collapse>
+        </>}
+        <div className={styles.section}><Typography.Text bold>Attachments</Typography.Text>
+        <DataTable searchable={false} minWidth="640px" data={rows(item.attachments)} columns={[
+          { title: "File", render: (_, file) => value(file, "file_name") },
+          { title: "Size / type", render: (_, file) => `${Number(file.size_bytes).toLocaleString("en-US")} B · ${value(file, "content_type")}` },
+          { title: "Scan", render: (_, file) => <StatusTag>{value(file, "scan_status")}</StatusTag> },
+          { title: "Download", render: (_, file) => file.content_purged_at ? "Removed" : item.status === "ready" && file.downloadable !== false ? <Button href={`/api/admin/inbound/${encodeURIComponent(value(item, "id"))}/attachments/${encodeURIComponent(value(file, "id"))}`} size="small">Download</Button> : "Unavailable" },
+        ]} emptyText="No attachments." />
+        </div>
+      </>}</ResourceDetail>}
+    </Space>
+  );
+}

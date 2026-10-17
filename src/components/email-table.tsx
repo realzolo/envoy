@@ -1,31 +1,16 @@
 "use client";
 
 import {
-  Button,
-  Empty,
-  Form,
-  Grid,
-  Input,
-  Link as ArcoLink,
-  Select,
-  Space,
-  Table,
-  Tag,
-  Typography,
+  Button, Empty, Form, Input, Link as ArcoLink, Select, Space, Table, Tag, Typography,
 } from "@arco-design/web-react";
 import type { TableColumnProps } from "@arco-design/web-react";
 import { IconRefresh, IconSearch, IconSend } from "@arco-design/web-react/icon";
-import { useMemo, useState } from "react";
+import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
+import { messageFilterQuery, type MessageFilters } from "@/modules/admin/message-filters";
+import { LocalTime } from "@/components/local-time";
 import type { DeliveryStatus, EmailRecord } from "@/lib/types";
-
-const messagePagination = {
-  defaultPageSize: 20,
-  hideOnSinglePage: true,
-  showJumper: true,
-  showTotal: true,
-  sizeCanChange: true,
-  sizeOptions: [10, 20, 50],
-};
+import styles from "./mail-views.module.css";
 
 const statusOptions: Array<{ value: "all" | DeliveryStatus; label: string }> = [
   { value: "all", label: "All statuses" },
@@ -42,196 +27,118 @@ const statusOptions: Array<{ value: "all" | DeliveryStatus; label: string }> = [
 ];
 
 const statusColors: Record<DeliveryStatus, string> = {
-  delivered: "green",
-  accepted: "arcoblue",
-  submitting: "arcoblue",
-  queued: "gray",
-  deferred: "orange",
-  unknown: "orange",
-  bounced: "red",
-  failed: "red",
-  canceled: "gray",
-  suppressed: "purple",
+  delivered: "green", accepted: "arcoblue", submitting: "arcoblue", queued: "gray",
+  deferred: "orange", unknown: "orange", bounced: "red", failed: "red", canceled: "gray", suppressed: "purple",
 };
 
-const statusLabels = Object.fromEntries(
-  statusOptions
-    .filter((option): option is { value: DeliveryStatus; label: string } => option.value !== "all")
-    .map((option) => [option.value, option.label]),
-) as Record<DeliveryStatus, string>;
+const statusLabels = Object.fromEntries(statusOptions.map((option) => [option.value, option.label]));
 
-const columns: TableColumnProps<EmailRecord>[] = [
+const columns = (back: string): TableColumnProps<EmailRecord>[] => [
   {
-    title: "Recipient",
-    dataIndex: "recipient",
-    width: 260,
+    title: "Recipient", dataIndex: "recipient", width: 260,
     render: (_, email) => (
-      <ArcoLink href={`/emails/${email.id}`}>
-        <Typography.Ellipsis rows={1} showTooltip>
-          {email.recipient}
-        </Typography.Ellipsis>
+      <div>
+        <ArcoLink className={styles.cellLink} href={`/emails/${email.id}?back=${encodeURIComponent(back)}`}>
+          <span className={styles.cellText} title={email.recipient}>{email.recipient}</span>
+        </ArcoLink>
+        <Typography.Text className={styles.cellSubtext} type="secondary" title={email.referenceId ?? email.id}>
+          {email.referenceId ?? email.id}
+        </Typography.Text>
+      </div>
+    ),
+  },
+  {
+    title: "Subject", dataIndex: "subject",
+    render: (_, email) => (
+      <ArcoLink className={styles.cellLink} href={`/emails/${email.id}?back=${encodeURIComponent(back)}`}>
+        <span className={styles.cellText} title={email.subject}>{email.subject || "(No subject)"}</span>
       </ArcoLink>
     ),
   },
   {
-    title: "Subject",
-    dataIndex: "subject",
-    render: (_, email) => (
-      <ArcoLink href={`/emails/${email.id}`}>
-        <Typography.Ellipsis rows={1} showTooltip>
-          {email.subject}
-        </Typography.Ellipsis>
-      </ArcoLink>
-    ),
+    title: "Product", dataIndex: "product", width: 150,
+    render: (product: string) => <span className={styles.cellText} title={product}>{product}</span>,
   },
   {
-    title: "Product",
-    dataIndex: "product",
-    width: 160,
-    render: (product) => (
-      <Typography.Ellipsis rows={1} showTooltip>
-        <Typography.Text type="secondary">{product}</Typography.Text>
-      </Typography.Ellipsis>
-    ),
+    title: "Status", dataIndex: "status", width: 130,
+    render: (status: DeliveryStatus) => <Tag color={statusColors[status]} bordered={false}>{statusLabels[status]}</Tag>,
   },
   {
-    title: "Status",
-    dataIndex: "status",
-    width: 126,
-    render: (status: DeliveryStatus) => (
-      <Tag color={statusColors[status]} bordered={false} size="small">
-        {statusLabels[status]}
-      </Tag>
-    ),
-  },
-  {
-    title: "Time",
-    dataIndex: "relativeTime",
-    width: 110,
-    align: "right",
-    render: (relativeTime) => <Typography.Text type="secondary">{relativeTime}</Typography.Text>,
+    title: "Accepted at", dataIndex: "createdAt", width: 240,
+    render: (_, email) => <span className={styles.timestamp}><LocalTime value={email.createdAt} /></span>,
   },
 ];
 
-export function EmailTable({
-  records,
-  compact = false,
-  variant = "page",
-}: {
+export function EmailTable({ records, compact = false, variant = "page", filters = { q: "", status: "all" }, nextCursor }: {
   records: EmailRecord[];
   compact?: boolean;
   variant?: "embedded" | "page";
+  filters?: MessageFilters;
+  nextCursor?: string | null;
 }) {
-  const [query, setQuery] = useState("");
-  const [status, setStatus] = useState<"all" | DeliveryStatus>("all");
-
-  const filtered = useMemo(() => {
-    const normalized = query.trim().toLowerCase();
-    return records.filter((email) => {
-      const statusMatches = status === "all" || email.status === status;
-      const queryMatches =
-        !normalized ||
-        email.recipient.toLowerCase().includes(normalized) ||
-        email.subject.toLowerCase().includes(normalized) ||
-        email.product.toLowerCase().includes(normalized);
-      return statusMatches && queryMatches;
-    });
-  }, [query, records, status]);
-
-  const displayedRecords = compact ? filtered.slice(0, 5) : filtered;
-  const filteredByUser = Boolean(query.trim()) || status !== "all";
-
-  const emptyState = records.length === 0 ? (
-    <Empty
-      description={(
-        <Space direction="vertical" size="medium" align="center">
-          <Typography.Text type="secondary">No messages have been sent yet.</Typography.Text>
-          <Button href="/emails/compose" icon={<IconSend />} type="primary">Send a test</Button>
-        </Space>
-      )}
-    />
-  ) : (
-    <Empty
-      description={(
-        <Space direction="vertical" size="medium" align="center">
-          <Typography.Text type="secondary">No messages match the current filters.</Typography.Text>
-          <Button
-            icon={<IconRefresh />}
-            onClick={() => {
-              setQuery("");
-              setStatus("all");
-            }}
-            type="secondary"
-          >
-            Clear filters
-          </Button>
-        </Space>
-      )}
-    />
+  const router = useRouter();
+  const [query, setQuery] = useState(filters.q);
+  const [status, setStatus] = useState<MessageFilters["status"]>(filters.status);
+  const [pending, startTransition] = useTransition();
+  const filteredByUser = Boolean(filters.q) || filters.status !== "all";
+  const navigate = (next: MessageFilters) => startTransition(() => router.push(`/emails?${messageFilterQuery(next, true)}`));
+  const reset = () => {
+    setQuery("");
+    setStatus("all");
+    startTransition(() => router.push("/emails"));
+  };
+  const emptyState = (
+    <Empty description={
+      <Space direction="vertical" size="medium" align="center">
+        <Typography.Text type="secondary">
+          {filteredByUser ? "No deliveries match these filters." : filters.cursor ? "No more deliveries on this page." : "No messages have been sent yet."}
+        </Typography.Text>
+        {filteredByUser || filters.cursor ? (
+          <Button icon={<IconRefresh />} onClick={reset}>Reset filters</Button>
+        ) : <Button href="/emails/compose" icon={<IconSend />} type="primary">Send a test</Button>}
+      </Space>
+    } />
   );
 
   return (
-    <>
-      {!compact && (
-        <Form className="message-filters" layout="vertical">
-          <Grid.Row gutter={[16, 0]}>
-            <Grid.Col md={16} xs={24}>
-              <Form.Item label="Search messages">
-                <Input
-                  allowClear
-                  placeholder="Search recipient, subject, or product"
-                  prefix={<IconSearch aria-hidden="true" />}
-                  value={query}
-                  onChange={setQuery}
-                />
-              </Form.Item>
-            </Grid.Col>
-            <Grid.Col md={8} xs={24}>
-              <Form.Item label="Delivery status">
-                <Select
-                  options={statusOptions}
-                  value={status}
-                  onChange={(value) => setStatus(value as "all" | DeliveryStatus)}
-                />
-              </Form.Item>
-            </Grid.Col>
-          </Grid.Row>
+    <div className={styles.table}>
+      {!compact && <>
+        <Form className={styles.filters} layout="vertical" onSubmit={() => navigate({ q: query, status })}>
+          <div className={styles.filterGrid}>
+            <Form.Item label="Search messages">
+              <Input allowClear placeholder="ID, reference, recipient, subject, or product" prefix={<IconSearch />} value={query} onChange={setQuery} />
+            </Form.Item>
+            <Form.Item label="Delivery status">
+              <Select options={statusOptions} value={status} onChange={setStatus} />
+            </Form.Item>
+            <Space className={styles.filterActions}>
+              <Button htmlType="submit" icon={<IconSearch />} loading={pending} type="primary">Search</Button>
+              <Button icon={<IconRefresh />} onClick={reset} disabled={pending}>Reset</Button>
+            </Space>
+          </div>
         </Form>
-      )}
-
-      {!compact && (
-        <div className="table-summary">
-          <Typography.Text type="secondary">
-            {filtered.length.toLocaleString()} {filtered.length === 1 ? "message" : "messages"}
-          </Typography.Text>
-          {filteredByUser && (
-            <Button
-              icon={<IconRefresh aria-hidden="true" />}
-              onClick={() => {
-                setQuery("");
-                setStatus("all");
-              }}
-              size="small"
-              type="text"
-            >
-              Reset filters
-            </Button>
-          )}
+        <div className={styles.resultBar}>
+          <Typography.Text bold>Recipient deliveries</Typography.Text>
+          <Typography.Text type="secondary">{records.length.toLocaleString("en-US")} on this page · local time</Typography.Text>
         </div>
-      )}
-
+      </>}
       <Table<EmailRecord>
         border={variant === "page"}
-        className="message-table"
-        columns={columns}
-        data={displayedRecords}
+        columns={columns(`/emails?${messageFilterQuery(filters, true)}`)}
+        data={records}
+        loading={pending}
         hover
         noDataElement={emptyState}
-        pagination={compact ? false : messagePagination}
+        pagination={false}
         rowKey="id"
-        scroll={displayedRecords.length ? { x: 760 } : undefined}
+        scroll={{ x: 1180 }}
+        tableLayoutFixed
         size={compact ? "small" : "default"}
       />
-    </>
+      {!compact && <div className={styles.pagination}>
+        {filters.cursor && <Button disabled={pending} onClick={() => navigate({ ...filters, cursor: undefined })}>First page</Button>}
+        <Button disabled={!nextCursor || pending} onClick={() => navigate({ ...filters, cursor: nextCursor ?? undefined })}>Next page</Button>
+      </div>}
+    </div>
   );
 }

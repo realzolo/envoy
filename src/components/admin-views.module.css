@@ -1,0 +1,114 @@
+.stack {
+  width: 100%;
+  min-width: 0;
+  align-items: stretch;
+}
+
+.stack > * {
+  min-width: 0;
+}
+
+.card {
+  min-width: 0;
+}
+
+.form {
+  width: 100%;
+  max-width: 1120px;
+}
+
+.panelContent {
+  width: 100%;
+  min-width: 0;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.search {
+  width: 280px;
+  max-width: 100%;
+}
+
+.table {
+  width: 100%;
+  min-width: 0;
+}
+
+.detail {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.loading {
+  display: flex;
+  justify-content: center;
+  padding: 64px 0;
+}
+
+.code {
+  margin: 0;
+  max-height: 400px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.preview {
+  width: 100%;
+  min-height: 320px;
+  border: 0;
+}
+
+.choices {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.accountList {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+.wrapped {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+@media (max-width: 767px) {
+  .search {
+    width: 100%;
+  }
+
+  .toolbar {
+    align-items: stretch;
+  }
+
+  .detail {
+    gap: 20px;
+  }
+}

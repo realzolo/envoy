@@ -1,5 +1,7 @@
 "use client";
 
+import styles from "@/components/admin-views.module.css";
+
 import {
   Alert,
   Badge,
@@ -33,6 +35,9 @@ import {
 import { useRouter } from "next/navigation";
 import { type ReactNode, useState, useSyncExternalStore } from "react";
 import type { ProviderType } from "@/modules/providers/contracts";
+
+import { LocalTime } from "@/components/local-time";
+import { ActionForm, AdminActionError, useServerFieldError } from "@/components/admin-console-shared";
 
 type Row = Record<string, unknown>;
 type Data = Record<string, unknown>;
@@ -152,18 +157,20 @@ async function mutate(body: Row) {
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
-  const payload = await response.json() as { error?: string; result?: unknown };
-  if (!response.ok) throw new Error(payload.error ?? "Action failed");
+  const payload = await response.json() as { error?: string; result?: unknown; fields?: Record<string, string> };
+  if (!response.ok) throw new AdminActionError(payload.error ?? "Action failed", payload.fields);
   return payload.result;
 }
 
 function useProviderAction() {
   const router = useRouter();
   const [pending, setPending] = useState(false);
+  const [fields, setFields] = useState<Record<string, string>>({});
   const [notice, setNotice] = useState<Notice>(null);
 
   async function run(body: Row, success: string | ((result: unknown) => Notice)) {
     setPending(true);
+    setFields({});
     setNotice(null);
     try {
       const result = await mutate(body);
@@ -171,6 +178,7 @@ function useProviderAction() {
       router.refresh();
       return result;
     } catch (error) {
+      if (error instanceof AdminActionError) setFields(error.fields);
       setNotice({ kind: "error", text: error instanceof Error ? error.message : "Action failed" });
       throw error;
     } finally {
@@ -178,7 +186,7 @@ function useProviderAction() {
     }
   }
 
-  return { run, pending, notice, setNotice };
+  return { run, pending, notice, fields, setNotice };
 }
 
 function InlineNotice({ notice }: { notice: Notice }) {
@@ -203,8 +211,11 @@ function Field({
   rules?: { required?: boolean; type?: string }[];
   children: ReactNode;
 }) {
+  const serverError = useServerFieldError(field);
   return (
     <Form.Item
+      validateStatus={serverError ? "error" : undefined}
+      help={serverError}
       field={field}
       label={label}
       required={isRequired}
@@ -352,12 +363,13 @@ function CreateProvider({ onClose, alwaysOpen = false }: { onClose: () => void; 
 
   return (
     <Card
+      className={styles.card}
       title="Connect a provider"
       extra={!alwaysOpen && <Button type="text" shape="circle" icon={<IconClose />} title="Close" aria-label="Close provider setup" onClick={onClose} />}
     >
-      <Space direction="vertical" size="large" className="admin-stack">
+      <Space direction="vertical" size="large" className={styles.stack}>
         <Typography.Text type="secondary">Choose a service, then enter the credentials shown in its dashboard.</Typography.Text>
-        <Radio.Group
+        <div className={styles.choices}><Radio.Group
           type="button"
           mode="outline"
           value={type}
@@ -369,10 +381,10 @@ function CreateProvider({ onClose, alwaysOpen = false }: { onClose: () => void; 
             };
           })}
           onChange={next => choose(next as ProviderType)}
-        />
+        /></div>
         <Grid.Row gutter={24} align="start">
           <Grid.Col xs={24} xl={16}>
-            <Form
+            <ActionForm fieldErrors={action.fields}
               key={type}
               layout="vertical"
               initialValues={{ accountName }}
@@ -394,7 +406,7 @@ function CreateProvider({ onClose, alwaysOpen = false }: { onClose: () => void; 
                   </Space>
                 </FormColumn>
               </Grid.Row>
-            </Form>
+            </ActionForm>
           </Grid.Col>
           <Grid.Col xs={24} xl={8}>
             <Alert
@@ -508,7 +520,7 @@ function WebhookForm({ account }: { account: Row }) {
   return (
     <Grid.Row gutter={24} align="start">
       <Grid.Col xs={24} xl={16}>
-        <Form layout="vertical" onSubmit={values => void submit(values as FormValues)}>
+        <ActionForm fieldErrors={action.fields} layout="vertical" onSubmit={values => void submit(values as FormValues)}>
           <Grid.Row gutter={16}>
             {type === "resend" && <FormColumn><SecretField field="signingSecret" label="Signing secret" placeholder="whsec_..." /></FormColumn>}
             {type === "sendgrid" && <>
@@ -524,7 +536,7 @@ function WebhookForm({ account }: { account: Row }) {
             {type === "ses" && <FormColumn span={24}><Field field="expectedTopicArn" label="Expected SNS topic ARN" required rules={requiredRule} hint="The exact SNS topic configured as the SES event destination."><Input placeholder="arn:aws:sns:us-east-1:123456789012:envoy-events" /></Field></FormColumn>}
             <FormColumn span={24}><SubmitButton pending={action.pending} icon={<IconSafe />}>Save verification</SubmitButton></FormColumn>
           </Grid.Row>
-        </Form>
+        </ActionForm>
       </Grid.Col>
       <Grid.Col xs={24} xl={8}>
         <Alert
@@ -578,7 +590,7 @@ function CredentialForm({ account }: { account: Row }) {
   }
 
   return (
-    <Form layout="vertical" onSubmit={values => void submit(values as FormValues)}>
+    <ActionForm fieldErrors={action.fields} layout="vertical" onSubmit={values => void submit(values as FormValues)}>
       <Grid.Row gutter={16}>
         {(type === "resend" || type === "sendgrid" || type === "mailgun") && <FormColumn><SecretField field="apiKey" label="New API key" placeholder={type === "resend" ? "re_..." : type === "sendgrid" ? "SG...." : "key-..."} /></FormColumn>}
         {type === "postmark" && <FormColumn><SecretField field="serverToken" label="New server API token" /></FormColumn>}
@@ -590,7 +602,7 @@ function CredentialForm({ account }: { account: Row }) {
         <FormColumn span={24}><SubmitButton pending={action.pending} icon={<IconRotateLeft />}>Rotate credential</SubmitButton></FormColumn>
         {action.notice && <FormColumn span={24}><InlineNotice notice={action.notice} /></FormColumn>}
       </Grid.Row>
-    </Form>
+    </ActionForm>
   );
 }
 
@@ -613,7 +625,7 @@ function QuotaForm({ account }: { account: Row }) {
   }
 
   return (
-    <Form
+    <ActionForm fieldErrors={action.fields}
       layout="vertical"
       initialValues={{
         dailyLimit: quota.dailyLimit === undefined ? "" : String(quota.dailyLimit),
@@ -627,7 +639,7 @@ function QuotaForm({ account }: { account: Row }) {
         <FormColumn span={24}><SubmitButton pending={action.pending}>Save limits</SubmitButton></FormColumn>
         {action.notice && <FormColumn span={24}><InlineNotice notice={action.notice} /></FormColumn>}
       </Grid.Row>
-    </Form>
+    </ActionForm>
   );
 }
 
@@ -654,12 +666,13 @@ function Account({ account }: { account: Row }) {
 
   return (
     <Card
+      className={styles.card}
       title={value(account, "name") || selected.name}
       extra={<Tag color={selected.color}>{selected.name}</Tag>}
     >
-      <Space direction="vertical" size="large" className="admin-stack">
+      <Space direction="vertical" size="large" className={styles.stack}>
         <Descriptions
-          column={{ xs: 1, sm: 2, xl: 3 }}
+          column={{ xs: 1, sm: 2 }}
           data={[
             {
               label: "Provider",
@@ -668,6 +681,10 @@ function Account({ account }: { account: Row }) {
             {
               label: "Sending",
               value: <Badge status={badgeStatus(sending.tone)} text={sending.status} />,
+            },
+            {
+              label: "Last verified event",
+              value: account.last_event_at ? <Typography.Text><LocalTime value={account.last_event_at instanceof Date ? account.last_event_at.toISOString() : String(account.last_event_at)} /></Typography.Text> : <Typography.Text type="secondary">No event received yet</Typography.Text>,
             },
             {
               label: "Event webhook",
@@ -708,7 +725,7 @@ export function ProviderAccounts({ data }: { data: Data }) {
   const [showCreate, setShowCreate] = useState(providers.length === 0);
 
   return (
-    <Space direction="vertical" size="large" className="admin-stack">
+    <Space direction="vertical" size="large" className={styles.stack}>
       <Grid.Row align="center" justify="space-between" gutter={16}>
         <Grid.Col flex="auto">
           <Space direction="vertical" size="mini">
@@ -719,7 +736,7 @@ export function ProviderAccounts({ data }: { data: Data }) {
         {!showCreate && <Grid.Col flex="none"><Button type="primary" icon={<IconPlus />} onClick={() => setShowCreate(true)}>Add provider</Button></Grid.Col>}
       </Grid.Row>
       {showCreate && <CreateProvider onClose={() => setShowCreate(false)} alwaysOpen={providers.length === 0} />}
-      {providers.length > 0 ? <Space direction="vertical" size="medium" className="provider-account-list">{providers.map(provider => <Account key={value(provider, "id")} account={provider} />)}</Space> : (
+      {providers.length > 0 ? <div className={styles.accountList}>{providers.map(provider => <Account key={value(provider, "id")} account={provider} />)}</div> : (
         <Empty description="No provider accounts yet. Connect one above to start configuring domains and routes." />
       )}
     </Space>

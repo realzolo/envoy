@@ -5,9 +5,11 @@ import { getDeliveryDetail } from "@/modules/admin/queries";
 
 export const metadata: Metadata = { title: "Delivery details" };
 
-export default async function DeliveryPage({ params }: { params: Promise<{ id: string }> }) {
+export default async function DeliveryPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams:Promise<{back?:string}> }) {
   const detail = await getDeliveryDetail((await params).id);
   if (!detail) notFound();
 
-  return <DeliveryDetailView detail={detail} />;
+  const requestedBack=(await searchParams).back;
+  const back=requestedBack && /^\/emails(?:\?|$)/.test(requestedBack) ? requestedBack : "/emails";
+  return <DeliveryDetailView detail={detail} back={back} />;
 }

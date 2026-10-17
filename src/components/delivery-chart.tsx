@@ -1,11 +1,13 @@
 "use client";
 
-import { Badge, Card, Empty, Grid, Link as ArcoLink, List, Space, Statistic } from "@arco-design/web-react";
+import { Badge, Card, Empty, Link as ArcoLink, List, Space, Statistic, Typography, Tooltip } from "@arco-design/web-react";
 import { IconArrowRight } from "@arco-design/web-react/icon";
 import { EmailTable } from "@/components/email-table";
+import { LocalTime, useLocalTime } from "@/components/local-time";
 import { PageHeader } from "@/components/page-header";
 import { SetupChecklist, type SetupState } from "@/components/setup-checklist";
 import type { EmailRecord } from "@/lib/types";
+import styles from "./dashboard.module.css";
 
 export type DeliveryTrendPoint = {
   label: string;
@@ -14,11 +16,14 @@ export type DeliveryTrendPoint = {
 };
 
 type DashboardStats = {
+  windowStart:string;
+  windowEnd:string;
   accepted: number;
   delivered: number;
   bounced: number;
   deliveryRate: number;
   bounceRate: number;
+  pending: number;
 };
 
 type DashboardHealth = {
@@ -27,6 +32,8 @@ type DashboardHealth = {
   deadLetters: number;
   unknown: number;
   workerAlive: boolean;
+  rawErrors: number;
+  oldestDueSeconds: number;
 };
 
 type DashboardOverviewProps = {
@@ -37,10 +44,14 @@ type DashboardOverviewProps = {
   setup: SetupState;
 };
 
+function ChartTimeLabel({value}:{value:string}) {
+  return useLocalTime(value,{month:"short",day:"numeric"})
+}
+
 export function DeliveryChart({ data }: { data: DeliveryTrendPoint[] }) {
-  const maximum = Math.max(1, ...data.flatMap((item) => [item.sent, item.delivered]));
+  const maximum = Math.max(4, ...data.flatMap((item) => [item.sent, item.delivered]));
   const width = Math.max(640, data.length * 108 + 64);
-  const plot = { top: 28, right: width - 32, bottom: 184, left: 32 };
+  const plot = { top: 28, right: width - 32, bottom: 184, left: 48 };
   const chartHeight = plot.bottom - plot.top;
   const chartWidth = plot.right - plot.left;
   const xAt = (index: number) => (
@@ -54,21 +65,22 @@ export function DeliveryChart({ data }: { data: DeliveryTrendPoint[] }) {
   return (
     <section aria-label="Accepted and delivered messages over seven days">
       {data.length ? (
-        <div className="delivery-chart__viewport">
+        <div className={styles.chart}>
           <svg
             aria-label="Accepted and delivered messages over seven days"
-            className="delivery-chart__svg"
+
             height="230"
             preserveAspectRatio="xMinYMin meet"
             role="img"
             viewBox={`0 0 ${width} 230`}
             width="100%"
           >
-            {[0.25, 0.5, 0.75, 1].map((ratio) => {
+            {[0, 0.25, 0.5, 0.75, 1].map((ratio) => {
               const y = plot.bottom - chartHeight * ratio;
               return (
+                <g key={ratio}>
+                <text x={plot.left - 12} y={y + 4} textAnchor="end" fill="var(--color-text-3)" fontSize="11">{Math.round(maximum * ratio)}</text>
                 <line
-                  key={ratio}
                   stroke="var(--color-border-1)"
                   strokeWidth="1"
                   x1={plot.left}
@@ -76,13 +88,14 @@ export function DeliveryChart({ data }: { data: DeliveryTrendPoint[] }) {
                   y1={y}
                   y2={y}
                 />
+                </g>
               );
             })}
             <polyline
-              className="delivery-chart__accepted-line"
+
               fill="none"
               points={points("sent")}
-              stroke="var(--color-text-3)"
+              stroke="rgb(var(--arcoblue-6))"
               strokeWidth="1.5"
             />
             <polyline
@@ -92,7 +105,8 @@ export function DeliveryChart({ data }: { data: DeliveryTrendPoint[] }) {
               strokeWidth="2"
             />
             {data.map((item, index) => (
-              <g className="delivery-chart__point" key={item.label}>
+              <g key={item.label}>
+                <title>{`${item.sent} queued · ${item.delivered} delivered`}</title>
                 <circle
                   cx={xAt(index)}
                   cy={yAt(item.delivered)}
@@ -102,14 +116,14 @@ export function DeliveryChart({ data }: { data: DeliveryTrendPoint[] }) {
                   strokeWidth="1.5"
                 />
                 <text
-                  className="delivery-chart__label"
+
                   fill="var(--color-text-4)"
                   fontSize="11"
                   textAnchor="middle"
                   x={xAt(index)}
                   y="216"
                 >
-                  {item.label}
+                  <ChartTimeLabel value={item.label}/>
                 </text>
               </g>
             ))}
@@ -125,22 +139,22 @@ export function DeliveryChart({ data }: { data: DeliveryTrendPoint[] }) {
 export function DashboardOverview({ stats, health, trend, recent, setup }: DashboardOverviewProps) {
   const metrics = [
     {
-      label: "Accepted",
+      label: "Messages accepted",
       value: stats.accepted,
-      extra: "Last 7 days",
+      extra: "Accepted during the reporting window",
       groupSeparator: true,
     },
     {
-      label: "Delivery rate",
+      label: "Completed delivery rate",
       value: stats.deliveryRate,
-      extra: `${stats.delivered.toLocaleString()} delivered`,
+      extra: `${stats.delivered.toLocaleString("en-US")} delivered · ${stats.pending.toLocaleString("en-US")} still processing`,
       precision: 1,
       suffix: "%",
     },
     {
       label: "Bounce rate",
       value: stats.bounceRate,
-      extra: `${stats.bounced.toLocaleString()} bounced`,
+      extra: `${stats.bounced.toLocaleString("en-US")} / delivered + bounced + failed`,
       precision: 2,
       suffix: "%",
     },
@@ -160,27 +174,33 @@ export function DashboardOverview({ stats, health, trend, recent, setup }: Dashb
       healthy: health.workerAlive,
     },
     {
-      name: "Outbox backlog",
+      name: "Overdue work (>1 minute)",
       status: health.outbox ? "Attention" : "Healthy",
-      detail: health.outbox.toLocaleString(),
+      detail: `${health.outbox.toLocaleString("en-US")} · oldest due ${Math.floor(health.oldestDueSeconds)}s`,
       healthy: health.outbox === 0,
     },
     {
       name: "Outbox failures",
       status: health.outboxFailed ? "Attention" : "Healthy",
-      detail: health.outboxFailed.toLocaleString(),
+      detail: health.outboxFailed.toLocaleString("en-US"),
       healthy: health.outboxFailed === 0,
     },
     {
       name: "Unknown outcomes",
       status: health.unknown ? "Reconciling" : "Healthy",
-      detail: health.unknown.toLocaleString(),
+      detail: health.unknown.toLocaleString("en-US"),
       healthy: health.unknown === 0,
+    },
+    {
+      name: "Raw event processing errors",
+      status: health.rawErrors ? "Attention":"Healthy",
+      detail: health.rawErrors.toLocaleString("en-US"),
+      healthy: health.rawErrors===0,
     },
     {
       name: "Callback dead letters",
       status: health.deadLetters ? "Attention" : "Healthy",
-      detail: health.deadLetters.toLocaleString(),
+      detail: health.deadLetters.toLocaleString("en-US"),
       healthy: health.deadLetters === 0,
     },
   ];
@@ -188,66 +208,42 @@ export function DashboardOverview({ stats, health, trend, recent, setup }: Dashb
   return (
     <div className="page-stack">
       <PageHeader
-        description="Monitor delivery, routing, callbacks, and provider health across every product."
-        title="Delivery pipeline"
+        description="A clear view of your messages and the work that needs attention."
+        title="Overview"
       />
-      <Grid.Row gutter={[16, 16]}>
+      <div className={styles.metrics}>
         {metrics.map((metric) => (
-          <Grid.Col key={metric.label} lg={6} sm={12} xs={24}>
-            <Card className="metric-card">
-              <Statistic
-                countDuration={450}
-                countUp
-                extra={metric.extra}
-                groupSeparator={metric.groupSeparator}
-                precision={metric.precision}
-                suffix={metric.suffix}
-                title={metric.label}
-                value={metric.value}
-              />
-            </Card>
-          </Grid.Col>
+          <Card key={metric.label} className={styles.metric}>
+            <Statistic groupSeparator={metric.groupSeparator} precision={metric.precision} suffix={metric.suffix} title={metric.label} value={metric.value} />
+            <div className={styles.metricFoot}>{metric.extra}</div>
+          </Card>
         ))}
-      </Grid.Row>
-      <SetupChecklist state={setup} />
-      <Grid.Row gutter={[16, 16]}>
-        <Grid.Col lg={16} xs={24}>
-          <Card
-            extra={
-              <Space aria-label="Chart legend" size="medium">
-                <Badge color="gray" text="Accepted" />
-                <Badge color="green" text="Delivered" />
-              </Space>
-            }
-            title="Delivery trend"
-          >
-            <DeliveryChart data={trend} />
-          </Card>
-        </Grid.Col>
-        <Grid.Col lg={8} xs={24}>
-          <Card
-            extra={<Badge color={health.workerAlive ? "green" : "gold"} text={health.workerAlive ? "Healthy" : "Attention"} />}
-            title="Pipeline health"
-          >
-            <List bordered={false} size="small">
-              {healthItems.map((item) => (
-                <List.Item
-                  extra={<Badge status={item.healthy ? "success" : "warning"} text={item.status} />}
-                  key={item.name}
-                >
-                  <List.Item.Meta description={item.detail} title={item.name} />
-                </List.Item>
-              ))}
-            </List>
-          </Card>
-        </Grid.Col>
-      </Grid.Row>
-      <Card
-        extra={<ArcoLink href="/emails" icon={<IconArrowRight aria-hidden="true" />}>View all</ArcoLink>}
-        title="Recent messages"
-      >
+      </div>
+      <div className={styles.window}>
+        <Tooltip content="Daily cohorts start at 00:00 UTC. All timestamps are displayed in your browser’s timezone.">
+          <span>Reporting window: <LocalTime value={stats.windowStart}/> — <LocalTime value={stats.windowEnd}/></span>
+        </Tooltip>
+      </div>
+      <div className={styles.overview}>
+        <Card title="Delivery trend" extra={<Space wrap size="medium"><Badge color="arcoblue" text="Queued"/><Badge color="green" text="Delivered"/></Space>}>
+          <Typography.Paragraph type="secondary">Daily queued cohorts · delivered counts update as events arrive</Typography.Paragraph>
+          <DeliveryChart data={trend} />
+        </Card>
+        <Card title="Pipeline health" extra={<Badge status={healthItems.every(item=>item.healthy) ? "success" : "warning"} text={healthItems.every(item=>item.healthy) ? "Healthy" : "Attention"}/> }>
+          <List bordered={false} size="small">
+            {healthItems.map(item => <List.Item key={item.name}>
+              <div className={styles.healthRow}>
+                <div><ArcoLink href={item.name.includes("Raw") ? "/events" : item.name.includes("Callback") ? "/webhooks" : item.name.includes("Unknown") ? "/emails?status=unknown" : "/logs"}>{item.name}</ArcoLink><div className={styles.healthDetail}>{item.detail}</div></div>
+                <Badge status={item.healthy ? "success" : "warning"} text={item.status}/>
+              </div>
+            </List.Item>)}
+          </List>
+        </Card>
+      </div>
+      <Card title="Recent messages" extra={<ArcoLink href="/emails" icon={<IconArrowRight aria-hidden="true" />}>View all</ArcoLink>}>
         <EmailTable compact records={recent} variant="embedded" />
       </Card>
+      <SetupChecklist state={setup} />
     </div>
   );
 }

@@ -1,131 +1,45 @@
 "use client";
 
-import {
-  Button,
-  Card,
-  Link as ArcoLink,
-  Progress,
-  Space,
-  Steps,
-  Tooltip,
-  Typography,
-} from "@arco-design/web-react";
-import { IconArrowRight, IconDown, IconUp } from "@arco-design/web-react/icon";
+import { Alert, Badge, Button, Card, Collapse, Select, Space, Tag, Typography } from "@arco-design/web-react";
 import { useState } from "react";
+import styles from "./dashboard.module.css";
 
-export type SetupState = {
-  providers: number;
-  identities: number;
-  products: number;
-  senders: number;
-  routes: number;
-  credentials: number;
-  messages: number;
+export type SetupChain = {
+  id:string; product:string; service:string; category:string; sender:string;
+  credential:boolean;provider:boolean;identity:boolean;route:boolean;tested:boolean;observable:boolean;event_seen:boolean;
 };
+export type SetupState = { chains: SetupChain[] };
 
-const steps = [
-  {
-    key: "providers",
-    href: "/providers",
-    title: "Connect a provider",
-    description: "Add the sending account you already use."
-  },
-  {
-    key: "identities",
-    href: "/domains",
-    title: "Verify a sending domain",
-    description: "Publish the provider DNS records, then refresh verification."
-  },
-  {
-    key: "productAndCredential",
-    href: "/api-keys",
-    title: "Create a product and service",
-    description: "Issue the credential used by your application."
-  },
-  {
-    key: "senders",
-    href: "/senders",
-    title: "Add a sender profile",
-    description: "Choose the visible From address for a message category."
-  },
-  {
-    key: "routes",
-    href: "/routing",
-    title: "Set a delivery route",
-    description: "Attach the verified identity to the provider account."
-  },
-  {
-    key: "messages",
-    href: "/emails/compose",
-    title: "Send a test message",
-    description: "Use the same acceptance path as your application."
-  }
-] as const;
-
-export function SetupChecklist({ state }: { state: SetupState }) {
-  const [expanded, setExpanded] = useState(false);
-  const complete = (key: typeof steps[number]["key"]) => {
-    if (key === "productAndCredential") return state.products > 0 && state.credentials > 0;
-    return state[key] > 0;
-  };
-  const firstIncompleteIndex = steps.findIndex((step) => !complete(step.key));
-  if (firstIncompleteIndex === -1) return null;
-  const firstIncomplete = steps[firstIncompleteIndex];
-  const completedCount = steps.filter((step) => complete(step.key)).length;
-  const progress = Math.round((completedCount / steps.length) * 100);
-
-  return (
-    <Card
-      extra={
-        <Space size="mini">
-          <Tooltip content={expanded ? "Hide setup steps" : "Show all setup steps"}>
-            <Button
-              aria-label={expanded ? "Hide setup steps" : "Show all setup steps"}
-              icon={expanded ? <IconUp aria-hidden="true" /> : <IconDown aria-hidden="true" />}
-              onClick={() => setExpanded((current) => !current)}
-              shape="circle"
-              type="text"
-            />
-          </Tooltip>
-          <Button
-            href={firstIncomplete.href}
-            icon={<IconArrowRight aria-hidden="true" />}
-            type="text"
-          >
-            Continue setup
-          </Button>
-        </Space>
-      }
-      title="Finish delivery setup"
-    >
-      <Space direction="vertical" size="medium" className="setup-checklist">
-        <div className="setup-summary">
-          <div className="setup-summary__copy">
-            <Typography.Text bold>Next: {firstIncomplete.title}</Typography.Text>
-            <Typography.Text type="secondary">{firstIncomplete.description}</Typography.Text>
-          </div>
-          <Typography.Text type="secondary">{completedCount} of {steps.length} complete</Typography.Text>
-        </div>
-        <Progress percent={progress} showText={false} size="small" steps={steps.length} />
-        {expanded && (
-          <div className="setup-steps">
-            <Steps current={firstIncompleteIndex + 1} direction="vertical">
-              {steps.map((step, index) => {
-                const done = complete(step.key);
-                const active = index === firstIncompleteIndex;
-                return (
-                  <Steps.Step
-                    description={step.description}
-                    key={step.key}
-                    status={done ? "finish" : active ? "process" : "wait"}
-                    title={<ArcoLink href={step.href}>{step.title}</ArcoLink>}
-                  />
-                );
-              })}
-            </Steps>
-          </div>
-        )}
-      </Space>
-    </Card>
-  );
+export function SetupChecklist({state}:{state:SetupState}) {
+  const [selected,setSelected]=useState(state.chains[0]?.id);
+  const chain=state.chains.find(row=>row.id===selected) ?? state.chains[0];
+  const steps = [
+    {title:"Service credential",done:chain?.credential,href:"/api-keys"},
+    {title:"Tested provider",done:chain?.provider,href:"/providers"},
+    {title:"Verified domain",done:chain?.identity,href:"/domains"},
+    {title:"Matching route",done:chain?.route,href:"/routing"},
+    {title:"Test delivery accepted",done:chain?.tested,href:"/emails/compose"},
+    {title:"Verified event received",done:chain?.observable && chain?.event_seen,href:"/events"}
+  ];
+  const next=steps.find(step=>!step.done);
+  const ready=Boolean(chain?.credential && chain.provider && chain.identity && chain.route);
+  const completed=steps.filter(step=>step.done).length;
+  return <Card title="Delivery readiness" extra={<Tag color={ready ? "green":"orange"}>{ready ? "Ready to send":"Setup required"}</Tag>}>
+    {chain ? <Space direction="vertical" size="medium" style={{width:"100%"}}>
+      <div className={styles.readiness}>
+        <Select aria-label="Service and sender readiness" value={chain.id} onChange={setSelected} options={state.chains.map(row=>({value:row.id,label:`${row.product} / ${row.service} / ${row.category} / ${row.sender}`}))}/>
+        {next ? <Button href={next.href} type="primary">{next.title}</Button> : <Typography.Text type="success">All checks complete</Typography.Text>}
+      </div>
+      <Collapse bordered={false} style={{width:"100%"}}>
+        <Collapse.Item name="checks" header={`${completed} of ${steps.length} checks complete`}>
+          <Typography.Text type="secondary">Checks apply to the selected service, sender, and category. Event verification is checked separately from sending readiness.</Typography.Text>
+          <div className={styles.readinessSteps}>{steps.map(step=><div className={styles.readinessStep} key={step.title}><Badge status={step.done ? "success":"default"}/><Button href={step.href} type="text">{step.title}</Button></div>)}</div>
+          {!chain.observable && <Alert style={{marginTop:16}} type="info" content="Configure event verification on a provider used by this route to observe delivery events."/>}
+        </Collapse.Item>
+      </Collapse>
+    </Space> : <Space direction="vertical" size="medium" style={{width:"100%"}}>
+      <Alert type="info" content="Connect a provider, verify a domain, then create a service credential and sender to start sending."/>
+      <Space wrap><Button href="/providers" type="primary">Connect provider</Button><Button href="/domains">Domains</Button><Button href="/api-keys">Service credentials</Button><Button href="/senders">Senders</Button></Space>
+    </Space>}
+  </Card>
 }

@@ -1,0 +1,177 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-width: 0;
+}
+
+.card,
+.table,
+.detailTabs,
+.descriptions {
+  min-width: 0;
+  width: 100%;
+}
+
+.filters {
+  margin-bottom: 20px;
+}
+
+.filterGrid {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) minmax(160px, 240px) auto;
+  align-items: end;
+  gap: 16px;
+}
+
+.filterGrid :global(.arco-form-item) {
+  margin-bottom: 0;
+}
+
+.filterActions {
+  padding-bottom: 1px;
+}
+
+.resultBar,
+.pagination,
+.eventHeading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.resultBar {
+  margin-bottom: 16px;
+}
+
+.pagination {
+  justify-content: flex-end;
+  margin-top: 20px;
+}
+
+.cellLink {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.cellText,
+.cellSubtext {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cellSubtext {
+  margin-top: 4px;
+}
+
+.timestamp {
+  white-space: nowrap;
+}
+
+.descriptions :global(.arco-descriptions-item-value) {
+  overflow-wrap: anywhere;
+}
+
+.detailTabs :global(.arco-tabs-content) {
+  padding-top: 20px;
+}
+
+.tabPanel,
+.previewContent {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 20px;
+}
+
+.eventContent {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-bottom: 8px;
+  min-width: 0;
+}
+
+.previewFrame {
+  display: block;
+  width: 100%;
+  height: 480px;
+  border: 0;
+  background: white;
+}
+
+.composerGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: start;
+  gap: 20px;
+}
+
+.formFields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 16px;
+}
+
+.fullField {
+  grid-column: 1 / -1;
+}
+
+.formFooter {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.previewCanvas {
+  display: flex;
+  justify-content: center;
+  min-width: 0;
+}
+
+.previewMobile {
+  max-width: 375px;
+}
+
+.previewDesktop {
+  max-width: 100%;
+}
+
+.composerPreview {
+  height: 620px;
+}
+
+@media (max-width: 1199px) {
+  .filterGrid { grid-template-columns: minmax(0, 1fr) minmax(160px, 220px); }
+  .filterActions { grid-column: 1 / -1; }
+  .composerGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 767px) {
+  .filterGrid,
+  .formFields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .filterActions {
+    padding: 0;
+  }
+
+  .fullField {
+    grid-column: auto;
+  }
+
+  .previewFrame {
+    height: 400px;
+  }
+}

@@ -1,10 +1,14 @@
 import type { Metadata } from "next";
 import { MessagesPageView } from "@/components/messages-page-view";
-import { listEmails } from "@/modules/admin/queries";
+import { messageFilters } from "@/modules/admin/message-filters";
+import { listEmailPage } from "@/modules/admin/queries";
 
 export const metadata: Metadata = { title: "Messages" };
 
-export default async function MessagesPage() {
-  const emails = await listEmails();
-  return <MessagesPageView records={emails} />;
+export default async function MessagesPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
+  const params = new URLSearchParams();
+  for (const [key,value] of Object.entries(await searchParams)) if (typeof value === "string") params.set(key,value);
+  const filters = messageFilters(params);
+  const page = await listEmailPage(filters);
+  return <MessagesPageView {...page} filters={filters} />;
 }
