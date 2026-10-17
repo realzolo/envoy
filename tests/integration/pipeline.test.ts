@@ -251,7 +251,7 @@ describe("durable message pipeline", () => {
   it("serializes inbound scanning and persists only one attachment set and callback", async () => {
     const externalMessageId = `inbound-concurrent-${crypto.randomUUID()}`;
     const input = { providerAccountId: "pa_mock", webhookEndpointId: "pwe_mock", rawEventId: null as unknown as string,
-      message: { externalMessageId, from: "sender@example.net", to: ["support@mail.atlas.test"], cc: [], bcc: [], subject: "Concurrent inbound", receivedAt: new Date(), attachments: [{ fileName: "test.txt", contentType: "text/plain", content: new Uint8Array([1,2,3]) }] } };
+      message: { externalMessageId, from: "sender@example.net", to: ["support@mail.atlas.test"], envelopeRecipients: ["support@mail.atlas.test"], cc: [], bcc: [], subject: "Concurrent inbound", receivedAt: new Date(), attachments: [{ fileName: "test.txt", contentType: "text/plain", content: new Uint8Array([1,2,3]) }] } };
     const store = objectStore();
     const original = store.put.bind(store);
     let release!: () => void;
@@ -291,7 +291,7 @@ describe("durable message pipeline", () => {
       const parsed = verified.parsed as { attachment: Uint8Array };
       expect(parsed.attachment).toBeInstanceOf(Uint8Array);
       expect(parsed.attachment).toEqual(bytes);
-      return { externalMessageId: eventId, from: "sender@example.net", to: ["support@mail.atlas.test"], cc: [], bcc: [], subject: "Binary receipt", receivedAt: new Date(), attachments: [{ fileName: "receipt.bin", contentType: "application/octet-stream", content: parsed.attachment }] };
+      return { externalMessageId: eventId, from: "sender@example.net", to: ["support@mail.atlas.test"], envelopeRecipients: ["support@mail.atlas.test"], cc: [], bcc: [], subject: "Binary receipt", receivedAt: new Date(), attachments: [{ fileName: "receipt.bin", contentType: "application/octet-stream", content: parsed.attachment }] };
     });
     try {
       const receipt = await ingestProviderWebhook("mock", "test-endpoint", { rawBody: Buffer.from("{}"), headers: { authorization: "Bearer test-webhook-token" } });
@@ -411,9 +411,9 @@ describe("durable message pipeline", () => {
         targets: [{ accountId: "pa_other", identityId: "pi_atlas_mock" }]
       }, "test-suite")).rejects.toThrow(/identity owned by its provider account/);
       await expect(createDomain({
-        domain: `missing-account-${suffix}.example.test`,
-        accountIds: []
-      }, "test-suite")).rejects.toThrow(/Select at least one provider account/);
+        domain: `duplicate-account-${suffix}.example.test`,
+        accountIds: ["pa_mock", "pa_mock"]
+      }, "test-suite")).rejects.toThrow(/selected only once/);
       const manualCredential = sealSecret({ type: "sendgrid", apiKey: "SG.test-api-key" }, manualAccountId, 1);
       await query("INSERT INTO provider_accounts(id,type,name,status,public_config) VALUES ($1,'sendgrid',$2,'active',$3)", [manualAccountId, `Manual provider ${suffix}`, { region: "global" }]);
       await query("INSERT INTO provider_credentials(id,provider_account_id,credential_version,secret_ciphertext,encrypted_dek,key_version,created_by) VALUES ($1,$2,1,$3,$4,$5,'test-suite')", [
@@ -818,7 +818,7 @@ describe("durable message pipeline", () => {
       type: "inbound.received",
       externalMessageId,
       from: "External Sender <sender@example.net>",
-      to: ["support@mail.atlas.test"],
+      to: ["support@mail.atlas.test"], envelopeRecipients: ["support@mail.atlas.test"],
       subject: "Inbound fixture",
       html: "<p>Safe</p><script>alert(1)</script>",
       text: "Safe"

@@ -7,7 +7,7 @@ import { adminData, type AdminSection } from "@/modules/admin/queries";
 
 const sections = {
   providers: ["Provider Accounts", "Connect sending providers, verify credentials, and secure delivery event webhooks."],
-  domains: ["Sending Domains", "Track each sending domain across provider identities and DNS verification."],
+  domains: ["Domains", "Register mail domains and manage outbound provider identities and DNS verification separately from inbound routes."],
   senders: ["Senders", "Authorize sender domains and addresses for products or services, and manage optional console presets."],
   routing: ["Routing Policies", "Match sending domains and verified provider identities to delivery scope."],
   "api-keys": ["Service Credentials", "Issue isolated, revocable credentials for internal services."],

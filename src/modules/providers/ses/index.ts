@@ -1,3 +1,4 @@
+import { mailAddresses, smtpRecipients } from "../inbound-fields";
 import { createVerify } from "node:crypto";
 import {
   CreateEmailIdentityCommand,
@@ -96,6 +97,7 @@ export const sesModule: ProviderModule = {
       webhookSecurity: "SNS certificate signature and TopicArn",
       eventTypes: Object.keys(eventMap),
       ...nativeMailCapabilities,
+      inboundEnvelopeRecipients: true,
       envelopeRecipients: true,
       requiresTo: false,
       maxMessageBytes: 40_000_000,
@@ -241,10 +243,13 @@ export const sesModule: ProviderModule = {
       return {
         externalMessageId: String(mail.messageId ?? action.objectKey),
         messageId: parsed.messageId,
+        envelopeRecipients: smtpRecipients(receipt.recipients),
+        replyTo: mailAddresses(parsed.replyTo), inReplyTo: parsed.inReplyTo,
+        references: typeof parsed.references === "string" ? [parsed.references] : parsed.references ?? [],
         from: parsed.from?.text ?? "",
-        to: parsed.to ? Array.isArray(parsed.to) ? parsed.to.map(x => x.text) : [parsed.to.text] : [],
-        cc: parsed.cc ? Array.isArray(parsed.cc) ? parsed.cc.map(x => x.text) : [parsed.cc.text] : [],
-        bcc: parsed.bcc ? Array.isArray(parsed.bcc) ? parsed.bcc.map(x => x.text) : [parsed.bcc.text] : [],
+        to: mailAddresses(parsed.to),
+        cc: mailAddresses(parsed.cc),
+        bcc: mailAddresses(parsed.bcc),
         subject: parsed.subject ?? "",
         html: typeof parsed.html === "string" ? parsed.html : undefined,
         text: parsed.text,

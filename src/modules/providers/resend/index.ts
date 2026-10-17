@@ -1,3 +1,4 @@
+import { inboundHeaders } from "../inbound-fields";
 import { Resend } from "resend";
 import { Webhook } from "svix";
 import { type CanonicalEventType, type ManagedIdentityStatus, type ProviderModule } from "../contracts";
@@ -34,6 +35,7 @@ export const resendModule: ProviderModule = {
       webhookSecurity: "Svix HMAC",
       eventTypes: Object.keys(eventMap),
       ...nativeMailCapabilities,
+      inboundEnvelopeRecipients: false,
       maxMessageBytes: 40_000_000,
       tagValuePattern: "^[A-Za-z0-9_-]{0,256}$",
       scheduling: false
@@ -171,7 +173,10 @@ export const resendModule: ProviderModule = {
       }
       return {
         externalMessageId: id,
+        ...await inboundHeaders(result.data.headers),
         messageId: result.data.message_id,
+        // The current contract does not identify SMTP envelope recipients. Fail closed.
+        envelopeRecipients: undefined,
         from: result.data.from,
         to: result.data.to,
         cc: result.data.cc ?? [],

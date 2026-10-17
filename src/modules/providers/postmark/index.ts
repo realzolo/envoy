@@ -1,3 +1,4 @@
+import { inboundHeaders } from "../inbound-fields";
 import { timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import { CanonicalProviderError, type CanonicalEventType, type ProviderModule } from "../contracts";
@@ -30,6 +31,7 @@ export const postmarkModule: ProviderModule = {
       webhookSecurity: "Basic Auth, opaque URL, IP allowlist, schema validation",
       eventTypes: Object.keys(eventMap),
       ...nativeMailCapabilities,
+      inboundEnvelopeRecipients: true,
       scheduling: false
     }
   },
@@ -119,12 +121,15 @@ export const postmarkModule: ProviderModule = {
           contentId: typeof a.ContentID === "string" ? a.ContentID : undefined
         }]
       }) : [];
+      const fields = await inboundHeaders(p.Headers);
       return {
         externalMessageId: String(p.MessageID ?? verified.providerEventId ?? crypto.randomUUID()),
-        messageId: typeof p.MessageID === "string" ? p.MessageID : undefined,
+        ...fields,
+        envelopeRecipients: typeof p.OriginalRecipient === "string" ? [p.OriginalRecipient] : undefined,
+        replyTo: p.ReplyTo ? (await inboundHeaders(`Reply-To: ${String(p.ReplyTo)}`)).replyTo : fields.replyTo,
         from: String(p.From ?? ""),
-        to: Array.isArray(p.ToFull) ? p.ToFull.map(item => String((item as Record<string, unknown>).Email ?? "")) : String(p.To ?? "").split(",").filter(Boolean),
-        cc: Array.isArray(p.CcFull) ? p.CcFull.map(item => String((item as Record<string, unknown>).Email ?? "")) : String(p.Cc ?? "").split(",").filter(Boolean),
+        to: Array.isArray(p.ToFull) ? p.ToFull.map(item => String((item as Record<string, unknown>).Email ?? "")) : (await inboundHeaders(`To: ${String(p.To ?? "")}`)).to,
+        cc: Array.isArray(p.CcFull) ? p.CcFull.map(item => String((item as Record<string, unknown>).Email ?? "")) : (await inboundHeaders(`Cc: ${String(p.Cc ?? "")}`)).cc,
         bcc: Array.isArray(p.BccFull) ? p.BccFull.map(item => String((item as Record<string, unknown>).Email ?? "")) : String(p.Bcc ?? "").split(",").filter(Boolean),
         subject: String(p.Subject ?? ""),
         html: typeof p.HtmlBody === "string" ? p.HtmlBody : undefined,

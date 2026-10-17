@@ -25,7 +25,7 @@ export function SetupChecklist({state}:{state:SetupState}) {
   const next=steps.find(step=>!step.done);
   const ready=Boolean(chain?.credential && chain.grant && chain.provider && chain.identity && chain.route);
   const completed=steps.filter(step=>step.done).length;
-  return <Card title="Delivery readiness" extra={<Tag color={ready ? "green":"orange"}>{ready ? "Ready to send":"Setup required"}</Tag>}>
+  return <Card title="Outbound configuration" extra={<Tag color={ready ? "green":"orange"}>{ready ? "Send configuration ready":"Setup required"}</Tag>}>
     {chain ? <Space direction="vertical" size="medium" style={{width:"100%"}}>
       <div className={styles.readiness}>
         <Select aria-label="Service and domain authorization readiness" value={chain.id} onChange={setSelected} options={state.chains.map(row=>({value:row.id,label:`${row.product} / ${row.service} / ${row.category} / ${row.sender}`}))}/>
@@ -33,7 +33,7 @@ export function SetupChecklist({state}:{state:SetupState}) {
       </div>
       <Collapse bordered={false} style={{width:"100%"}}>
         <Collapse.Item name="checks" header={`${completed} of ${steps.length} checks complete`}>
-          <Typography.Text type="secondary">Checks apply to the selected service, sender, and category. Event verification is checked separately from sending readiness.</Typography.Text>
+          <Typography.Text type="secondary">Checks apply to outbound configuration for the selected service, sender, and category. Runtime authorization and capacity are checked on every submission. Inbound routes, received-mail evidence, and callback delivery are separate; a successful callback does not prove business processing.</Typography.Text>
           <div className={styles.readinessSteps}>{steps.map(step=><div className={styles.readinessStep} key={step.title}><Badge status={step.done ? "success":"default"}/><Button href={step.href} type="text">{step.title}</Button></div>)}</div>
           {!chain.observable && <Alert style={{marginTop:16}} type="info" content="Configure event verification on a provider used by this route to observe delivery events."/>}
         </Collapse.Item>

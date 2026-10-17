@@ -56,7 +56,7 @@ const navigation = [
     label: "Infrastructure",
     items: [
       { href: "/providers", label: "Provider Accounts", icon: IconCloud },
-      { href: "/domains", label: "Sending Domains", icon: IconPublic },
+      { href: "/domains", label: "Domains", icon: IconPublic },
       { href: "/routing", label: "Routing", icon: IconBranch },
       { href: "/events", label: "Provider Events", icon: IconLiveBroadcast },
     ],

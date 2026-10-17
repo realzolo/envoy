@@ -42,15 +42,11 @@ function Domains({ data }: { data: Data }) {
     }
   }
 
-  if (!providers.length) {
-    return <Prerequisite title="Connect a provider account" description="Add an active provider account before associating a sending domain." href="/providers" action="Manage provider accounts" />;
-  }
-
   return (
     <Space direction="vertical" size="large" className={styles.stack}>
       <Panel
-        title="Add sending domain"
-        description="Provision or associate identities on selected providers"
+        title="Register domain"
+        description="Register an inbound domain, or select providers to provision outbound identities"
         defaultExpanded={domains.length === 0}
       >
         <ActionForm fieldErrors={action.fields}
@@ -70,7 +66,7 @@ function Domains({ data }: { data: Data }) {
               <Field
                 field="accountIds"
                 label="Provider accounts"
-                hint="Resend reuses an existing domain or creates one if needed. Amazon SES creates the provider identity. Both show DNS records. For SendGrid, Mailgun, and Postmark, select only an account where this domain is already verified in its official dashboard. A Mailgun account can use only its configured sending domain."
+                hint="Leave providers unselected for an inbound-only domain. Resend reuses an existing domain or creates one if needed. Amazon SES creates the provider identity. Both show DNS records. For SendGrid, Mailgun, and Postmark, select only an account where this domain is already verified in its official dashboard. A Mailgun account can use only its configured sending domain."
               >
                 <Checkbox.Group
                   options={providers.map(provider => {
@@ -87,7 +83,7 @@ function Domains({ data }: { data: Data }) {
               </Field>
             </Grid.Col>
             <Grid.Col xs={24}>
-              <Space><Submit pending={action.pending} labelText="Create domain and identities" /></Space>
+              <Space><Submit pending={action.pending} labelText="Register domain" /></Space>
             </Grid.Col>
           </Grid.Row>
         </ActionForm>

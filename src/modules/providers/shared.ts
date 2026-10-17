@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { type CanonicalEvent, type CanonicalMessage, type EmailAddress, type ProviderCapabilities, CanonicalProviderError, type ProviderSendResult } from "./contracts";
 
 export const nativeMailCapabilities = {
+  inboundEnvelopeRecipients: false,
   cc: true, bcc: true, replyTo: true, customHeaders: true, threading: true,
   outboundAttachments: true, inlineAttachments: true, envelopeRecipients: false,
   requiresTo: true, maxRecipients: 50, maxMessageBytes: 10_000_000

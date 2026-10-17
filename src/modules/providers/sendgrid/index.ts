@@ -1,3 +1,5 @@
+import { simpleParser } from "mailparser";
+import { inboundHeaders, mailAddresses, smtpRecipients } from "../inbound-fields";
 import { createHash, createPublicKey, verify as verifySignature } from "node:crypto";
 import type { CanonicalEventType, ProviderModule } from "../contracts";
 import { nativeMailCapabilities, assertMessageCapabilities, messageHeaders, safeDiagnostic, accepted, submitRequest, eventDate, stableEventId, checkedJson, event, header, type MultipartValue, parseMultipart } from "../shared";
@@ -29,6 +31,7 @@ export const sendgridModule: ProviderModule = {
       webhookSecurity: "ECDSA signed event and inbound webhooks",
       eventTypes: Object.keys(eventMap),
       ...nativeMailCapabilities,
+      inboundEnvelopeRecipients: true,
       maxRecipients: 1000,
       maxMessageBytes: 30_000_000,
       scheduling: false
@@ -134,21 +137,28 @@ export const sendgridModule: ProviderModule = {
       if (verified.nativeType !== "inbound") return null;
       const p = verified.parsed as Record<string, MultipartValue | MultipartValue[]>;
       const text = (key: string) => typeof p[key] === "string" ? p[key] as string : "";
+      const mime = text("email") ? await simpleParser(text("email")) : null;
+      const fields = await inboundHeaders(text("email") || text("headers"));
       const files = Object.entries(p).filter(([key, value]) => key.startsWith("attachment") && !Array.isArray(value) && typeof value !== "string").map(([, value]) => {
         const file = value as Exclude<MultipartValue, string>;
         return { fileName: file.name, contentType: file.type, content: file.bytes }
       });
       return {
+        ...fields,
         externalMessageId: verified.providerEventId ?? crypto.randomUUID(),
-        from: text("from"),
-        to: text("to").split(",").filter(Boolean),
-        cc: text("cc").split(",").filter(Boolean),
+        envelopeRecipients: (() => {
+          try { const value = JSON.parse(text("envelope")); return smtpRecipients(value.to); }
+          catch { return undefined; }
+        })(),
+        from: mime?.from?.text ?? text("from"),
+        to: mime ? mailAddresses(mime.to) : (await inboundHeaders(`To: ${text("to")}`)).to,
+        cc: mime ? mailAddresses(mime.cc) : (await inboundHeaders(`Cc: ${text("cc")}`)).cc,
         bcc: [],
-        subject: text("subject"),
-        html: text("html"),
-        text: text("text"),
-        rawMime: undefined,
-        attachments: files,
+        subject: mime?.subject ?? text("subject"),
+        html: mime ? (typeof mime.html === "string" ? mime.html : undefined) : text("html"),
+        text: mime?.text ?? text("text"),
+        rawMime: text("email") ? new TextEncoder().encode(text("email")) : undefined,
+        attachments: mime ? mime.attachments.map(file => ({ fileName: file.filename ?? "attachment", contentType: file.contentType, content: new Uint8Array(file.content), contentId: file.cid })) : files,
         receivedAt: new Date()
       }
     }

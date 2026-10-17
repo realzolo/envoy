@@ -133,7 +133,7 @@ const callbackInputSchema = z.object({
 
 const domainInputSchema = z.object({
   domain: domainNameSchema,
-  accountIds: z.array(identifierSchema).min(1, "Select at least one provider account").max(20),
+  accountIds: z.array(identifierSchema).max(20),
 }).strict().superRefine((input, context) => {
   const accounts = new Set<string>();
   input.accountIds.forEach((accountId, index) => {
@@ -742,12 +742,9 @@ export async function createInboundRoute(input: {
 
     const domain = await client.query<{ id: string; status: string }>("SELECT id,status FROM sending_domains WHERE id=$1", [validated.domainId]);
     const product = await client.query<{ id: string }>("SELECT id FROM products WHERE id=$1 AND status='active'", [validated.productId]);
-    const identity = await client.query<{ id: string }>(`SELECT id FROM provider_identities
-      WHERE sending_domain_id=$1 AND provider_account_id=$2 AND status='verified'`, [validated.domainId, endpoint.provider_account_id]);
     if (!domain.rows[0]) throw new Error("Inbound domain not found");
     if (domain.rows[0].status !== "active") throw new Error("Inbound routes require an active sending domain");
     if (!product.rows[0]) throw new Error("Product not found");
-    if (!identity.rows[0]) throw new Error("The selected provider endpoint has no usable identity for this domain");
 
     if (validated.serviceId) {
       const service = (await client.query<{ product_id: string }>("SELECT product_id FROM services WHERE id=$1", [validated.serviceId])).rows[0];

@@ -195,6 +195,7 @@ export async function getInboundMessage(id: string, serviceId: string) {
     id: string;
     external_message_id: string | null;
     message_id: string | null;
+    envelope_recipients: string[]; reply_to: string[]; in_reply_to: string | null; references_ids: string[];
     from_email: string;
     to_emails: string[];
     cc_emails: string[];
@@ -206,7 +207,7 @@ export async function getInboundMessage(id: string, serviceId: string) {
     status: string;
     rejection_reason: string | null;
     received_at: Date;
-  }>("SELECT id,external_message_id,message_id,from_email,to_emails,cc_emails,bcc_emails,subject,sanitized_html,text_body,content_purged_at,status,rejection_reason,received_at FROM inbound_messages WHERE id=$1 AND service_id=$2", [id, serviceId])).rows[0];
+  }>("SELECT id,external_message_id,message_id,envelope_recipients,reply_to,in_reply_to,references_ids,from_email,to_emails,cc_emails,bcc_emails,subject,sanitized_html,text_body,content_purged_at,status,rejection_reason,received_at FROM inbound_messages WHERE id=$1 AND service_id=$2", [id, serviceId])).rows[0];
   if (!message) return null;
   const attachments = (await query<{
     id: string;
@@ -219,6 +220,11 @@ export async function getInboundMessage(id: string, serviceId: string) {
   }>("SELECT id,file_name,content_type,size_bytes::text,content_id,scan_status,content_purged_at FROM inbound_attachments WHERE inbound_message_id=$1 ORDER BY created_at,id", [id])).rows;
   return {
     id: message.id,
+    messageId: message.message_id ?? null,
+    envelopeRecipients: message.envelope_recipients ?? [],
+    replyTo: message.reply_to ?? [],
+    inReplyTo: message.in_reply_to ?? null,
+    references: message.references_ids ?? [],
     from: message.from_email,
     to: message.to_emails,
     cc: message.cc_emails,

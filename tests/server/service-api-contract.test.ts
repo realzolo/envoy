@@ -117,6 +117,12 @@ describe("public API boundary", () => {
   });
   it("publishes response schemas, filters, errors and attachment authorization in OpenAPI", async () => {
     const document = await openapi(new Request("https://envoy.test/api/v1/openapi.json")).json();
+    expect(document.components.schemas.MailDiscovery.properties.mailboxLogin.const).toBe(false);
+    expect(document.components.schemas.InboundDetail.required).toContain("envelopeRecipients");
+    expect(document.components.schemas.InboundDetail.required).toContain("messageId");
+    expect(document.paths["/capabilities"].get.responses["200"].content["application/json"].schema.required).toContain("mail");
+    expect(document.paths["/capabilities"].get.responses["200"].content["application/json"].schema.properties.providerCapabilities.deprecated).toBe(true);
+    expect(document.webhooks.inboundReceived.post.requestBody.content["application/json"].schema.$ref).toContain("InboundReceivedEvent");
     expect(document.components.schemas.Problem.required).toContain("requestId");
     expect(document.components.schemas.CreateMessage.properties.metadata.propertyNames.pattern).toContain("64");
     expect(document.paths["/messages"].get.responses["200"].content["application/json"].schema.properties.nextCursor).toBeDefined();

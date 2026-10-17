@@ -25,6 +25,7 @@ pipeline, and security model.
 
 - [Deployment guide](docs/DEPLOYMENT.md)
 - [Release and operations guide](docs/OPERATIONS.md)
+- [Business mail connection contract and runnable example](docs/API.md#business-mail-connection-and-discovery)
 - [Contributing guide](CONTRIBUTING.md)
 - [Security policy](SECURITY.md)
 
@@ -94,7 +95,7 @@ The service API is self-describing at `GET /api/v1` and `GET /api/v1/openapi.jso
 | `/files` | Upload private, service-owned outbound attachments |
 | `/messages/{id}/events` | Inspect the complete delivery timeline |
 | `/messages/{id}/attempts` | Inspect submission attempts and structured diagnostics |
-| `/capabilities`         | Discover limits, native mail features, and sender authorizations                            |
+| `/capabilities`         | Discover product/service, sender/receiver ranges, limits, configuration status and evidence                            |
 
 Sender authorization is configured once under **Senders** for a product or service: either every address in a verified
 domain, or one exact local part. Domain verification proves control; the grant authorizes a caller. Sender presets are

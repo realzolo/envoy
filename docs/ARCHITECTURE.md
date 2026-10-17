@@ -78,7 +78,7 @@ Create a provider account in the operations console, enter its public configurat
 connectivity. Credentials are never returned by the API. Rotation creates a new credential version, disables its routing
 eligibility until a successful fresh connection test, and revokes the prior version in one transaction.
 
-Create a sending domain in **Sending Domains** and select the provider accounts that should carry it. For Resend,
+Register an inbound-only domain in **Domains** without selecting outbound providers. To enable sending, create or associate a sending domain in **Domains** and select the provider accounts that should carry it. For Resend,
 Envoy searches the account's domains with the official SDK, retrieves an existing domain's current status and DNS
 records, and creates a domain only when no match exists. **Refresh DNS** also recovers a failed association this way.
 For Amazon SES, Envoy creates the provider identity and displays its DNS records. For SendGrid, Mailgun, and Postmark,
@@ -146,7 +146,35 @@ without delivering a probe email or requiring unrelated profile permissions.
 
 ## Inbound safety
 
-Inbound routes match provider endpoint, recipient domain, and local-part pattern. Raw MIME and attachments are
+Inbound routes match a verified provider endpoint and trusted SMTP envelope recipients by exact domain and local-part
+pattern. Sender grants and outbound identity verification are separate from receiving-route configuration. Every matching
+route participates; overlapping routes merge into one service-owned copy, and multiple services receive private copies.
+The deduplication key is provider account + external transport message identity + service (or administrator-only product
+scope). Identical patterns may explicitly target different services. Bcc/envelope recipient data are filtered per copy;
+visible To/Cc remain content headers. Raw MIME is administrator infrastructure data and has no service download API.
+Callback endpoints are checked against the copy's service at enqueue time, even if route configuration is inconsistent.
+
+Trusted sources in the adapters are:
+
+| Provider | Ownership source | Standard fields |
+|---|---|---|
+| SES | Signed SNS `receipt.recipients`, not `mail.destination` or MIME headers | Parsed MIME Message-ID, Reply-To, In-Reply-To, References |
+| SendGrid | Signed Inbound Parse `envelope.to`; malformed/missing envelopes stay unknown | MIME headers, including raw MIME mode |
+| Mailgun | Authenticated route payload `recipient`, with no To fallback | `message-headers`; transport token remains distinct from RFC Message-ID |
+| Postmark | Authenticated inbound `OriginalRecipient`, never ToFull/CcFull | `Headers` for RFC IDs plus `ReplyTo`; provider MessageID remains separate |
+| Resend | Unknown under the currently verified retrieval contract; quarantined | Retrieved message_id and standard headers are preserved for diagnosis |
+
+Authoritative references: [SES receiving contents](https://docs.aws.amazon.com/ses/latest/dg/receiving-email-notifications-contents.html),
+[SendGrid Inbound Parse](https://www.twilio.com/docs/sendgrid/for-developers/parsing-email/setting-up-the-inbound-parse-webhook),
+[Mailgun route payload](https://documentation.mailgun.com/docs/mailgun/user-manual/receive-forward-store/receive-http),
+[Postmark inbound webhook](https://postmarkapp.com/developer/webhooks/inbound-webhook), and
+[Resend received-email retrieval](https://resend.com/docs/api-reference/emails/retrieve-received-email).
+The last contract does not establish that its To/Bcc fields are SMTP envelope facts, so the adapter does not infer ownership.
+Missing or invalid envelopes and unmatched mail remain administrator-only with stable rejection codes. Old Date headers
+are content, not the database observation time reported as receiving evidence. Routes without a service remain
+administrator-only and cannot leak into a product's services.
+
+Raw MIME and attachments are
 size-limited, stored outside PostgreSQL, scanned through ClamAV when configured, and HTML is sanitized before
 persistence.
 Attachments are stored with `scan_status=skipped` when ClamAV is disabled.
@@ -197,7 +225,7 @@ Every service uses the fixed `SERVICE_REQUESTS_PER_MINUTE` request limit. The ef
 
 Message acceptance is asynchronous and idempotent. A successful request commits the message, one delivery per
 recipient, and durable outbox work before returning `202`. The API also exposes cursor-paginated message, delivery,
-event, and inbound collections; sender authorization/capability discovery; private attachment upload; product suppression management; pre-provider cancellation;
+event, and inbound collections; sender authorization, receiving-route and evidence discovery; private attachment upload; product suppression management; pre-provider cancellation;
 and controlled retry. An `unknown` delivery can only be retried when the caller explicitly acknowledges duplicate risk.
 
 ## Diagnostics
@@ -260,3 +288,18 @@ IDs, payload hashes or idempotency summaries. Active and unknown work is exclude
 its database reference is marked purged; failed cleanup can be rerun. Purged attachments cannot be downloaded.
 
 Server processes and database sessions use UTC; API timestamps are UTC ISO 8601 (`Z`). The console formats timestamps in the current browser timezone and labels that zone. Cohort/rate/quota windows are UTC and labeled explicitly.
+
+
+## Business connection boundary
+
+Envoy alone manages domains, provider identities/credentials, DNS instructions, sender grants and inbound routes.
+The domain administrator publishes records in the real DNS platform; Envoy detects/presents provider results. A business
+service binds its service key and chosen addresses, supplies native mail content, retrieves owned resources and consumes
+signed canonical events. It never holds administrator credentials or manages domain verification.
+
+The `mail` discovery object describes address permissions, not physical mailboxes. Domain grants are never expanded to
+invented mailbox lists. Inbound patterns describe only configured routes and do not prove all addresses can receive.
+Configuration readiness, actual canonical send/receive facts, and callback HTTP delivery are independent dimensions.
+Runtime capacity and external receiving reachability remain unknown at discovery; no missing evidence is synthesized.
+An HTTP-success callback says nothing about the caller's conversation or ticket processing. See the exact status/error
+contract and compatibility notes in [API.md](API.md#business-mail-connection-and-discovery).

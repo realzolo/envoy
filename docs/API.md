@@ -7,7 +7,7 @@ Envoy exposes one native-mail service API at `/api/v1`. `GET /api/v1` lists reso
 
 Use `Authorization: Bearer <service-key>`. Each key belongs to one service and product. Resource ownership is checked
 on every request, including files, events, and request diagnostics; another service's identifiers are not accessible.
-`GET /capabilities` returns current limits, supported mail features, and sender authorizations.
+`GET /capabilities` returns product/service identity, current limits, native mail features, explicit sender/receiver scopes, configuration status and observed evidence. See the business connection contract below.
 
 An administrator grants the product or service an active domain or exact sender address under **Senders**. Verification
 of a domain on a provider is a separate prerequisite. A caller may directly specify any authorized From address and name.
@@ -149,3 +149,136 @@ API timestamps use UTC ISO 8601. The console formats them in the browser timezon
 request diagnostics, and audit details have separately configured retention. Active or unknown mail is protected from
 content cleanup; identifiers, state, errors, and idempotency summaries remain useful after body removal. Check
 `contentAvailable` and content-purge fields before depending on stored content.
+
+## Business mail connection and discovery
+
+Business configuration consists of the Envoy base URL, one service key, the chosen authorized From/receiving address(es),
+and the callback connection (HTTPS URL and signing secret issued by Envoy). Business services never need administrator
+credentials, provider accounts, DNS records, domain verification APIs, or a sender profile ID. Each APP can bind its own
+service key; APP identity, mailbox purposes, conversations, assignees and ticket links belong to the caller.
+
+`GET /capabilities` still returns `product`, `service`, limits and native features. Its new `mail` object is the
+provider-neutral integration contract. These are address permissions, **not IMAP/SMTP login accounts** (`mailboxLogin:false`).
+All entries and evidence are scoped to this credential's service; product sender grants apply to each service, but
+never grant access to another service's mail or inbound routes.
+
+| Field | Meaning |
+|---|---|
+| `mail.senders[].kind` | `exact_address` has a complete `address`; `domain` has `address:null` and authorizes From addresses only on that exact `domain`, not subdomains |
+| `scope`, `authorization` | Grant applies to `product` or `service`; current state is `granted` or `revoked`. Disabled grants remain discoverable here for diagnosis |
+| `displayName` | Optional public From display name from an existing active exact-address console preset; `null` when none exists. It is a suggestion, not a required profile |
+| `sending.state` | `configured` means an active grant/domain and a currently configured eligible target with a verified identity and usable credential exist; otherwise `unavailable` |
+| `sending.categories` | Categories with an eligible configured target; a `null` entry means the policy has no category restriction |
+| `sending.runtimeAvailability` | Always `unknown`: discovery does not reserve capacity, evaluate the eventual content, guarantee provider availability, or override live authorization checks |
+| `evidence.lastAcceptedAt` / `lastDeliveredAt` | Latest actual canonical acceptance/delivery fact for this service and sender range, or `null` (unverified). Includes recipient and submission facts; a submission delivery fact does not prove every recipient succeeded |
+| `mail.receivers[].kind` | `exact_address` has a complete `address`; `local_part_pattern` has `address:null`, an exact `domain`, and `localPartPattern`. `*` matches zero or more local-part characters; no implicit plus-address expansion |
+| `receiving.state` | `configured` means an active Envoy route/domain and secured active ingress with a supported envelope-recipient contract; otherwise `unavailable`. It says nothing about MX or external provider receiving setup |
+| `receiving.externalReadiness` | `unknown`: domain verification never establishes inbound reachability. A pattern describes configured routing, not an enumeration of real mailboxes |
+| `evidence.lastReceivedAt` | Envoy database observation time of the latest ready inbound copy for this service matching that route, or `null` (unverified). Does not use the sender-controlled Date header; historical evidence does not guarantee future receipt |
+| `mail.callbacks.configuration` | `configured` if this service has an active callback endpoint, else `unavailable`; subscriptions and per-route callback choices still determine which events are delivered |
+| `mail.callbacks.latest` | Most recently created callback delivery's `status`, `attemptCount`, `deliveredAt`; `null` when none exists. Pending with zero attempts is not successful delivery |
+| `mail.callbacks.lastDeliveredAt` | Latest successful callback HTTP delivery across this service's endpoints, or `null`. Historical success does not establish that another endpoint/event works |
+| `mail.callbacks.businessProcessing` | Always `unknown`; an HTTP 2xx acknowledges receipt, not a completed conversation or business transaction |
+
+`reasonCodes` are stable machine values; callers should handle unknown future codes with a generic operator-action message:
+
+| Code | Business action |
+|---|---|
+| `SENDER_NOT_AUTHORIZED` | Stop using that From address; ask the Envoy operator to review the grant |
+| `SENDING_DOMAIN_DISABLED` | Ask the Envoy operator to restore sending infrastructure |
+| `NO_ELIGIBLE_ROUTE` | Ask the Envoy operator to configure a usable outbound route/category |
+| `INBOUND_ROUTE_DISABLED` | Choose another configured receiving address or ask the operator |
+| `INBOUND_DOMAIN_DISABLED` | Ask the operator to review the inbound domain |
+| `INBOUND_INGRESS_UNAVAILABLE` | Ask the operator to restore secured provider ingress |
+| `ENVELOPE_RECIPIENT_UNAVAILABLE` | Ownership cannot be established safely; the operator must use an ingress with a documented trusted envelope contract |
+
+DNS records, credential failures and provider setup details remain in Envoy's administrator console. The sender grant
+and From/domain/product state are rechecked during acceptance, submission and retry. A prior `configured` response
+cannot bypass revocation. The send API continues to return problem codes such as `SENDER_NOT_AUTHORIZED` and
+`NO_ELIGIBLE_ROUTE`, with a service-owned `requestId`. An idempotent replay returns the original durable acceptance
+receipt; it does not send again or bypass the worker's current checks.
+
+## Inbound ownership, standard fields and callbacks
+
+Routing uses provider-authenticated SMTP recipients, never visible To/Cc/Bcc, `Delivered-To`, `X-Original-To`, arbitrary
+MIME headers, or a provider's outbound domain verification status. A matching sender grant does not confer receiving
+permission. Routes without a service are administrator-only; they are not inherited by every service in the product.
+
+Every matching route participates. Identical exact patterns can explicitly target different services. Overlapping
+routes for the same service merge into one copy with the union of matched envelope addresses; each distinct active
+callback endpoint selected by those routes receives one event. Other services receive separate IDs and private
+attachment ownership. Repeated provider message receipts do not create new copies, attachments or callbacks within
+the same service. A retry after a partial fanout resumes unfinished copies and retains successful ones. Mailgun uses
+its authenticated transport receipt ID for deduplication rather than an untrusted RFC Message-ID.
+
+`GET /inbound-messages/{id}` adds:
+
+```json
+{
+  "messageId": "<mail-id@example.net>",
+  "envelopeRecipients": ["support@brand.example"],
+  "replyTo": ["customer@example.net"],
+  "inReplyTo": "<previous@example.net>",
+  "references": ["<root@example.net>", "<previous@example.net>"]
+}
+```
+
+Missing scalar RFC fields are `null`, missing lists are `[]`. A provider's opaque message ID is never substituted for
+RFC Message-ID. To/Cc remain visible content headers, not proof of ownership; Bcc and `envelopeRecipients` expose only
+addresses matched for the current service. Raw MIME, full provider payloads, and other services' private recipients are
+not exposed through the business API. Attachment downloads require that both mail and attachment belong to this service,
+ready state, retained bytes, and the current scanning policy.
+
+`inbound.received` callbacks retain their stable event ID and existing envelope and add `productId`, `serviceId`,
+`envelopeRecipients`, `messageId`, `replyTo`, `inReplyTo`, and `references` under `data`. Fetch sanitized content and
+private attachment IDs through the service API. `GET /events` remains the outbound delivery-event feed; recover inbound
+mail through `/inbound-messages` pagination and signed inbound callbacks. Use the RFC fields to construct a standard
+reply (`inReplyTo` and `references`); conversation matching and ticket state remain business rules. Missing outbound
+RFC Message-ID is not fabricated from Envoy/provider IDs; use inbound RFC threading fields when available.
+
+Missing/invalid trusted envelopes are quarantined as administrator-only rejected records with
+`ENVELOPE_RECIPIENT_UNAVAILABLE`; no matching active route yields `NO_INBOUND_ROUTE`. No service callback is emitted.
+Terminal content rejection reasons are stable codes: `INBOUND_MESSAGE_TOO_LARGE`, `INBOUND_ATTACHMENT_TOO_LARGE`,
+`INBOUND_MALWARE_DETECTED`. Transient storage/scanner failures remain retryable, rather than becoming a false rejection.
+
+Provider contracts and current adapter behavior are documented in [Architecture](ARCHITECTURE.md#inbound-safety).
+In particular, Resend's current adapter deliberately quarantines incoming messages because the retrieved contract does
+not unambiguously identify SMTP recipients. Its outbound sending support is unchanged.
+
+## Adopting the business connection contract
+
+Sending requests and service credentials are unchanged. Capabilities, inbound detail and inbound callback changes are
+additive. Existing `senderGrants` is retained as a legacy active-grant view; new integrations use `mail` for explicit
+ranges and status. `providerCapabilities` is retained but deprecated in OpenAPI; business logic should stop depending
+on its provider names. Strict response/callback decoders need to allow the new fields or regenerate from OpenAPI.
+
+Consumers must switch ownership assumptions from visible `to` to `envelopeRecipients`, handle multiple private inbound
+IDs across services, and treat missing RFC fields and evidence as unknown. Do not implement domain/DNS screens, cache
+capabilities as permanent authorization, or assume send authorization grants inbound access. Existing Resend inbound
+consumers must arrange a supported trusted ingress in Envoy before relying on delivery. Historical mail whose ownership
+was previously guessed is not automatically redistributed or relabeled as verified; operators must review it separately.
+
+The final initial schema now stores per-service inbound copies and RFC fields; see the schema adoption notes in
+[Operations](OPERATIONS.md#mail-access-operations). No production data or external configuration is changed by this patch.
+
+A runnable minimal connection example is [examples/service-mail.mjs](../examples/service-mail.mjs):
+
+```bash
+export ENVOY_URL=https://envoy.internal.example
+export ENVOY_SERVICE_KEY='<service-scoped key issued by Envoy>'
+export ENVOY_MAILBOX=support@brand.example
+export ENVOY_CALLBACK_SECRET='<callback connection secret issued by Envoy>'
+node examples/service-mail.mjs discover
+node examples/service-mail.mjs send order-123 customer@example.net
+node examples/service-mail.mjs inbound
+node examples/service-mail.mjs reply inb_example customer@example.net
+node examples/service-mail.mjs serve
+node examples/service-mail.mjs events
+```
+
+These commands are examples to run deliberately; `send` and `reply` submit real requests when connected to a real Envoy.
+The example callback server verifies timestamps and HMAC, atomically deduplicates by event ID, and durably saves an inbox
+receipt before returning 202. `events` reads those receipts and uses the same service key to retrieve inbound content.
+Replace its printing with the caller's own transactional business handler and durable processing state; HTTP acknowledgement
+still does not mean that handler finished. Envoy operators register the HTTPS callback URL and subscriptions in Envoy;
+no provider or DNS setting is supplied by this business process.

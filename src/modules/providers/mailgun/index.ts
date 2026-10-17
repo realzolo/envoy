@@ -1,3 +1,4 @@
+import { inboundHeaders } from "../inbound-fields";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { CanonicalEventType, ProviderModule } from "../contracts";
 import { nativeMailCapabilities, assertMessageCapabilities, buildMimeMessage, messageRecipients, accepted, submitRequest, eventDate, stableEventId, checkedJson, decodeJson, event, header, type MultipartValue, parseMultipart } from "../shared";
@@ -23,6 +24,7 @@ export const mailgunModule: ProviderModule = {
       webhookSecurity: "Timestamp token HMAC",
       eventTypes: Object.keys(eventMap),
       ...nativeMailCapabilities,
+      inboundEnvelopeRecipients: true,
       envelopeRecipients: true,
       requiresTo: false,
       maxRecipients: 1000,
@@ -110,12 +112,15 @@ export const mailgunModule: ProviderModule = {
         const file = value as Exclude<MultipartValue, string>;
         return { fileName: file.name, contentType: file.type, content: file.bytes }
       });
+      const fields = await inboundHeaders(text("message-headers") ? JSON.parse(text("message-headers")) : "");
       return {
-        externalMessageId: text("Message-Id") || verified.providerEventId || crypto.randomUUID(),
-        messageId: text("Message-Id"),
-        from: text("sender") || text("from"),
-        to: (text("recipient") || text("To")).split(",").filter(Boolean),
-        cc: text("Cc").split(",").filter(Boolean),
+        ...fields,
+        externalMessageId: verified.providerEventId ?? crypto.randomUUID(),
+        messageId: fields.messageId ?? (text("Message-Id") || undefined),
+        envelopeRecipients: text("recipient") ? [text("recipient")] : undefined,
+        from: text("from") || text("sender"),
+        to: fields.to.length ? fields.to : (await inboundHeaders(`To: ${text("To")}`)).to,
+        cc: fields.cc.length ? fields.cc : (await inboundHeaders(`Cc: ${text("Cc")}`)).cc,
         bcc: [],
         subject: text("subject"),
         html: text("body-html"),

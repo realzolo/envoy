@@ -26,13 +26,15 @@ const route = {
   id: "ir_test",
   product_id: "prd_test",
   service_id: null,
-  callback_endpoint_id: null
+  callback_endpoint_id: null,
+  recipients: ["support@example.test"]
 };
 
 const message = {
   externalMessageId: "external-test",
   from: "sender@example.test",
   to: ["support@example.test"],
+  envelopeRecipients: ["support@example.test"],
   cc: [],
   bcc: [],
   subject: "Inbound test",
@@ -92,6 +94,7 @@ describe("inbound attachment scanning", () => {
     configureTransactions();
     mocks.query
       .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
       .mockResolvedValueOnce({ rows: [], rowCount: 1 })
       .mockResolvedValueOnce({ rows: [{ id: "inb_test", status: "scanning" }], rowCount: 1 });
     mocks.put.mockRejectedValueOnce(new Error("S3 temporarily unavailable")).mockResolvedValueOnce(undefined);
@@ -102,7 +105,7 @@ describe("inbound attachment scanning", () => {
       rawEventId: "raw_test",
       message
     })).rejects.toThrow("S3 temporarily unavailable");
-    expect(mocks.query.mock.calls.some(([sql]) => String(sql).includes("status='rejected'"))).toBe(false);
+    expect(mocks.query.mock.calls.some(([sql]) => String(sql).includes("status='rejected'") && !String(sql).includes("delivery_scope<>ALL"))).toBe(false);
 
     mocks.query.mockResolvedValue({ rows: [{ id: "inb_test", status: "scanning" }], rowCount: 1 });
     await expect(persistInbound({
@@ -117,6 +120,7 @@ describe("inbound attachment scanning", () => {
   it("rejects message-size violations without retrying the processing failure", async () => {
     configureTransactions();
     mocks.query
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
       .mockResolvedValueOnce({ rows: [], rowCount: 0 })
       .mockResolvedValueOnce({ rows: [], rowCount: 1 })
       .mockResolvedValueOnce({ rows: [], rowCount: 1 });

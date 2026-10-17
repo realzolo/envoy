@@ -405,9 +405,9 @@ CREATE TABLE inbound_routes
     callback_endpoint_id         text        REFERENCES callback_endpoints (id) ON DELETE SET NULL,
     status                       text        NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
     created_at                   timestamptz NOT NULL DEFAULT now(),
-    FOREIGN KEY (service_id, product_id) REFERENCES services (id, product_id) ON DELETE CASCADE,
-    UNIQUE (provider_webhook_endpoint_id, sending_domain_id, local_part_pattern)
+    FOREIGN KEY (service_id, product_id) REFERENCES services (id, product_id) ON DELETE CASCADE
 );
+CREATE UNIQUE INDEX inbound_route_scope ON inbound_routes(provider_webhook_endpoint_id,sending_domain_id,local_part_pattern,COALESCE(service_id,'product:' || product_id));
 
 CREATE TABLE inbound_messages
 (
@@ -420,6 +420,11 @@ CREATE TABLE inbound_messages
     raw_provider_event_id text        REFERENCES raw_provider_events (id) ON DELETE SET NULL,
     external_message_id   text,
     message_id            text,
+    delivery_scope        text NOT NULL DEFAULT 'quarantine',
+    envelope_recipients   text[] NOT NULL DEFAULT '{}',
+    reply_to              text[] NOT NULL DEFAULT '{}',
+    in_reply_to           text,
+    references_ids        text[] NOT NULL DEFAULT '{}',
     from_email            text        NOT NULL,
     to_emails             text[] NOT NULL,
     cc_emails             text[] NOT NULL DEFAULT '{}',
@@ -434,7 +439,7 @@ CREATE TABLE inbound_messages
     processing_deadline_at timestamptz,
     received_at           timestamptz NOT NULL,
     created_at            timestamptz NOT NULL DEFAULT now(),
-    UNIQUE (provider_account_id, external_message_id)
+    UNIQUE (provider_account_id, external_message_id, delivery_scope)
 );
 
 CREATE TABLE inbound_attachments

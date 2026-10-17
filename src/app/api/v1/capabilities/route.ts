@@ -1,3 +1,4 @@
+import { discoverMail } from "@/modules/core/resources/capabilities";
 import { MAX_ATTACHMENT_BYTES, MAX_CONTENT_BYTES, MAX_FILE_BYTES, MAX_REQUEST_BYTES } from "@/lib/contracts";
 import { providerRegistry } from "@/modules/providers/registry";
 import type { ProviderType } from "@/modules/providers/contracts";
@@ -19,6 +20,7 @@ export const GET = serviceRoute(async (_request, identity) => {
     limits: { recipientsPerMessage: 50, contentBytesPerPart: MAX_CONTENT_BYTES, requestBytes: MAX_REQUEST_BYTES, fileBytes: MAX_FILE_BYTES, attachmentsPerMessage: 20, attachmentBytesPerMessage: MAX_ATTACHMENT_BYTES, metadataEntries: 20, requestsPerMinute: identity.rateLimitPerMinute },
     features: { nativeFrom: true, cc: true, bcc: true, replyTo: true, customHeaders: true, threading: true, outboundAttachments: true, inlineAttachments: true, scheduling: false, inboundAttachments: true, unknownOutcomeResolution: "best_effort_with_manual_review" },
     content: { ownership: "caller", formats: ["text/plain", "text/html"], requiresRenderedContent: true },
+    mail: await discoverMail(identity),
     senderGrants: grants.rows.map(row => ({ id: row.id, domain: row.domain, localPart: row.from_local_part, scope: row.service_id ? "service" : "product" })),
     providerCapabilities: providers.rows.map(row => ({ type: row.type, domain: row.domain, ...providerRegistry(row.type).descriptor.capabilities })),
     routing: "Submission-time routing checks authorization, configured routing rules, provider identity and requested capabilities; listed providers do not guarantee current routing availability.",

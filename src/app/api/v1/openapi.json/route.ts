@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { createMessageSchema, createSuppressionSchema, retryMessageSchema, deliveryStatuses, eventTypes, acceptedMessageSchema, messageSummarySchema, messageDetailSchema, deliverySummarySchema, deliveryDetailSchema, publicEventSchema, inboundSummarySchema, inboundDetailSchema, suppressionSchema, problemDetailsSchema, outboundFileSchema, requestDiagnosticSchema, submissionAttemptSchema, processingStates, messageOutcomes } from "@/lib/contracts";
+import { inboundReceivedEventSchema, mailDiscoverySchema, createMessageSchema, createSuppressionSchema, retryMessageSchema, deliveryStatuses, eventTypes, acceptedMessageSchema, messageSummarySchema, messageDetailSchema, deliverySummarySchema, deliveryDetailSchema, publicEventSchema, inboundSummarySchema, inboundDetailSchema, suppressionSchema, problemDetailsSchema, outboundFileSchema, requestDiagnosticSchema, submissionAttemptSchema, processingStates, messageOutcomes } from "@/lib/contracts";
 
 const ref = (name: string) => ({ $ref: `#/components/schemas/${name}` });
 const json = (schema: object) => ({ "application/json": { schema } });
@@ -14,7 +14,7 @@ function operation(summary: string, schema: object, parameters: object[] = [], s
 const body = (name: string, required = true) => ({ requestBody: { required, content: json(ref(name)) } });
 
 export function GET(request: Request) {
-  const schemas = Object.fromEntries(Object.entries({ CreateMessage: createMessageSchema, RetryMessage: retryMessageSchema, CreateSuppression: createSuppressionSchema, AcceptedMessage: acceptedMessageSchema, Message: messageSummarySchema, MessageDetail: messageDetailSchema, Delivery: deliverySummarySchema, DeliveryDetail: deliveryDetailSchema, Event: publicEventSchema, Inbound: inboundSummarySchema, InboundDetail: inboundDetailSchema, Suppression: suppressionSchema, File: outboundFileSchema, RequestDiagnostic: requestDiagnosticSchema, SubmissionAttempt: submissionAttemptSchema, Problem: problemDetailsSchema }).map(([name, schema]) => [name, z.toJSONSchema(schema, { unrepresentable: "any" })]));
+  const schemas = Object.fromEntries(Object.entries({ InboundReceivedEvent: inboundReceivedEventSchema, MailDiscovery: mailDiscoverySchema, CreateMessage: createMessageSchema, RetryMessage: retryMessageSchema, CreateSuppression: createSuppressionSchema, AcceptedMessage: acceptedMessageSchema, Message: messageSummarySchema, MessageDetail: messageDetailSchema, Delivery: deliverySummarySchema, DeliveryDetail: deliveryDetailSchema, Event: publicEventSchema, Inbound: inboundSummarySchema, InboundDetail: inboundDetailSchema, Suppression: suppressionSchema, File: outboundFileSchema, RequestDiagnostic: requestDiagnosticSchema, SubmissionAttempt: submissionAttemptSchema, Problem: problemDetailsSchema }).map(([name, schema]) => [name, z.toJSONSchema(schema, { unrepresentable: "any" })]));
   // Cross-field and UTF-8 byte constraints cannot be inferred from Zod refinements.
   const create = schemas.CreateMessage;
   create.anyOf = [{ required: ["html"], properties: { html: { minLength: 1 } } }, { required: ["text"], properties: { text: { minLength: 1 } } }];
@@ -53,17 +53,31 @@ export function GET(request: Request) {
         requestBody: { required: true, content: { "application/octet-stream": { schema: { type: "string", contentEncoding: "binary", "x-maxBytes": 10_000_000 } } }, description: "Raw nonempty file bytes, max 10,000,000 bytes; Content-Type can be any valid media type without parameters." },
       } },
       "/files/{id}": { get: operation("Read attachment metadata owned by this service; storage keys are private", ref("File"), [id]) },
-      "/capabilities": { get: operation("Discover authorization grants, limits and available provider feature constraints", { type: "object", required: ["apiVersion", "service", "product", "limits", "content", "features", "senderGrants", "providerCapabilities", "routing", "resources"], properties: {
+      "/capabilities": { get: operation("Discover product/service, address permissions, inbound routes, configuration readiness and transport evidence", { type: "object", required: ["apiVersion", "service", "product", "limits", "content", "features", "mail", "senderGrants", "providerCapabilities", "routing", "resources"], properties: {
         apiVersion: { const: "v1" },
         service: { type: "object", required: ["id", "name"], properties: { id: { type: "string" }, name: { type: "string" } } },
         product: { type: "object", required: ["id", "name"], properties: { id: { type: "string" }, name: { type: "string" } } },
         limits: { type: "object", properties: { recipientsPerMessage: { const: 50 }, contentBytesPerPart: { const: 2_000_000 }, requestBytes: { const: 4_200_000 }, fileBytes: { const: 10_000_000 }, attachmentsPerMessage: { const: 20 }, attachmentBytesPerMessage: { const: 20_000_000 }, metadataEntries: { const: 20 }, requestsPerMinute: { type: "integer" } } },
         content: { type: "object", properties: { ownership: { const: "caller" }, formats: { type: "array", items: { enum: ["text/plain", "text/html"] } }, requiresRenderedContent: { const: true } } },
         features: { type: "object", additionalProperties: { type: ["boolean", "string"] } },
+        mail: { ...ref("MailDiscovery"), description: "Service-scoped address permissions, never mailbox login credentials. Configuration and historical evidence do not guarantee current delivery." },
         senderGrants: { type: "array", items: { type: "object", required: ["id", "domain", "localPart", "scope"], properties: { id: { type: "string" }, domain: { type: "string" }, localPart: { type: ["string", "null"] }, scope: { enum: ["service", "product"] } } } },
-        providerCapabilities: { type: "array", items: { type: "object", required: ["type", "domain"], properties: { type: { type: "string" }, domain: { type: "string" }, maxRecipients: { type: "integer" }, maxMessageBytes: { type: "integer" }, cc: { type: "boolean" }, bcc: { type: "boolean" }, replyTo: { type: "boolean" }, customHeaders: { type: "boolean" }, threading: { type: "boolean" }, outboundAttachments: { type: "boolean" }, inlineAttachments: { type: "boolean" }, envelopeRecipients: { type: "boolean" }, requiresTo: { type: "boolean" }, tagValuePattern: { type: "string" } } } },
+        providerCapabilities: { deprecated: true, description: "Legacy provider feature hints; use provider-neutral mail discovery. Never required in business requests.", type: "array", items: { type: "object", required: ["type", "domain"], properties: { type: { type: "string" }, domain: { type: "string" }, maxRecipients: { type: "integer" }, maxMessageBytes: { type: "integer" }, cc: { type: "boolean" }, bcc: { type: "boolean" }, replyTo: { type: "boolean" }, customHeaders: { type: "boolean" }, threading: { type: "boolean" }, outboundAttachments: { type: "boolean" }, inlineAttachments: { type: "boolean" }, envelopeRecipients: { type: "boolean" }, inboundEnvelopeRecipients: { type: "boolean" }, requiresTo: { type: "boolean" }, tagValuePattern: { type: "string" } } } },
         routing: { type: "string" }, resources: { type: "array", items: { type: "string" } },
       } }) },
+    },
+    webhooks: {
+      inboundReceived: { post: {
+        summary: "Signed inbound receipt; HTTP success acknowledges durable receipt, not completed business processing",
+        description: "At least once. Reject timestamps outside your replay window; verify HMAC-SHA256(timestamp + '.' + raw body) in constant time. Deduplicate on x-envoy-id, which equals payload.id. Use the service key to fetch content and attachments. Only this service's matched SMTP recipients are included.",
+        security: [], parameters: [
+          { name: "x-envoy-id", in: "header", required: true, schema: { type: "string" } },
+          { name: "x-envoy-timestamp", in: "header", required: true, schema: { type: "string", pattern: "^[0-9]+$" } },
+          { name: "x-envoy-signature", in: "header", required: true, schema: { type: "string", pattern: "^v1=[a-f0-9]{64}$" } },
+        ],
+        requestBody: { required: true, content: json(ref("InboundReceivedEvent")) },
+        responses: { "2XX": { description: "Durably received; business processing state is unknown to Envoy" }, default: { description: "Delivery failed; Envoy retries and eventually dead-letters" } },
+      } },
     }, components: { securitySchemes: { bearerAuth: { type: "http", scheme: "bearer" } }, schemas },
   });
 }

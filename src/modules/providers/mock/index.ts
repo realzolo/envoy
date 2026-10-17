@@ -1,3 +1,4 @@
+import { smtpRecipients } from "../inbound-fields";
 import { CanonicalProviderError, type ProviderModule } from "../contracts";
 import { event, nativeMailCapabilities, assertMessageCapabilities, messageRecipients, requestFingerprint } from "../shared";
 
@@ -12,6 +13,7 @@ export const mockModule: ProviderModule = {
       webhookSecurity: "Shared token",
       eventTypes: ["accepted", "delivered", "bounced", "complained", "inbound.received"],
       ...nativeMailCapabilities,
+      inboundEnvelopeRecipients: true,
       envelopeRecipients: true,
       requiresTo: false,
       maxRecipients: 1000,
@@ -77,6 +79,7 @@ export const mockModule: ProviderModule = {
       }) : [];
       return {
         externalMessageId: String(p.externalMessageId ?? p.id ?? crypto.randomUUID()),
+        envelopeRecipients: smtpRecipients(p.envelopeRecipients),
         messageId: typeof p.messageId === "string" ? p.messageId : undefined,
         from: String(p.from ?? "sender@example.net"),
         to,

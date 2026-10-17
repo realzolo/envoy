@@ -11,7 +11,7 @@ const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 
 /** Errors caused by the message or routing policy should not consume worker retries. */
 export class InboundTerminalError extends Error {
-  constructor(message: string) {
+  constructor(message: string, public code = "INBOUND_REJECTED") {
     super(message);
     this.name = "InboundTerminalError";
   }
@@ -57,58 +57,86 @@ function address(value: string) {
   return (match?.[1] ?? value).trim().toLowerCase()
 }
 
-export async function persistInbound(input: {
+type InboundInput = {
   providerAccountId: string;
   webhookEndpointId: string;
   rawEventId: string;
-  message: CanonicalInboundMessage
-}) {
+  message: CanonicalInboundMessage;
+};
+type InboundRoute = {
+  id: string; product_id: string; service_id: string | null; callback_endpoint_id: string | null;
+  recipients: string[];
+};
+
+export async function persistInbound(input: InboundInput) {
+  // Empty/invalid envelopes are quarantined, never replaced with visible To/Cc or arbitrary headers.
+  const supplied = input.message.envelopeRecipients;
+  const recipients = supplied?.length && supplied.every(item => /^[^\s<>@,]+@[^\s<>@,]+$/.test(item))
+    ? [...new Set(supplied.map(address))] : [];
+  const routes = recipients.length ? await transaction(async client => (await client.query<InboundRoute>(`
+    SELECT r.id,r.product_id,r.service_id,r.callback_endpoint_id,array_agg(DISTINCT recipient) AS recipients
+    FROM inbound_routes r JOIN sending_domains d ON d.id=r.sending_domain_id
+    JOIN products p ON p.id=r.product_id AND p.status='active'
+    JOIN provider_webhook_endpoints e ON e.id=r.provider_webhook_endpoint_id
+    CROSS JOIN unnest($2::text[]) recipient
+    WHERE e.id=$1 AND e.provider_account_id=$3 AND e.status='active' AND e.security_configured
+      AND r.status='active' AND d.status='active'
+      AND split_part(recipient,'@',2)=d.domain
+      AND (r.local_part_pattern='*' OR split_part(recipient,'@',1) LIKE
+        replace(replace(replace(r.local_part_pattern,'~','~~'),'_','~_'),'*','%') ESCAPE '~')
+    GROUP BY r.id ORDER BY r.id`, [input.webhookEndpointId, recipients, input.providerAccountId])).rows) : [];
+  await query(`UPDATE inbound_messages SET status='rejected',rejection_reason='NO_INBOUND_ROUTE',processing_token=NULL,processing_deadline_at=NULL
+    WHERE provider_account_id=$1 AND external_message_id=$2 AND status='scanning'
+      AND delivery_scope<>ALL($3::text[]) AND (processing_token IS NULL OR processing_deadline_at<=now())`,
+    [input.providerAccountId,input.message.externalMessageId,routes.map(route => route.service_id ?? `product:${route.product_id}`)]);
+  if (!routes.length) {
+    const reason = recipients.length ? "NO_INBOUND_ROUTE" : "ENVELOPE_RECIPIENT_UNAVAILABLE";
+    const stored = await query<{ id: string }>(`INSERT INTO inbound_messages
+      (id,provider_account_id,raw_provider_event_id,external_message_id,message_id,from_email,to_emails,cc_emails,bcc_emails,subject,sanitized_html,text_body,status,rejection_reason,received_at,envelope_recipients,reply_to,in_reply_to,references_ids)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'rejected',$13,$14,$15,$16,$17,$18)
+      ON CONFLICT(provider_account_id,external_message_id,delivery_scope) DO UPDATE SET rejection_reason=EXCLUDED.rejection_reason RETURNING id`,
+      [createId("inb"),input.providerAccountId,input.rawEventId,input.message.externalMessageId,input.message.messageId??null,address(input.message.from),input.message.to,input.message.cc,input.message.bcc,input.message.subject,input.message.html?sanitizeHtml(input.message.html):null,input.message.text??null,reason,input.message.receivedAt,recipients,input.message.replyTo??[],input.message.inReplyTo??null,input.message.references??[]]);
+    return stored.rows[0].id;
+  }
+  // One private projection per service (or admin-only product scope), even for overlapping routes.
+  const groups = new Map<string, InboundRoute[]>();
+  for (const route of routes) {
+    const scope = route.service_id ?? `product:${route.product_id}`;
+    groups.set(scope, [...(groups.get(scope) ?? []), route]);
+  }
+  let firstId = "";
+  for (const [scope, matching] of groups) {
+    const ownRecipients = [...new Set(matching.flatMap(route => route.recipients))];
+    const message = { ...input.message, envelopeRecipients: ownRecipients,
+      bcc: input.message.bcc.filter(item => ownRecipients.includes(address(item))) };
+    const id = await persistRoutedInbound({ ...input, message }, scope, matching);
+    firstId ||= id;
+  }
+  return firstId;
+}
+
+async function persistRoutedInbound(input: InboundInput, scope: string, routes: InboundRoute[]) {
   const message = input.message;
-  const duplicate = (await query<{
-    id: string;
-    status: string;
-    content_purged_at: Date | null
-  }>("SELECT id,status,content_purged_at FROM inbound_messages WHERE provider_account_id=$1 AND external_message_id=$2", [input.providerAccountId, message.externalMessageId])).rows[0];
-  if (duplicate?.content_purged_at) throw new InboundTerminalError("Inbound content has expired");
+  const route = routes[0];
+  const duplicate = (await query<{ id: string; status: string; content_purged_at: Date | null }>(
+    "SELECT id,status,content_purged_at FROM inbound_messages WHERE provider_account_id=$1 AND external_message_id=$2 AND delivery_scope=$3",
+    [input.providerAccountId,message.externalMessageId,scope])).rows[0];
+  if (duplicate?.content_purged_at) return duplicate.id;
   if (duplicate && duplicate.status !== "scanning") return duplicate.id;
   let id = duplicate?.id ?? createId("inb");
   const recipients = message.to.map(address);
-  const route = await transaction(async client => (await client.query<{
-    id: string;
-    product_id: string;
-    service_id: string | null;
-    callback_endpoint_id: string | null
-  }>(`SELECT r.id, r.product_id, r.service_id, r.callback_endpoint_id
-      FROM inbound_routes r
-               JOIN sending_domains d ON d.id = r.sending_domain_id
-      WHERE r.provider_webhook_endpoint_id = $1
-        AND r.status = 'active'
-        AND d.status = 'active'
-        AND EXISTS (SELECT 1
-                    FROM unnest($2::text[]) recipient
-                    WHERE split_part(recipient, '@', 2) = d.domain
-                      AND (r.local_part_pattern = '*' OR
-                           split_part(recipient, '@', 1) LIKE replace(replace(r.local_part_pattern, '_', '~_'), '*', '%') ESCAPE '~'))
-                      ORDER BY (r.local_part_pattern <> '*') DESC LIMIT 1`, [input.webhookEndpointId, recipients])).rows[0] ?? null);
-  if (!route) {
-    const stored = await query<{ id: string }>(`INSERT INTO inbound_messages(id,provider_account_id,raw_provider_event_id,external_message_id,message_id,from_email,to_emails,cc_emails,bcc_emails,subject,sanitized_html,text_body,status,rejection_reason,received_at)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'rejected','No inbound route matched the recipients',$13)
-      ON CONFLICT(provider_account_id,external_message_id) DO UPDATE SET status='rejected',rejection_reason='No inbound route matched the recipients' WHERE inbound_messages.status='scanning' AND (inbound_messages.processing_token IS NULL OR inbound_messages.processing_deadline_at<=now()) RETURNING id`, [id,input.providerAccountId,input.rawEventId,message.externalMessageId,message.messageId??null,address(message.from),recipients,message.cc.map(address),message.bcc.map(address),message.subject,message.html?sanitizeHtml(message.html):null,message.text??null,message.receivedAt]);
-    if (!stored.rows[0]) throw new Error("Inbound message is being processed by another worker");
-    return stored.rows[0].id;
-  }
   const inserted = duplicate ? null : await query(`INSERT INTO inbound_messages(id, inbound_route_id, product_id, service_id,
                                                              provider_account_id, raw_provider_event_id,
                                                              external_message_id, message_id, from_email, to_emails,
                                                              cc_emails, bcc_emails, subject, sanitized_html, text_body,
-                                                             status, received_at)
+                                                             status, received_at, delivery_scope, envelope_recipients, reply_to, in_reply_to, references_ids)
                                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 'scanning',
-                                        $16) ON CONFLICT(provider_account_id,external_message_id) DO NOTHING RETURNING id`, [id, route.id, route.product_id, route.service_id, input.providerAccountId, input.rawEventId, message.externalMessageId, message.messageId ?? null, address(message.from), recipients, message.cc.map(address), message.bcc.map(address), message.subject, message.html ? sanitizeHtml(message.html) : null, message.text ?? null, message.receivedAt]);
+                                        $16,$17,$18,$19,$20,$21) ON CONFLICT(provider_account_id,external_message_id,delivery_scope) DO NOTHING RETURNING id`, [id, route.id, route.product_id, route.service_id, input.providerAccountId, input.rawEventId, message.externalMessageId, message.messageId ?? null, address(message.from), recipients, message.cc.map(address), message.bcc.map(address), message.subject, message.html ? sanitizeHtml(message.html) : null, message.text ?? null, message.receivedAt,scope,message.envelopeRecipients,message.replyTo??[],message.inReplyTo??null,message.references??[]]);
   if (inserted && !inserted.rowCount) {
     const existing = (await query<{
       id: string;
       status: string
-    }>("SELECT id,status FROM inbound_messages WHERE provider_account_id=$1 AND external_message_id=$2", [input.providerAccountId, message.externalMessageId])).rows[0];
+    }>("SELECT id,status FROM inbound_messages WHERE provider_account_id=$1 AND external_message_id=$2 AND delivery_scope=$3", [input.providerAccountId, message.externalMessageId,scope])).rows[0];
     if (!existing) throw new Error("Inbound message was not persisted");
     if (existing.status !== "scanning") return existing.id;
     id = existing.id;
@@ -131,14 +159,14 @@ export async function persistInbound(input: {
   try {
     const decodedBytes = Buffer.byteLength((message.html ?? "") + (message.text ?? "") + message.subject, "utf8") + message.attachments.reduce((total, file) => total + file.content.byteLength, 0);
     const aggregateBytes = Math.max(message.rawMime?.byteLength ?? 0, decodedBytes);
-    if (aggregateBytes > MAX_MESSAGE_BYTES) throw new InboundTerminalError("Inbound message exceeds the size limit");
-    for (const file of message.attachments) if (file.content.byteLength > MAX_ATTACHMENT_BYTES) throw new InboundTerminalError(`Attachment exceeds the size limit: ${file.fileName}`);
+    if (aggregateBytes > MAX_MESSAGE_BYTES) throw new InboundTerminalError("Inbound message exceeds the size limit", "INBOUND_MESSAGE_TOO_LARGE");
+    for (const file of message.attachments) if (file.content.byteLength > MAX_ATTACHMENT_BYTES) throw new InboundTerminalError(`Attachment exceeds the size limit: ${file.fileName}`, "INBOUND_ATTACHMENT_TOO_LARGE");
     // Scan all files before uploading; rejected content should not leave partial objects.
     for (const [index, file] of message.attachments.entries()) {
       const renewed = await query("UPDATE inbound_messages SET processing_deadline_at=now()+interval '2 minutes' WHERE id=$1 AND processing_token=$2 RETURNING id", [id, token]);
       if (!renewed.rowCount) throw new Error("Inbound processing ownership expired");
       const scanStatus = await scanAttachment(file.content);
-      if (scanStatus === "infected") throw new InboundTerminalError(`Malware detected in attachment: ${file.fileName}`);
+      if (scanStatus === "infected") throw new InboundTerminalError(`Malware detected in attachment: ${file.fileName}`, "INBOUND_MALWARE_DETECTED");
       attachments.push({ ...file, objectKey: `${prefix}/attachments/${index}`, scanStatus });
     }
     if (message.rawMime) {
@@ -159,9 +187,9 @@ export async function persistInbound(input: {
       if (!completed.rowCount) throw new Error("Inbound processing ownership expired");
       for (const file of attachments) await client.query("INSERT INTO inbound_attachments(id,inbound_message_id,file_name,content_type,size_bytes,object_key,content_id,scan_status) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)", [createId("ina"), id, file.fileName, file.contentType, file.content.byteLength, file.objectKey, file.contentId ?? null, file.scanStatus]);
       await completeObjectUploads(client, writtenKeys);
-      if (route.callback_endpoint_id) {
-        const callback = await client.query<{ id: string }>("SELECT id FROM callback_endpoints WHERE id=$1 AND status='active' AND 'inbound.received'=ANY(subscribed_events)", [route.callback_endpoint_id]);
-        if (!callback.rows[0]) return;
+      for (const callbackEndpointId of new Set(routes.map(item => item.callback_endpoint_id).filter(Boolean))) {
+        const callback = await client.query<{ id: string }>("SELECT id FROM callback_endpoints WHERE id=$1 AND service_id=$2 AND status='active' AND 'inbound.received'=ANY(subscribed_events)", [callbackEndpointId,route.service_id]);
+        if (!callback.rows[0]) continue;
         const callbackId = createId("cbx");
         const payload = {
           id: `inbound:${id}:received`,
@@ -170,6 +198,13 @@ export async function persistInbound(input: {
           occurredAt: receivedAt.toISOString(),
           data: {
             inboundMessageId: id,
+            productId: route.product_id,
+            serviceId: route.service_id,
+            envelopeRecipients: message.envelopeRecipients,
+            messageId: message.messageId ?? null,
+            replyTo: message.replyTo ?? [],
+            inReplyTo: message.inReplyTo ?? null,
+            references: message.references ?? [],
             from: address(message.from),
             to: recipients,
             cc: message.cc.map(address),
@@ -181,7 +216,7 @@ export async function persistInbound(input: {
             }))
           }
         };
-        await client.query("INSERT INTO callback_deliveries(id,endpoint_id,inbound_message_id,event_type,payload) VALUES ($1,$2,$3,'inbound.received',$4)", [callbackId, route.callback_endpoint_id, id, payload]);
+        await client.query("INSERT INTO callback_deliveries(id,endpoint_id,inbound_message_id,event_type,payload) VALUES ($1,$2,$3,'inbound.received',$4)", [callbackId, callbackEndpointId, id, payload]);
         await client.query("INSERT INTO outbox_events(id,aggregate_type,aggregate_id,event_type,payload) VALUES ($1,'callback',$2,'callback.requested',$3)", [createId("out"), callbackId, { callbackDeliveryId: callbackId }])
       }
     })
@@ -189,7 +224,7 @@ export async function persistInbound(input: {
     // COMMIT itself may have lost its response: reference-aware cleanup must decide what is orphaned.
     await Promise.allSettled(writtenKeys.map(key => registerObjectUpload(key)));
     if (error instanceof InboundTerminalError) {
-      await query("UPDATE inbound_messages SET status='rejected',rejection_reason=$2 WHERE id=$1 AND processing_token=$3", [id, error.message, token]);
+      await query("UPDATE inbound_messages SET status='rejected',rejection_reason=$2,processing_token=NULL,processing_deadline_at=NULL WHERE id=$1 AND processing_token=$3", [id, error.code, token]);
       return id;
     }
     await query("UPDATE inbound_messages SET processing_token=NULL,processing_deadline_at=NULL WHERE id=$1 AND processing_token=$2", [id, token]);
@@ -205,6 +240,7 @@ export async function processInboundEvent(input: {
   verified: WebhookVerification;
   receive: (verified: WebhookVerification) => Promise<CanonicalInboundMessage | null>
 }) {
+  if (!input.verified.valid || !input.verified.replaySafe) throw new InboundTerminalError("Unverified inbound event");
   const message = await input.receive(input.verified);
   if (!message) return null;
   return persistInbound({ ...input, message })

@@ -16,14 +16,12 @@ export function Inbound({ data }: { data: Data }) {
   const inboundRoutes = rows(data.inboundRoutes);
   const endpoints = rows(data.webhooks).filter(endpoint => endpoint.status === "active" && endpoint.security_configured);
   const products = rows(data.products).filter(product => product.status === "active");
-  const availableDomains = rows(data.domains).filter(domain => domain.status === "active" && rows(domain.identities).some(identity => identity.status === "verified" && endpoints.some(endpoint => endpoint.provider_account_id === identity.accountId)));
-  const initialEndpoint = endpoints.find(endpoint => availableDomains.some(domain => rows(domain.identities).some(identity => identity.status === "verified" && identity.accountId === endpoint.provider_account_id)));
-  const [webhookEndpointId, setWebhookEndpointId] = useState(value(initialEndpoint ?? endpoints[0] ?? {}, "id"));
+  const availableDomains = rows(data.domains).filter(domain => domain.status === "active");
+  const [webhookEndpointId, setWebhookEndpointId] = useState(value(endpoints[0] ?? {}, "id"));
   const [productId, setProductId] = useState(value(products[0] ?? {}, "id"));
   const [serviceId, setServiceId] = useState("");
   const [callbackId, setCallbackId] = useState("");
-  const selectedEndpoint = endpoints.find(endpoint => endpoint.id === webhookEndpointId);
-  const domains = availableDomains.filter(domain => rows(domain.identities).some(identity => identity.status === "verified" && identity.accountId === selectedEndpoint?.provider_account_id));
+  const domains = availableDomains;
   const [domainId, setDomainId] = useState(value(domains[0] ?? {}, "id"));
   const selectedDomainId = domains.some(domain => value(domain, "id") === domainId) ? domainId : value(domains[0] ?? {}, "id");
   const services = rows(data.services).filter(service => service.product_status === "active" && service.product_id === productId);
@@ -32,9 +30,7 @@ export function Inbound({ data }: { data: Data }) {
   function selectEndpoint(next: string | number) {
     const nextId = String(next);
     setWebhookEndpointId(nextId);
-    const endpoint = endpoints.find(item => value(item, "id") === nextId);
-    const nextDomains = availableDomains.filter(domain => rows(domain.identities).some(identity => identity.status === "verified" && identity.accountId === endpoint?.provider_account_id));
-    setDomainId(value(nextDomains[0] ?? {}, "id"));
+
   }
 
   function selectProduct(next: string | number) {
@@ -65,11 +61,12 @@ export function Inbound({ data }: { data: Data }) {
   }
 
   if (!endpoints.length || !products.length || !availableDomains.length) {
-    return <Prerequisite title="Create inbound route prerequisites" description={!endpoints.length ? "Configure event verification on an active provider account before accepting inbound mail." : !availableDomains.length ? "Verify a sending domain with the selected provider account." : "Create an active product before routing inbound mail."} href={!endpoints.length ? "/providers" : !availableDomains.length ? "/domains" : "/api-keys"} action={!endpoints.length ? "Configure provider webhooks" : !availableDomains.length ? "Manage domains" : "Create a product"} />;
+    return <Prerequisite title="Create inbound route prerequisites" description={!endpoints.length ? "Configure event verification on an active provider account before accepting inbound mail." : !availableDomains.length ? "Register an active domain for inbound routing; outbound verification is separate." : "Create an active product before routing inbound mail."} href={!endpoints.length ? "/providers" : !availableDomains.length ? "/domains" : "/api-keys"} action={!endpoints.length ? "Configure provider webhooks" : !availableDomains.length ? "Manage domains" : "Create a product"} />;
   }
 
   return (
     <Space direction="vertical" size="large" className={styles.stack}>
+      <Alert type="info" content="Inbound routes use authenticated SMTP recipients. Domain verification does not prove receiving works. Overlapping routes merge within each service and distribute private copies across services. Routes without a service remain administrator-only. Check actual received mail and callback delivery separately; Resend currently quarantines mail without a documented envelope recipient." />
       <Panel
         title="Create inbound route"
         description="Route provider ingress by domain and local part"
@@ -129,12 +126,17 @@ export function Inbound({ data }: { data: Data }) {
         <Descriptions column={1} labelStyle={{ width: 112 }} data={[
           { label: "Status", value: <StatusTag>{value(item, "status")}</StatusTag> },
           { label: "Received", value: date(item.received_at) },
-          { label: "Message ID", value: <CopyableValue text={value(item, "id")} label="inbound message ID" /> },
+          { label: "Envoy ID", value: <CopyableValue text={value(item, "id")} label="inbound message ID" /> },
+          { label: "RFC Message-ID", value: value(item, "message_id") || "Not supplied" },
+          { label: "SMTP recipients", value: Array.isArray(item.envelope_recipients) && item.envelope_recipients.length ? item.envelope_recipients.join(", ") : "Unknown / unverified" },
+          { label: "Reply-To", value: Array.isArray(item.reply_to) ? item.reply_to.join(", ") : "" },
+          { label: "In-Reply-To", value: value(item, "in_reply_to") || "Not supplied" },
+          { label: "References", value: Array.isArray(item.references_ids) ? item.references_ids.join(" ") : "" },
           { label: "From", value: value(item, "from_email") },
           { label: "To", value: Array.isArray(item.to_emails) ? item.to_emails.join(", ") : "" },
           { label: "Product", value: value(item, "product") || "Unrouted" },
           { label: "Service", value: value(item, "service") || "Administrator only" },
-          { label: "Route", value: value(item, "route") ? `${value(item, "route")}@${value(item, "domain")}` : "No route matched" },
+          { label: "Representative route", value: value(item, "route") ? `${value(item, "route")}@${value(item, "domain")}` : "No route matched" },
         ]} />
         </div>
         {item.rejection_reason ? <Alert type="error" content={value(item, "rejection_reason")} showIcon /> : null}

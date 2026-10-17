@@ -82,6 +82,8 @@ export type ProviderWebhookSettings = z.infer<typeof providerWebhookSettingsSche
 export type ProviderCapabilities = {
   nativeIdempotency: boolean;
   inboundMode: "webhook-fetch" | "json" | "multipart" | "route" | "object-reference" | "none";
+  /** Inbound port supplies documented, authenticated SMTP envelope recipients. */
+  inboundEnvelopeRecipients: boolean;
   domainManagement: boolean;
   webhookSecurity: string;
   eventTypes: string[];
@@ -200,6 +202,11 @@ export type WebhookVerification = {
 export type CanonicalInboundMessage = {
   externalMessageId: string;
   messageId?: string;
+  /** Only provider-authenticated SMTP recipients; never inferred from MIME headers. */
+  envelopeRecipients?: string[];
+  replyTo?: string[];
+  inReplyTo?: string;
+  references?: string[];
   from: string;
   to: string[];
   cc: string[];
