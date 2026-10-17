@@ -391,7 +391,7 @@ function Credentials({ data }: { data: Data }) {
       setKey("");
       const result = await action.run({ action: "credential.rotate", id }) as { key?: string };
       setKey(result.key ?? "");
-      action.setNotice("Credential rotated. Copy the replacement key below.");
+      action.setNotice("Replacement issued for the same service. Old key remains active for at most 24 hours: switch callers, verify use, then explicitly revoke the old credential.");
     } catch {
       // Inline notice owns failures from this request.
     }
@@ -429,7 +429,7 @@ function Credentials({ data }: { data: Data }) {
         <>
           <Panel
             title="Issue service credential"
-            description="The plaintext key is shown once"
+            description="The plaintext key is shown once. Rotation adds a credential with up to 24 hours of overlap; revoke the old one after switching callers."
             defaultExpanded={credentials.length === 0}
           >
             <ActionForm fieldErrors={action.fields} layout="vertical" onSubmit={values => void submit(values as FormValues)}>
@@ -448,14 +448,16 @@ function Credentials({ data }: { data: Data }) {
               columns={[
                 { title: "Service", render: (_, credential) => value(credential, "service") },
                 { title: "Product", render: (_, credential) => value(credential, "product") },
+                { title: "Credential ID", render: (_, credential) => <Typography.Text code>{value(credential,"id")}</Typography.Text> },
                 { title: "Prefix", render: (_, credential) => <Typography.Text code>{value(credential, "key_prefix")}...</Typography.Text> },
                 { title: "Last used", render: (_, credential) => date(credential.last_used_at) },
+                { title: "Valid until", render: (_, credential) => credential.valid_to ? date(credential.valid_to) : "No fixed expiry" },
                 { title: "Status", render: (_, credential) => <StatusTag>{value(credential, "status")}</StatusTag> },
                 {
                   title: "Actions",
                   render: (_, credential) => (
                     <Space size="small">
-                      <Button size="small" icon={<IconRotateLeft />} loading={action.pending} onClick={() => void rotate(value(credential, "id"))}>Rotate</Button>
+                      <Button size="small" icon={<IconRotateLeft />} disabled={credential.status !== "active"} loading={action.pending} onClick={() => void rotate(value(credential, "id"))}>Issue replacement</Button>
                       <ActionButton
                         danger
                         body={{ action: "credential.revoke", id: credential.id }}
@@ -490,8 +492,8 @@ function Events({ data }: { data: Data }) {
             { title: "Provider event ID", render: (_, event) => <Typography.Text code>{value(event, "provider_event_id")}</Typography.Text> },
             { title: "Verification", render: (_, event) => <StatusTag>{event.signature_valid && event.replay_valid ? "Verified" : "Rejected"}</StatusTag> },
             { title: "Received", render: (_, event) => date(event.received_at) },
-            { title: "Processing", render: (_, event) => event.processing_error ? <Typography.Text type="error">{value(event, "processing_error")}</Typography.Text> : <StatusTag>{event.processed_at ? "Processed" : "Pending"}</StatusTag> },
-            { title: "Action", render: (_, event) => <ActionButton body={{ action: "event.replay", id: event.id }}><IconRotateLeft />Replay</ActionButton> },
+            { title: "Processing", render: (_, event) => event.terminated_at ? <StatusTag>Terminated</StatusTag> : event.processing_error ? <Typography.Text type="error">{value(event, "processing_error")}</Typography.Text> : <StatusTag>{event.processed_at ? "Processed" : "Pending"}</StatusTag> },
+            { title: "Action", render: (_, event) => <Space>{!event.terminated_at && !event.content_purged_at ? <ActionButton body={{ action: "event.replay", id: event.id }}><IconRotateLeft />Replay</ActionButton> : null}{!event.terminated_at && Number(event.processing_attempt_count)>=20 && !event.processed_at ? <ActionButton danger body={{action:"event.terminate",id:event.id}} confirmText="Permanently stop this exhausted receipt? Unfinished copies are rejected and retention may remove content. Successful copies are preserved.">Terminate recovery</ActionButton> : null}</Space> },
           ]}
         />
       </TableCard>

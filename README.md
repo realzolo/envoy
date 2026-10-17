@@ -89,6 +89,8 @@ The service API is self-describing at `GET /api/v1` and `GET /api/v1/openapi.jso
 | `/messages/{id}/retry`  | Retry eligible outcomes with duplicate-risk acknowledgement for unknown outcomes |
 | `/deliveries`           | List recipient-level deliveries and inspect attempts                             |
 | `/events`               | Read normalized delivery events                                                  |
+| `/inbound-changes` | Recover service-scoped inbound availability and content-purge events with a durable cursor |
+| `/{messages,inbound-messages,files}/{id}/content` | Idempotently clear owned content subject to active/shared-work guards |
 | `/inbound-messages`     | List and inspect sanitized inbound mail; download eligible private attachments     |
 | `/suppressions`         | Check, create, and remove product-owned suppressions                             |
 | `/requests/{requestId}` | Query request outcomes, including validation and authorization failures before message creation |
@@ -167,3 +169,5 @@ and exports at most 10,000 rows. Delivery details show accepted sender/content s
 and delivery diagnostics; Inbound provides private downloads only for ready messages that satisfy the scanning policy.
 
 Server processes and database sessions use UTC; API timestamps are UTC ISO 8601 (`Z`). The console formats timestamps in the current browser timezone and labels that zone. Cohort/rate/quota windows are UTC and labeled explicitly.
+
+Existing 63f5032 installations must use the reviewed [schema adoption procedure](docs/OPERATIONS.md#schema-adoption-for-existing-63f5032-installations) before starting this version. New installations continue to use `pnpm db:setup`. No automatic database reset or ledger bypass is performed.

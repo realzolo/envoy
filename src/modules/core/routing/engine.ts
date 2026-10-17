@@ -223,7 +223,7 @@ export async function prepareSubmission(submissionId: string): Promise<DeliveryS
     const attemptId = createId("att");
     const nativeIdempotency = providerRegistry(selected.provider_type).descriptor.capabilities.nativeIdempotency;
     const providerIdempotencyKey = nativeIdempotency ? `envoy/${submissionId}/${selected.provider_account_id}` : null;
-    const canonical = canonicalMessage(message, submissionId, envelope);
+    const canonical = { ...canonicalMessage(message, submissionId, envelope), rfcMessageId: `<${attemptId}@${message.sender_snapshot.fromEmail.split("@")[1]}>` };
     const fingerprint = createHash("sha256").update(JSON.stringify({ ...canonical, attachments: message.attachment_snapshot })).digest("hex");
     const snapshot = {
       policy: { id: selected.policy_id, name: selected.policy_name, priority: selected.policy_priority },
@@ -253,11 +253,11 @@ async function lockAttempt(client: PoolClient, attemptId: string): Promise<Attem
     FROM submission_attempts a JOIN submissions s ON s.id=a.submission_id WHERE a.id=$1 FOR UPDATE OF a`, [attemptId])).rows[0] ?? null;
 }
 
-export async function markAccepted(attemptId: string, externalMessageId: string, response: Record<string, unknown> = {}) {
+export async function markAccepted(attemptId: string, externalMessageId: string, response: Record<string, unknown> = {}, rfcMessageId: string | null = null) {
   await transaction(async client => {
     const row = await lockAttempt(client, attemptId);
     if (!row || !["submitting", "unknown", "reconciling", "reconciled"].includes(row.status) || (row.status === "reconciled" && row.external_message_id)) return;
-    await client.query("UPDATE submission_attempts SET status='accepted',outcome_determinate=true,external_message_id=$2,provider_response_ref=$3,finished_at=now(),reconcile_after=NULL,diagnostic=NULL,error_category=NULL,error_code=NULL,error_message=NULL WHERE id=$1", [attemptId, externalMessageId, JSON.stringify(response)]);
+    await client.query("UPDATE submission_attempts SET status='accepted',outcome_determinate=true,external_message_id=$2,provider_response_ref=$3,rfc_message_id=$4,finished_at=now(),reconcile_after=NULL,diagnostic=NULL,error_category=NULL,error_code=NULL,error_message=NULL WHERE id=$1", [attemptId, externalMessageId, JSON.stringify(response), rfcMessageId]);
     if (row.is_current) await client.query("UPDATE submissions SET status='accepted',updated_at=now() WHERE id=$1", [row.submission_id]);
     await emit(client, row.submission_id, "accepted", `attempt:${attemptId}:accepted`, undefined, row, row.started_at);
     const targetId = ((row.routing_snapshot.chosen ?? {}) as Record<string, unknown>).targetId;

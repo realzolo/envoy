@@ -37,7 +37,7 @@ export async function processDelivery(job: Job<{ submissionId: string }>) {
     return;
   }
   if (result.outcome === "unknown") { await markUnknown(submission.attemptId, result.reason); return; }
-  await markAccepted(submission.attemptId, result.externalMessageId, result.response);
+  await markAccepted(submission.attemptId, result.externalMessageId, result.response,result.rfcMessageId ?? null);
   // Acceptance is irreversible; downstream event failures must never trigger failover.
   if (account.module.descriptor.type === "mock") for (const recipient of submission.message.envelopeRecipients ?? [...submission.message.to, ...submission.message.cc, ...submission.message.bcc]) {
     await applyCanonicalEvent(submission.providerAccountId, null, {

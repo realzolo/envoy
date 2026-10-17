@@ -285,6 +285,7 @@ CREATE TABLE submission_attempts
     request_fingerprint text NOT NULL,
     provider_idempotency_key text,
     external_message_id text,
+    rfc_message_id text,
     status text NOT NULL CHECK(status IN ('submitting','accepted','failed','unknown','reconciling','reconciled')),
     outcome_determinate boolean NOT NULL DEFAULT false,
     error_category text,
@@ -333,6 +334,7 @@ CREATE TABLE raw_provider_events
     headers             jsonb       NOT NULL,
     received_at         timestamptz NOT NULL DEFAULT now(),
     processed_at        timestamptz,
+    terminated_at       timestamptz,
     processing_error    text,
     verification        jsonb,
     security_version    integer NOT NULL DEFAULT 0,
@@ -437,7 +439,10 @@ CREATE TABLE inbound_messages
     rejection_reason      text,
     processing_token      text,
     processing_deadline_at timestamptz,
-    received_at           timestamptz NOT NULL,
+    author_date           timestamptz,
+    ingress_received_at   timestamptz,
+    ready_at              timestamptz,
+    received_at           timestamptz NOT NULL DEFAULT clock_timestamp(),
     created_at            timestamptz NOT NULL DEFAULT now(),
     UNIQUE (provider_account_id, external_message_id, delivery_scope)
 );
@@ -468,12 +473,13 @@ CREATE TABLE callback_deliveries
     payload            jsonb       NOT NULL,
     status             text        NOT NULL DEFAULT 'pending' CHECK (status IN
                                                                      ('pending', 'delivering', 'delivered', 'retrying',
-                                                                      'dead_letter')),
+                                                                      'dead_letter', 'terminated')),
     attempt_count      integer     NOT NULL DEFAULT 0,
     response_code      integer,
     last_error         text,
     next_attempt_at    timestamptz NOT NULL DEFAULT now(),
     delivered_at       timestamptz,
+    terminated_at      timestamptz,
     created_at         timestamptz NOT NULL DEFAULT now(),
     updated_at         timestamptz NOT NULL DEFAULT now()
 );
@@ -570,3 +576,51 @@ CREATE TABLE pending_object_deletions (
     attempt_count integer NOT NULL DEFAULT 0 CHECK (attempt_count >= 0)
 );
 CREATE INDEX pending_object_deletions_due ON pending_object_deletions(available_at);
+
+-- Frozen receipt decisions contain routing metadata only, never mail content.
+CREATE TABLE inbound_receipts (
+  provider_account_id text NOT NULL REFERENCES provider_accounts(id),
+  external_message_id text NOT NULL,
+  routes jsonb NOT NULL,
+  terminated_at timestamptz,
+  ingress_received_at timestamptz NOT NULL,
+  PRIMARY KEY(provider_account_id,external_message_id)
+);
+
+-- A transactional counter row serializes writers through COMMIT, unlike a sequence.
+CREATE TABLE inbound_streams (
+  service_id text PRIMARY KEY REFERENCES services(id) ON DELETE CASCADE,
+  generation uuid NOT NULL DEFAULT gen_random_uuid(),
+  position bigint NOT NULL DEFAULT 0,
+  floor bigint NOT NULL DEFAULT 0
+);
+CREATE TABLE inbound_changes (
+  service_id text NOT NULL REFERENCES services(id) ON DELETE CASCADE,
+  position bigint NOT NULL,
+  id text NOT NULL UNIQUE DEFAULT ('ich_' || gen_random_uuid()::text),
+  inbound_message_id text NOT NULL REFERENCES inbound_messages(id) ON DELETE CASCADE,
+  type text NOT NULL CHECK(type IN ('inbound.available','inbound.content_purged')),
+  recorded_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  PRIMARY KEY(service_id,position)
+);
+CREATE FUNCTION record_inbound_change() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE change_type text; next_position bigint;
+BEGIN
+  IF NEW.service_id IS NULL THEN RETURN NEW; END IF;
+  IF NEW.content_purged_at IS NOT NULL AND OLD.content_purged_at IS NULL THEN
+    change_type := 'inbound.content_purged';
+  ELSIF NEW.status='ready' AND OLD.status<>'ready' AND NEW.content_purged_at IS NULL THEN
+    change_type := 'inbound.available';
+  ELSE RETURN NEW;
+  END IF;
+  INSERT INTO inbound_streams(service_id) VALUES(NEW.service_id) ON CONFLICT DO NOTHING;
+  UPDATE inbound_streams SET position=position+1 WHERE service_id=NEW.service_id RETURNING position INTO next_position;
+  INSERT INTO inbound_changes(service_id,position,inbound_message_id,type)
+    VALUES(NEW.service_id,next_position,NEW.id,change_type);
+  RETURN NEW;
+END $$;
+CREATE TRIGGER inbound_change AFTER UPDATE ON inbound_messages FOR EACH ROW EXECUTE FUNCTION record_inbound_change();
+CREATE INDEX inbound_evidence ON inbound_messages(service_id,provider_account_id,created_at DESC) WHERE status='ready';
+CREATE INDEX submission_events_evidence ON submission_events(submission_id,event_type,occurred_at DESC);
+
+CREATE INDEX inbound_messages_service_stored_cursor ON inbound_messages(service_id,created_at DESC,id DESC);

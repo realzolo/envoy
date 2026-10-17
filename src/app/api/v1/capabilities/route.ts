@@ -24,6 +24,6 @@ export const GET = serviceRoute(async (_request, identity) => {
     senderGrants: grants.rows.map(row => ({ id: row.id, domain: row.domain, localPart: row.from_local_part, scope: row.service_id ? "service" : "product" })),
     providerCapabilities: providers.rows.map(row => ({ type: row.type, domain: row.domain, ...providerRegistry(row.type).descriptor.capabilities })),
     routing: "Submission-time routing checks authorization, configured routing rules, provider identity and requested capabilities; listed providers do not guarantee current routing availability.",
-    resources: ["messages", "deliveries", "events", "requests", "files", "inbound-messages", "suppressions", "capabilities"],
+    resources: ["messages", "deliveries", "events", "requests", "files", "inbound-messages", "inbound-changes", "suppressions", "capabilities"],
   });
 });

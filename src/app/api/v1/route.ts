@@ -10,6 +10,7 @@ export function GET(request: Request) {
       messages: `${origin}/api/v1/messages`,
       deliveries: `${origin}/api/v1/deliveries`,
       events: `${origin}/api/v1/events`,
+      inboundChanges: `${origin}/api/v1/inbound-changes`,
       inboundMessages: `${origin}/api/v1/inbound-messages`,
       suppressions: `${origin}/api/v1/suppressions`,
       files: `${origin}/api/v1/files`,

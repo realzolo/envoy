@@ -5,6 +5,7 @@ import { MessageValidationError, IdempotencyConflictError, DuplicateRiskError } 
 import { providerTypeSchema } from "@/modules/providers/contracts";
 import { getAdminSession } from "@/server/admin-auth";
 import { recordRequest } from "@/server/request-log";
+import { terminateCallback } from "@/modules/callbacks/service";
 import * as actions from "@/modules/admin/actions";
 
 type Body = { action?: string; [key: string]: unknown };
@@ -149,6 +150,9 @@ export async function POST(request: Request) {
         result = await actions.retryOutbox(text(body,"id"),session.email);
         status=202;
         break;
+      case "event.terminate":
+        await actions.terminateRawEvent(text(body,"id"),session.email);
+        break;
       case"event.replay":
         await actions.replayRawEvent(text(body, "id"), session.email);
         status = 202;
@@ -224,6 +228,9 @@ export async function POST(request: Request) {
       case"callback.test":
         result = { deliveryId: await actions.testCallback(text(body, "id"), session.email) };
         status = 202;
+        break;
+      case "callback.terminate":
+        result = await terminateCallback(text(body,"id"),session.email);
         break;
       case"callback.replay_dlq":
         result = { count: await actions.replayDeadLetters(session.email, { endpointId: typeof body.endpointId === "string" ? body.endpointId : undefined, deliveryId: typeof body.deliveryId === "string" ? body.deliveryId : undefined }) };

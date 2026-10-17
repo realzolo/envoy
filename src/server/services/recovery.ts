@@ -43,7 +43,7 @@ export async function recoverWorkBatch(limit = 100) {
         SELECT 'raw_provider_event',r.id,$2,jsonb_build_object('rawEventId',r.id),false,(r.processed_at IS NOT NULL)
         FROM raw_provider_events r WHERE (r.processed_at IS NULL OR EXISTS(SELECT 1 FROM inbound_messages i
           WHERE i.raw_provider_event_id=r.id AND i.status='scanning' AND (i.processing_deadline_at IS NULL OR i.processing_deadline_at<=now())))
-          AND r.next_attempt_at<=now() AND r.processing_attempt_count<20 AND r.content_purged_at IS NULL
+          AND r.next_attempt_at<=now() AND r.processing_attempt_count<20 AND r.content_purged_at IS NULL AND r.terminated_at IS NULL
           AND r.received_at<now()-interval '2 minutes'
         UNION ALL
         SELECT 'callback',c.id,'callback.requested',jsonb_build_object('callbackDeliveryId',c.id),false,false

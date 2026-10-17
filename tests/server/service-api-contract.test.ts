@@ -119,7 +119,12 @@ describe("public API boundary", () => {
     const document = await openapi(new Request("https://envoy.test/api/v1/openapi.json")).json();
     expect(document.components.schemas.MailDiscovery.properties.mailboxLogin.const).toBe(false);
     expect(document.components.schemas.InboundDetail.required).toContain("envelopeRecipients");
-    expect(document.components.schemas.InboundDetail.required).toContain("messageId");
+    expect(document.components.schemas.InboundDetail.required).toEqual(expect.arrayContaining(["messageId","authorDate","ingressReceivedAt","readyAt"]));
+    expect(document.components.schemas.SubmissionAttempt.required).toEqual(expect.arrayContaining(["rfcMessageId","rfcMessageIdStatus"]));
+    expect(document.paths["/inbound-changes"].get.responses["410"]).toBeDefined();
+    expect(document.components.schemas.InboundChangePage.required).toEqual(expect.arrayContaining(["data","nextCursor","hasMore","watermark","retention"]));
+    for(const resource of ["messages","inbound-messages","files"]) expect(document.paths[`/${resource}/{id}/content`].delete.responses["202"]).toBeDefined();
+    expect(document.webhooks.inboundReceived.post.parameters.some((header:{name:string})=>header.name==="x-envoy-key-version")).toBe(true);
     expect(document.paths["/capabilities"].get.responses["200"].content["application/json"].schema.required).toContain("mail");
     expect(document.paths["/capabilities"].get.responses["200"].content["application/json"].schema.properties.providerCapabilities.deprecated).toBe(true);
     expect(document.webhooks.inboundReceived.post.requestBody.content["application/json"].schema.$ref).toContain("InboundReceivedEvent");

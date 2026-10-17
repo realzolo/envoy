@@ -131,7 +131,7 @@ export function buildMimeMessage(message: CanonicalMessage) {
     ...(message.replyTo.length ? [`Reply-To: ${message.replyTo.map(mimeAddress).join(`,${crlf} `)}`] : []),
     `Subject: ${encodedWords(message.subject)}`,
     `Date: ${new Date().toUTCString()}`,
-    `Message-ID: <${requestFingerprint(message.submissionId)}@${message.from.email.split("@")[1]}>`,
+    `Message-ID: ${message.rfcMessageId ?? `<${requestFingerprint(message.submissionId)}@${message.from.email.split("@")[1]}>`}`,
     "MIME-Version: 1.0",
     ...Object.entries(messageHeaders(message)).map(([name, value]) => mimeHeader(name, value))
   ];
@@ -160,9 +160,9 @@ export async function checkedJson(response: Response): Promise<Record<string, un
   return body;
 }
 
-export function accepted(id: unknown, response?: Record<string, unknown>): ProviderSendResult {
+export function accepted(id: unknown, response?: Record<string, unknown>, rfcMessageId?: unknown): ProviderSendResult {
   if (typeof id !== "string" || !id) throw new CanonicalProviderError("Provider returned no message identifier", "provider", "SUBMISSION_OUTCOME_UNKNOWN", "unknown", false, { providerCode: "missing_message_id" });
-  return { outcome: "accepted", externalMessageId: id, response };
+  return { outcome: "accepted", externalMessageId: id, response, rfcMessageId: typeof rfcMessageId === "string" && /^<[^<>\s@]+@[^<>\s@]+>$/.test(rfcMessageId) ? rfcMessageId : null };
 }
 
 export function event(input: Omit<CanonicalEvent, "metadata"> & {

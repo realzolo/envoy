@@ -41,13 +41,15 @@ export async function discoverMail(identity: ServiceIdentity) {
     WHERE g.product_id=$1 AND (g.service_id IS NULL OR g.service_id=$2) ORDER BY d.domain,g.id`, [identity.productId,identity.serviceId])).rows;
   const receivers = (await query<{
     id: string; domain: string; local_part_pattern: string; status: string; domain_status: string;
+    callback_endpoint_id: string | null; callback_owner: string | null; callback_status: string | null; subscribed_events: string[] | null;
     endpoint_status: string; security_configured: boolean; provider_type: ProviderType; last_received_at: Date | null;
-  }>(`SELECT r.id,d.domain,r.local_part_pattern,r.status,d.status AS domain_status,e.status AS endpoint_status,e.security_configured,a.type AS provider_type,
+  }>(`SELECT r.id,d.domain,r.local_part_pattern,r.status,d.status AS domain_status,e.status AS endpoint_status,e.security_configured,a.type AS provider_type,r.callback_endpoint_id,cb.service_id AS callback_owner,cb.status AS callback_status,cb.subscribed_events,
       (SELECT max(i.created_at) FROM inbound_messages i WHERE i.service_id=$2 AND i.provider_account_id=e.provider_account_id AND i.status='ready'
         AND EXISTS(SELECT 1 FROM unnest(i.envelope_recipients) recipient WHERE split_part(recipient,'@',2)=d.domain
-          AND split_part(recipient,'@',1) LIKE replace(replace(r.local_part_pattern,'_','~_'),'*','%') ESCAPE '~')) AS last_received_at
+          AND split_part(recipient,'@',1) LIKE replace(replace(replace(r.local_part_pattern,'~','~~'),'_','~_'),'*','%') ESCAPE '~')) AS last_received_at
     FROM inbound_routes r JOIN sending_domains d ON d.id=r.sending_domain_id
     JOIN provider_webhook_endpoints e ON e.id=r.provider_webhook_endpoint_id JOIN provider_accounts a ON a.id=e.provider_account_id
+    LEFT JOIN callback_endpoints cb ON cb.id=r.callback_endpoint_id
     WHERE r.product_id=$1 AND r.service_id=$2 ORDER BY d.domain,r.id`, [identity.productId,identity.serviceId])).rows;
   const callbacks = (await query<{ configured: boolean; last_delivered_at: Date | null; latest: { status: string; attemptCount: number; deliveredAt: string | null } | null }>(`SELECT
     EXISTS(SELECT 1 FROM callback_endpoints WHERE service_id=$1 AND status='active') AS configured,
@@ -70,10 +72,19 @@ export async function discoverMail(identity: ServiceIdentity) {
       const reasons = [...(row.status !== "active" ? ["INBOUND_ROUTE_DISABLED"] : []), ...(row.domain_status !== "active" ? ["INBOUND_DOMAIN_DISABLED"] : []), ...(row.endpoint_status !== "active" || !row.security_configured ? ["INBOUND_INGRESS_UNAVAILABLE"] : [])];
       const unsupported = !providerRegistry(row.provider_type).descriptor.capabilities.inboundEnvelopeRecipients;
       if (unsupported) reasons.push("ENVELOPE_RECIPIENT_UNAVAILABLE");
+      const notificationReasons = row.callback_endpoint_id ? [
+        ...(row.callback_owner !== identity.serviceId ? ["CALLBACK_BINDING_INVALID"] : []),
+        ...(row.callback_status !== "active" ? ["CALLBACK_DISABLED"] : []),
+        ...(!row.subscribed_events?.includes("inbound.received") ? ["CALLBACK_EVENT_NOT_SUBSCRIBED"] : []),
+      ] : [];
       return { id: row.id, kind: row.local_part_pattern.includes("*") ? "local_part_pattern" as const : "exact_address" as const,
         address: row.local_part_pattern.includes("*") ? null : `${row.local_part_pattern}@${row.domain}`,
         domain: row.domain, localPartPattern: row.local_part_pattern, displayName: null,
         receiving: { state: reasons.length ? "unavailable" as const : "configured" as const, reasonCodes: reasons, externalReadiness: "unknown" as const },
+        notification: { mode: row.callback_endpoint_id ? "callback_and_polling" as const : "polling" as const,
+          state: notificationReasons.length ? "unavailable" as const : "configured" as const,
+          callbackEndpointId: row.callback_owner === identity.serviceId ? row.callback_endpoint_id : null,
+          reasonCodes: notificationReasons, recoveryResource: "/api/v1/inbound-changes" as const },
         evidence: { lastReceivedAt: iso(row.last_received_at) } };
     }),
     callbacks: { configuration: callbacks.configured ? "configured" as const : "unavailable" as const,

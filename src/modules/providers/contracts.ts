@@ -111,6 +111,8 @@ export type EmailAddress = { email: string; name?: string };
 export type CanonicalAttachment = { fileName: string; contentType: string; content: Uint8Array; contentId?: string; disposition: "attachment" | "inline" };
 export type CanonicalMessage = {
   submissionId: string;
+  /** Proposed RFC ID; confirmation is returned separately by the adapter. */
+  rfcMessageId?: string;
   from: EmailAddress;
   to: EmailAddress[];
   cc: EmailAddress[];
@@ -134,7 +136,7 @@ export type ProviderSendContext = {
   idempotencyKey?: string
 };
 export type ProviderSendResult =
-  { outcome: "accepted"; externalMessageId: string; response?: Record<string, unknown> }
+  { outcome: "accepted"; externalMessageId: string; rfcMessageId?: string | null; response?: Record<string, unknown> }
   | { outcome: "unknown"; reason: string };
 
 export type ErrorCategory =
@@ -216,6 +218,9 @@ export type CanonicalInboundMessage = {
   text?: string;
   rawMime?: Uint8Array;
   attachments: Array<{ fileName: string; contentType: string; content: Uint8Array; contentId?: string }>;
+  /** Untrusted author-declared Date header; never used for ownership, cursors or retention. */
+  authorDate?: Date | null;
+  /** Legacy adapter hint, ignored by core; ingress time comes from the persisted receipt. */
   receivedAt: Date;
 };
 

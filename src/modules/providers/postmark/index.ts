@@ -51,7 +51,7 @@ export const postmarkModule: ProviderModule = {
           Subject: message.subject,
           HtmlBody: message.html,
           TextBody: message.text,
-          Headers: Object.entries(messageHeaders(message)).map(([Name, Value]) => ({ Name, Value })),
+          Headers: Object.entries({ ...messageHeaders(message), ...(message.rfcMessageId ? { "Message-ID": message.rfcMessageId } : {}) }).map(([Name, Value]) => ({ Name, Value })),
           Attachments: message.attachments.map(a => ({ Name: a.fileName, ContentType: a.contentType, Content: Buffer.from(a.content).toString("base64"), ...(a.disposition === "inline" ? { ContentID: `cid:${a.contentId}` } : {}) })),
           MessageStream: context.config.messageStream,
           Metadata: message.tags
@@ -59,7 +59,7 @@ export const postmarkModule: ProviderModule = {
       });
       const body = await checkedJson(response);
       if (body.ErrorCode !== undefined && body.ErrorCode !== 0) throw new CanonicalProviderError(safeDiagnostic(body.Message), "policy", "PROVIDER_POLICY_REJECTED", "not_accepted", false, { providerCode: String(body.ErrorCode) });
-      return accepted(body.MessageID);
+      return accepted(body.MessageID,undefined,message.rfcMessageId);
     }
   },
   webhook: {
@@ -135,7 +135,8 @@ export const postmarkModule: ProviderModule = {
         html: typeof p.HtmlBody === "string" ? p.HtmlBody : undefined,
         text: typeof p.TextBody === "string" ? p.TextBody : undefined,
         attachments,
-        receivedAt: new Date(String(p.Date ?? new Date().toISOString()))
+        authorDate: fields.authorDate ?? (p.Date && Number.isFinite(Date.parse(String(p.Date))) ? new Date(String(p.Date)) : null),
+        receivedAt: new Date()
       }
     }
   },

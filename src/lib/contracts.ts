@@ -121,13 +121,14 @@ export const publicEventSchema = z.object({
 export const submissionAttemptSchema = z.object({
   id: z.string(), submissionId: z.string(), number: z.number(), status: z.string(),
   outcomeDeterminate: z.boolean(), error: diagnosticSchema.nullable(),
+  rfcMessageId: nullableText, rfcMessageIdStatus: z.enum(["confirmed","unknown"]),
   startedAt: iso, finishedAt: iso.nullable(),
   recipients: z.array(z.object({ deliveryId: z.string(), email: z.string(), role: z.enum(["to", "cc", "bcc"]) })),
 });
 export const attachmentSchema = z.object({ id: z.string(), fileName: z.string(), contentType: z.string(), size: z.number(), contentId: nullableText, scanStatus: z.enum(["clean", "skipped"]), contentAvailable: z.boolean().describe("Whether attachment bytes are retained; download also requires ready state and scan approval.") });
 export const outboundFileSchema = z.object({ id: z.string(), fileName: z.string(), contentType: z.string(), size: z.number(), sha256: z.string(), contentAvailable: z.boolean(), createdAt: iso });
 export const outboundAttachmentSchema = z.object({ fileId: z.string(), fileName: z.string(), contentType: z.string(), size: z.number(), sha256: z.string(), disposition: z.enum(["attachment", "inline"]), contentId: nullableText });
-export const inboundSummarySchema = z.object({ id: z.string(), from: z.string(), to: z.array(z.string()), subject: z.string(), status: z.enum(["scanning", "ready", "rejected"]), attachmentCount: z.number(), receivedAt: iso });
+export const inboundSummarySchema = z.object({ id: z.string(), from: z.string(), to: z.array(z.string()), subject: z.string(), status: z.enum(["scanning", "ready", "rejected"]), attachmentCount: z.number(), authorDate: iso.nullable(), ingressReceivedAt: iso.nullable(), readyAt: iso.nullable(), receivedAt: iso });
 export const inboundDetailSchema = inboundSummarySchema.omit({ attachmentCount: true }).extend({ messageId: nullableText, envelopeRecipients: z.array(z.string()), replyTo: z.array(z.string()), inReplyTo: nullableText, references: z.array(z.string()), cc: z.array(z.string()), bcc: z.array(z.string()), html: nullableText, text: nullableText, contentPurgedAt: iso.nullable(), rejectionReason: nullableText, attachments: z.array(attachmentSchema) });
 export const acceptedMessageSchema = z.object({ id: z.string(), processingState: z.literal("queued"), outcome: z.literal("pending"), product: z.string(), category: z.string(), recipientCount: z.number(), acceptedAt: iso, referenceId: z.string().optional() });
 export const messageCountsSchema = z.object(Object.fromEntries([...deliveryStatuses, "suppressed"].map(key => [key, z.number().int().nonnegative()])));
@@ -153,6 +154,8 @@ const senderPermissionSchema = z.object({ ...mailPermissionBase, scope: z.enum([
 });
 const receiverPermissionSchema = z.object({ ...mailPermissionBase, localPartPattern: z.string(),
   receiving: z.object({ state: z.enum(["configured", "unavailable"]), reasonCodes: z.array(mailReasonSchema), externalReadiness: z.literal("unknown") }),
+  notification: z.object({ mode:z.enum(["polling","callback_and_polling"]),state:z.enum(["configured","unavailable"]),
+    callbackEndpointId:nullableText,reasonCodes:z.array(z.enum(["CALLBACK_BINDING_INVALID","CALLBACK_DISABLED","CALLBACK_EVENT_NOT_SUBSCRIBED"])),recoveryResource:z.literal("/api/v1/inbound-changes") }),
   evidence: z.object({ lastReceivedAt: iso.nullable() }),
 });
 export const mailDiscoverySchema = z.object({
@@ -166,15 +169,20 @@ export const mailDiscoverySchema = z.object({
     receiverPermissionSchema.extend({ kind: z.literal("local_part_pattern"), address: z.null() }),
   ])),
   callbacks: z.object({ configuration: z.enum(["configured", "unavailable"]), businessProcessing: z.literal("unknown"), lastDeliveredAt: iso.nullable(),
-    latest: z.object({ status: z.enum(["pending", "delivering", "delivered", "retrying", "dead_letter"]), attemptCount: z.number().int(), deliveredAt: iso.nullable() }).nullable(),
+    latest: z.object({ status: z.enum(["pending", "delivering", "delivered", "retrying", "dead_letter", "terminated"]), attemptCount: z.number().int(), deliveredAt: iso.nullable() }).nullable(),
   }),
 });
 
 export const inboundReceivedEventSchema = z.object({
   id: z.string(), apiVersion: z.literal("2026-09-01"), type: z.literal("inbound.received"), occurredAt: iso,
-  data: z.object({ inboundMessageId: z.string(), productId: z.string(), serviceId: z.string(),
+  data: z.object({ authorDate: iso.nullable(), ingressReceivedAt: iso.nullable(), readyAt: iso.nullable(), inboundMessageId: z.string(), productId: z.string(), serviceId: z.string(),
     envelopeRecipients: z.array(z.string()), messageId: nullableText, replyTo: z.array(z.string()), inReplyTo: nullableText, references: z.array(z.string()),
     from: z.string(), to: z.array(z.string()), cc: z.array(z.string()), subject: z.string(),
     attachments: z.array(z.object({ fileName: z.string(), contentType: z.string(), size: z.number() })),
   }),
 });
+
+export const inboundChangeSchema = z.object({ id:z.string(),inboundMessageId:z.string(),type:z.enum(["inbound.available","inbound.content_purged"]),recordedAt:iso,cursor:z.string() });
+export const inboundChangePageSchema = z.object({ data:z.array(inboundChangeSchema),nextCursor:z.string(),hasMore:z.boolean(),watermark:z.string(),
+  retention:z.object({ earliestCursor:z.string(),historyTruncated:z.boolean(),days:z.literal(90) }) });
+export const contentPurgeSchema = z.object({ id:z.string(),contentPurgedAt:iso,objectDeletion:z.literal("pending_or_complete") });

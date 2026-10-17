@@ -52,6 +52,19 @@ describe("inbound provider ownership and RFC fields", () => {
       expect(await providerRegistry("ses").inbound!.receive(receipt(parsed),contexts.ses)).toMatchObject({ ...expected,externalMessageId: "ses-provider-id",envelopeRecipients: ["hidden@example.test"],to: ["visible@example.net","other@example.net"] });
     } finally { s3.restore(); }
   });
+  it.each(["Mon, 01 Jan 1900 00:00:00 +0000","Tue, 01 Jan 2200 00:00:00 +0000","definitely invalid",null])("keeps SES author Date separate from receipt time (%s)",async date=>{
+    const s3=mockClient(S3Client);
+    const mime=`From: sender@example.net\r\nTo: visible@example.net\r\n${date ? `Date: ${date}\r\n` : ""}\r\nbody`;
+    s3.on(GetObjectCommand).resolves({Body:{transformToByteArray:async()=>Buffer.from(mime)} as never});
+    try {
+      const parsed={Message:JSON.stringify({mail:{messageId:"ses-date"},receipt:{recipients:["trusted@example.test"],action:{type:"S3",bucketName:"test",objectKey:"test"}}})};
+      const mail=(await providerRegistry("ses").inbound!.receive(receipt(parsed),contexts.ses))!;
+      expect(Number.isFinite(mail.receivedAt.getTime())).toBe(true);
+      expect(mail.receivedAt.getUTCFullYear()).not.toBe(1900);expect(mail.receivedAt.getUTCFullYear()).not.toBe(2200);
+      if(date && date!=="definitely invalid") expect(mail.authorDate?.toISOString()).toBe(new Date(date).toISOString());
+      else expect(mail.authorDate).toBeNull();
+    } finally{s3.restore();}
+  });
   it("retains Resend standard fields but does not infer SMTP ownership from its To/Bcc/headers", async () => {
     vi.stubGlobal("fetch",vi.fn().mockResolvedValue(Response.json({ id: "received-id",message_id: headers["Message-ID"],from: "sender@example.net",to: ["visible@example.test"],cc: [],bcc: ["hidden@example.test"],headers: { ...headers,"Delivered-To": "forged@example.test" },subject: "Hello",created_at: new Date().toISOString(),attachments: [] })));
     const mail = await providerRegistry("resend").inbound!.receive(receipt({ data: { email_id: "received-id" } }),contexts.resend);

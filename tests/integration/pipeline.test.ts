@@ -699,7 +699,7 @@ describe("durable message pipeline", () => {
   });
   it("moves exhausted callbacks to dead letter and can replay them", async () => {
     const id = `cbx_test_${crypto.randomUUID()}`;
-    await query("INSERT INTO callback_deliveries(id,endpoint_id,event_type,payload) VALUES ($1,'cb_atlas_local','test.dead_letter',$2)", [id, {
+    await query("INSERT INTO callback_deliveries(id,endpoint_id,event_type,payload) VALUES ($1,'cb_atlas_local','email.delivered',$2)", [id, {
       id: "event-test",
       type: "test.dead_letter",
       data: {}

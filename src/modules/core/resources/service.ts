@@ -167,12 +167,13 @@ export async function listInboundMessages(serviceId: string, options: { limit: n
     subject: string;
     status: string;
     received_at: Date;
+    author_date: Date | null; ingress_received_at: Date | null; ready_at: Date | null;
     attachment_count: string;
   }>(
-    `SELECT i.id,i.from_email,i.to_emails,i.subject,i.status,i.received_at,to_char(i.received_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_at,count(a.id)::text AS attachment_count
+    `SELECT i.id,i.from_email,i.to_emails,i.subject,i.status,i.created_at AS received_at,i.author_date,i.ingress_received_at,i.ready_at,to_char(i.created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_at,count(a.id)::text AS attachment_count
      FROM inbound_messages i LEFT JOIN inbound_attachments a ON a.inbound_message_id=i.id
-     WHERE i.service_id=$1 AND ($2::timestamptz IS NULL OR (i.received_at,i.id)<($2,$3))
-     GROUP BY i.id ORDER BY i.received_at DESC,i.id DESC LIMIT $4`,
+     WHERE i.service_id=$1 AND ($2::timestamptz IS NULL OR (i.created_at,i.id)<($2,$3))
+     GROUP BY i.id ORDER BY i.created_at DESC,i.id DESC LIMIT $4`,
     [serviceId, options.cursor?.at ?? null, options.cursor?.id ?? null, options.limit + 1],
   )).rows;
   const page = nextCursor(rows, options.limit, row => row.received_at);
@@ -185,6 +186,9 @@ export async function listInboundMessages(serviceId: string, options: { limit: n
       status: row.status,
       attachmentCount: Number(row.attachment_count),
       receivedAt: row.received_at.toISOString(),
+      authorDate: row.author_date?.toISOString() ?? null,
+      ingressReceivedAt: row.ingress_received_at?.toISOString() ?? null,
+      readyAt: row.ready_at?.toISOString() ?? null,
     })),
     nextCursor: page.nextCursor,
   };
@@ -207,7 +211,8 @@ export async function getInboundMessage(id: string, serviceId: string) {
     status: string;
     rejection_reason: string | null;
     received_at: Date;
-  }>("SELECT id,external_message_id,message_id,envelope_recipients,reply_to,in_reply_to,references_ids,from_email,to_emails,cc_emails,bcc_emails,subject,sanitized_html,text_body,content_purged_at,status,rejection_reason,received_at FROM inbound_messages WHERE id=$1 AND service_id=$2", [id, serviceId])).rows[0];
+    author_date: Date | null; ingress_received_at: Date | null; ready_at: Date | null;
+  }>("SELECT id,external_message_id,message_id,envelope_recipients,reply_to,in_reply_to,references_ids,from_email,to_emails,cc_emails,bcc_emails,subject,sanitized_html,text_body,content_purged_at,status,rejection_reason,created_at AS received_at,author_date,ingress_received_at,ready_at FROM inbound_messages WHERE id=$1 AND service_id=$2", [id, serviceId])).rows[0];
   if (!message) return null;
   const attachments = (await query<{
     id: string;
@@ -236,6 +241,9 @@ export async function getInboundMessage(id: string, serviceId: string) {
     status: message.status,
     rejectionReason: message.rejection_reason,
     receivedAt: message.received_at.toISOString(),
+    authorDate: message.author_date?.toISOString() ?? null,
+    ingressReceivedAt: message.ingress_received_at?.toISOString() ?? null,
+    readyAt: message.ready_at?.toISOString() ?? null,
     attachments: attachments.map(item => ({
       id: item.id,
       fileName: item.file_name,
@@ -376,6 +384,8 @@ function publicDiagnostic(value: unknown) {
 function publicAttempt(row: Record<string, unknown>) {
   return {
     id: row.id, submissionId: row.submission_id, number: row.attempt_number, status: row.status,
+    rfcMessageId: row.rfc_message_id ?? null,
+    rfcMessageIdStatus: row.rfc_message_id ? "confirmed" : "unknown",
     outcomeDeterminate: row.outcome_determinate, error: publicDiagnostic(row.diagnostic),
     startedAt: (row.started_at as Date).toISOString(), finishedAt: (row.finished_at as Date | null)?.toISOString() ?? null,
     recipients: row.recipients ?? [],

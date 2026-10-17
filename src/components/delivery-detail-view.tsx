@@ -149,7 +149,8 @@ export function DeliveryDetailView({ detail, back = "/emails" }: { detail: Deliv
                     <Descriptions className={styles.descriptions} layout="vertical" tableLayout="fixed" column={{ xs: 1, md: 2, xl: 3 }} data={[
                       { label: "Submission ID", value: displayValue(attempt.submission_id) },
                       { label: "Provider", value: displayValue(attempt.provider_type) },
-                      { label: "External message ID", value: displayValue(attempt.external_message_id) },
+                      { label: "Provider external ID", value: displayValue(attempt.external_message_id) },
+                      { label: "Actual RFC Message-ID", value: attempt.rfc_message_id ? displayValue(attempt.rfc_message_id) : "Unknown / unconfirmed" },
                       { label: "Outcome confirmed", value: attempt.outcome_determinate === true ? "Yes" : attempt.outcome_determinate === false ? "No" : "Not reported" },
                       { label: "Started", value: attempt.started_at ? <LocalTime value={timestamp(attempt.started_at)} /> : "Not reported" },
                       { label: "Finished", value: attempt.finished_at ? <LocalTime value={timestamp(attempt.finished_at)} /> : "Not reported" },

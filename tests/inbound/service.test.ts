@@ -46,7 +46,7 @@ const message = {
 function configureTransactions() {
   mocks.transaction.mockImplementation(async (callback: (client: { query: ReturnType<typeof vi.fn> }) => Promise<unknown>) => {
     const client = {
-      query: vi.fn().mockImplementation(async (sql: string) => sql.includes("FROM inbound_routes") ? { rows: [route], rowCount: 1 } : { rows: [{ id: "inb_test" }], rowCount: 1 })
+      query: vi.fn().mockImplementation(async (sql: string) => sql.includes("FROM inbound_routes") ? { rows: [route], rowCount: 1 } : sql.includes("FROM inbound_receipts") ? { rows:[{ routes:[route],ingress_received_at:new Date() }],rowCount:1 } : { rows: [{ id: "inb_test",ready_at:new Date() }], rowCount: 1 })
     };
     return callback(client);
   });
@@ -92,11 +92,7 @@ describe("inbound attachment scanning", () => {
 
   it("keeps a scanning message retryable after an object-store failure", async () => {
     configureTransactions();
-    mocks.query
-      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
-      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
-      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
-      .mockResolvedValueOnce({ rows: [{ id: "inb_test", status: "scanning" }], rowCount: 1 });
+    mocks.query.mockImplementation(async (sql:string) => sql.startsWith("SELECT id,status,content_purged_at") ? {rows:[],rowCount:0} : {rows:[{id:"inb_test",status:"scanning",received_at:new Date()}],rowCount:1});
     mocks.put.mockRejectedValueOnce(new Error("S3 temporarily unavailable")).mockResolvedValueOnce(undefined);
 
     await expect(persistInbound({
@@ -105,7 +101,7 @@ describe("inbound attachment scanning", () => {
       rawEventId: "raw_test",
       message
     })).rejects.toThrow("S3 temporarily unavailable");
-    expect(mocks.query.mock.calls.some(([sql]) => String(sql).includes("status='rejected'") && !String(sql).includes("delivery_scope<>ALL"))).toBe(false);
+    expect(mocks.query.mock.calls.some(([sql]) => (String(sql).includes("status='rejected'") || String(sql).includes("'rejected',$13")) && !String(sql).includes("delivery_scope<>ALL"))).toBe(false);
 
     mocks.query.mockResolvedValue({ rows: [{ id: "inb_test", status: "scanning" }], rowCount: 1 });
     await expect(persistInbound({
@@ -119,11 +115,7 @@ describe("inbound attachment scanning", () => {
 
   it("rejects message-size violations without retrying the processing failure", async () => {
     configureTransactions();
-    mocks.query
-      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
-      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
-      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
-      .mockResolvedValueOnce({ rows: [], rowCount: 1 });
+    mocks.query.mockImplementation(async (sql:string) => sql.startsWith("SELECT id,status,content_purged_at") ? {rows:[],rowCount:0} : {rows:[{id:"inb_test",status:"scanning",received_at:new Date()}],rowCount:1});
 
     await expect(persistInbound({
       providerAccountId: "pa_test",
@@ -131,16 +123,16 @@ describe("inbound attachment scanning", () => {
       rawEventId: "raw_test",
       message: { ...message, rawMime: { byteLength: 25 * 1024 * 1024 + 1 } as Uint8Array }
     })).resolves.toBe("inb_test");
-    expect(mocks.query.mock.calls.some(([sql]) => String(sql).includes("status='rejected'"))).toBe(true);
+    expect(mocks.query.mock.calls.some(([sql]) => (String(sql).includes("status='rejected'") || String(sql).includes("'rejected',$13")))).toBe(true);
     expect(mocks.put).not.toHaveBeenCalled();
   });
 
-  it("rejects a scanning message when its route is no longer eligible", async () => {
+  it("quarantines an initial receipt without eligible routes", async () => {
     mocks.transaction.mockImplementation(async (callback: (client: { query: ReturnType<typeof vi.fn> }) => Promise<unknown>) => callback({
-      query: vi.fn().mockResolvedValue({ rows: [], rowCount: 0 })
+      query: vi.fn().mockImplementation(async (sql:string)=>sql.includes("FROM inbound_receipts") ? {rows:[{routes:[],ingress_received_at:new Date()}],rowCount:1} : { rows: [], rowCount: 0 })
     }));
     mocks.query
-      .mockResolvedValueOnce({ rows: [{ id: "inb_test", status: "scanning" }], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
       .mockResolvedValueOnce({ rows: [{ id: "inb_test" }], rowCount: 1 });
 
     await expect(persistInbound({
@@ -149,7 +141,7 @@ describe("inbound attachment scanning", () => {
       rawEventId: "raw_test",
       message
     })).resolves.toBe("inb_test");
-    expect(mocks.query.mock.calls.some(([sql]) => String(sql).includes("status='rejected'"))).toBe(true);
+    expect(mocks.query.mock.calls.some(([sql]) => (String(sql).includes("status='rejected'") || String(sql).includes("'rejected',$13")))).toBe(true);
     expect(mocks.put).not.toHaveBeenCalled();
   });
 });

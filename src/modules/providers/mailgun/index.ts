@@ -47,7 +47,7 @@ export const mailgunModule: ProviderModule = {
         body: form
       });
       const body = await checkedJson(response);
-      return accepted(body.id);
+      return accepted(body.id,undefined,body.id);
     }
   },
   webhook: {

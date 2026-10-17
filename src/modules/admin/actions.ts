@@ -516,11 +516,26 @@ export async function manualRetryDelivery(id: string, acknowledgeDuplicateRisk: 
 
 export async function replayRawEvent(id: string, actor: string) {
   await transaction(async client => {
-    const updated = await client.query("UPDATE raw_provider_events SET processed_at=NULL,processing_error=NULL,processing_attempt_count=0,next_attempt_at=now() WHERE id=$1 AND content_purged_at IS NULL RETURNING id", [id]);
+    const updated = await client.query("UPDATE raw_provider_events SET processed_at=NULL,processing_error=NULL,processing_attempt_count=0,next_attempt_at=now() WHERE id=$1 AND content_purged_at IS NULL AND terminated_at IS NULL RETURNING id", [id]);
     if (!updated.rowCount) throw new Error("Raw event not found or its content has expired.");
     await client.query("INSERT INTO outbox_events(id,aggregate_type,aggregate_id,event_type,payload) VALUES ($1,'raw_provider_event',$2,$3,$4)", [createId("out"), id, PROVIDER_EVENT_RECEIVED, { rawEventId: id }]);
     await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id) VALUES ($1,'provider_event.replay','raw_provider_event',$2)", [actor, id])
   })
+}
+
+export async function terminateRawEvent(id:string,actor:string) {
+  await transaction(async client => {
+    await client.query("SELECT id FROM inbound_messages WHERE raw_provider_event_id=$1 ORDER BY id FOR UPDATE",[id]);
+    const raw=(await client.query<{provider_account_id:string}>(`SELECT provider_account_id FROM raw_provider_events WHERE id=$1 AND terminated_at IS NULL
+      AND processed_at IS NULL AND processing_attempt_count>=20 AND processing_error IS NOT NULL AND next_attempt_at<=now() FOR UPDATE`,[id])).rows[0];
+    if (!raw) throw new Error("Only an exhausted, inactive raw event can be terminated");
+    const active=await client.query("SELECT id FROM inbound_messages WHERE raw_provider_event_id=$1 AND status='scanning' AND processing_token IS NOT NULL AND processing_deadline_at>now()",[id]);
+    if(active.rowCount) throw new Error("Inbound copy processing is still active");
+    await client.query("UPDATE inbound_receipts SET terminated_at=clock_timestamp() WHERE provider_account_id=$2 AND external_message_id IN (SELECT external_message_id FROM inbound_messages WHERE raw_provider_event_id=$1)",[id,raw.provider_account_id]);
+    await client.query("UPDATE inbound_messages SET status='rejected',rejection_reason='INBOUND_PROCESSING_TERMINATED',processing_token=NULL,processing_deadline_at=NULL WHERE raw_provider_event_id=$1 AND status='scanning'",[id]);
+    await client.query("UPDATE raw_provider_events SET terminated_at=clock_timestamp() WHERE id=$1",[id]);
+    await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id) VALUES($1,'provider_event.terminate','raw_provider_event',$2)",[actor,id]);
+  });
 }
 
 export async function addSuppression(input: {
@@ -630,10 +645,16 @@ export async function createServiceCredential(input: { productId: string; servic
 }
 
 export async function rotateServiceCredential(id: string, actor: string) {
-  const raw = `ev_live_${randomBytes(24).toString("base64url")}`;
-  await query("UPDATE service_credentials SET key_prefix=$2,key_hash=$3,valid_from=now(),status='active' WHERE id=$1", [id, raw.slice(0, 12), hashApiKey(raw)]);
-  await audit(actor, "service_credential.rotate", "service_credential", id);
-  return { id, key: raw }
+  return transaction(async client => {
+    const previous = (await client.query<{ service_id: string }>("SELECT service_id FROM service_credentials WHERE id=$1 AND status='active' AND (valid_to IS NULL OR valid_to>now()) FOR UPDATE",[id])).rows[0];
+    if (!previous) throw new Error("Active service credential not found");
+    const raw = `ev_live_${randomBytes(24).toString("base64url")}`;
+    const nextId = createId("cred");
+    const overlap = (await client.query<{valid_to:Date}>("UPDATE service_credentials SET valid_to=LEAST(COALESCE(valid_to,now()+interval '24 hours'),now()+interval '24 hours') WHERE id=$1 RETURNING valid_to",[id])).rows[0].valid_to;
+    await client.query("INSERT INTO service_credentials(id,service_id,key_prefix,key_hash) VALUES($1,$2,$3,$4)",[nextId,previous.service_id,raw.slice(0,12),hashApiKey(raw)]);
+    await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES($1,'service_credential.rotate','service_credential',$2,$3)",[actor,nextId,{ previousCredentialId:id,serviceId:previous.service_id,oldCredentialRevoked:false,overlapUntil:overlap.toISOString() }]);
+    return { id:nextId,previousCredentialId:id,serviceId:previous.service_id,overlapUntil:overlap.toISOString(),key:raw };
+  });
 }
 
 export async function revokeServiceCredential(id: string, actor: string) {
@@ -694,7 +715,7 @@ export async function replayDeadLetters(actor: string, scope: { endpointId?: str
     const rows = (await client.query<{
       id: string
     }>(`UPDATE callback_deliveries d SET status='pending',attempt_count=0,next_attempt_at=now(),last_error=NULL,updated_at=now()
-        FROM callback_endpoints e WHERE d.endpoint_id=e.id AND d.status='dead_letter' AND d.payload_purged_at IS NULL AND e.status='active' AND ($1::text IS NULL OR d.endpoint_id=$1) AND ($2::text IS NULL OR d.id=$2)
+        FROM callback_endpoints e WHERE d.endpoint_id=e.id AND d.status='dead_letter' AND d.payload_purged_at IS NULL AND e.status='active' AND d.event_type=ANY(e.subscribed_events) AND ($1::text IS NULL OR d.endpoint_id=$1) AND ($2::text IS NULL OR d.id=$2)
         RETURNING d.id`, [scope.endpointId ?? null, scope.deliveryId ?? null])).rows;
     for (const row of rows) await client.query("INSERT INTO outbox_events(id,aggregate_type,aggregate_id,event_type,payload) VALUES ($1,'callback',$2,'callback.requested',$3)", [createId("out"), row.id, { callbackDeliveryId: row.id }]);
     await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES ($1,'callback_delivery.replay_dead_letters','callback_delivery',NULL,$2)", [actor, { count: rows.length, ...scope }]);
@@ -776,6 +797,8 @@ export async function updateCallback(id: string, input: { name: string; url: str
   await transaction(async client => {
     const updated = await client.query("UPDATE callback_endpoints SET name=$2,url=$3,subscribed_events=$4,updated_at=now() WHERE id=$1 RETURNING id", [id, validated.name, target.url.toString(), validated.events]);
     if (!updated.rowCount) throw new Error("Callback endpoint not found");
+    await client.query(`UPDATE callback_deliveries SET status='dead_letter',last_error='CALLBACK_EVENT_NOT_SUBSCRIBED',updated_at=now()
+      WHERE endpoint_id=$1 AND NOT(event_type=ANY($2::text[])) AND status IN ('pending','retrying')`,[id,validated.events]);
     await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES ($1,'callback_endpoint.update','callback_endpoint',$2,$3)", [actor,id,{name:validated.name,url:target.url.toString(),events:validated.events}]);
   })
 }

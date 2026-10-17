@@ -1,3 +1,6 @@
+import { createHmac } from "node:crypto";
+import { sealSecret } from "@/modules/config/envelope";
+import { rotateCallbackSecret } from "@/modules/admin/actions";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { db, query } from "@/server/database";
 import { createId } from "@/server/ids";
@@ -58,4 +61,27 @@ describe("database-driven callback retry", () => {
     expect((await query<{ status: string; attempt_count: number }>("SELECT status,attempt_count FROM callback_deliveries WHERE id=$1", [id])).rows[0]).toEqual({ status: "dead_letter", attempt_count: 10 });
     expect((await query<{ count: string }>("SELECT count(*) FROM outbox_events WHERE aggregate_id=$1", [id])).rows[0].count).toBe("0");
   });
+});
+
+it("signs attempts with the actual secret version while old in-flight delivery drains",async()=>{
+  const endpoint=createId("callback"),first=createId("cbx"),second=createId("cbx");
+  const oldSecret="old-callback-test-key",newSecret="new-callback-test-key";
+  const envelope=sealSecret({secret:oldSecret},endpoint,1);
+  await query("INSERT INTO callback_endpoints(id,service_id,name,url,secret_ciphertext,encrypted_dek,key_version,subscribed_events) VALUES($1,'svc_atlas_auth','rotation','https://callback.test/events',$2,$3,$4,'{}')",[endpoint,envelope.secretCiphertext,envelope.encryptedDek,envelope.keyVersion]);
+  try {
+    for(const id of [first,second]) await query("INSERT INTO callback_deliveries(id,endpoint_id,event_type,payload) VALUES($1,$2,'endpoint.test',$3)",[id,endpoint,{id,type:"endpoint.test",apiVersion:"2026-09-01"}]);
+    network.resolve.mockResolvedValue({});let finish!:(value:unknown)=>void;
+    network.post.mockImplementationOnce(()=>new Promise(resolve=>{finish=resolve;}));
+    const inflight=deliverCallback(first);await vi.waitFor(()=>expect(network.post).toHaveBeenCalledTimes(1));
+    await rotateCallbackSecret(endpoint,newSecret,"test");
+    finish({status:202,statusText:"Accepted",body:""});await inflight;
+    network.post.mockResolvedValue({status:202,statusText:"Accepted",body:""});await deliverCallback(second);
+    expect(network.post.mock.calls.map(call=>call[2]["x-envoy-key-version"])).toEqual(["1","2"]);
+    for(const [index,secret] of [oldSecret,newSecret].entries()) {
+      const [,body,headers]=network.post.mock.calls[index];
+      const expected=createHmac("sha256",secret).update(`${headers["x-envoy-timestamp"]}.${body}`).digest("hex");
+      expect(headers["x-envoy-signature"]).toBe(`v1=${expected}`);
+      expect(JSON.parse(body).apiVersion).toBe("2026-09-01");
+    }
+  }finally{await query("DELETE FROM callback_deliveries WHERE endpoint_id=$1",[endpoint]);await query("DELETE FROM callback_endpoints WHERE id=$1",[endpoint]);}
 });

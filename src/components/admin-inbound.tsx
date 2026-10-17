@@ -94,7 +94,7 @@ export function Inbound({ data }: { data: Data }) {
             { title: "Product", render: (_, route) => value(route, "product") },
             { title: "Service", render: (_, route) => value(route, "service") || "None" },
             { title: "Provider", render: (_, route) => value(route, "provider_type") },
-            { title: "Callback", render: (_, route) => value(route, "callback") || "None" },
+            { title: "Notification", render: (_, route) => <Space direction="vertical"><Typography.Text>{value(route,"notification_state")}</Typography.Text><Typography.Text type="secondary">{value(route,"callback")}</Typography.Text></Space> },
             { title: "Status", render: (_, route) => <StatusTag>{value(route, "status")}</StatusTag> },
             { title: "Action", render: (_, route) => <ActionButton body={{ action: "inbound_route.toggle", id: route.id, enabled: route.status !== "active" }}>{route.status === "active" ? "Disable" : "Enable"}</ActionButton> },
           ]}
@@ -111,7 +111,7 @@ export function Inbound({ data }: { data: Data }) {
               { title: "Product / visibility", render: (_, item) => <Space direction="vertical" size="mini"><Typography.Text>{value(item, "product") || "Unrouted"}</Typography.Text>{!item.service_id && <Typography.Text type="secondary">Administrator only</Typography.Text>}</Space> },
               { title: "Attachments", render: (_, item) => value(item, "attachment_count") },
               { title: "Status", render: (_, item) => <StatusTag>{value(item, "status")}</StatusTag> },
-              { title: "Received", render: (_, item) => date(item.received_at) },
+              { title: "Stored", render: (_, item) => date(item.received_at) },
             ]}
           />
         </TableCard>
@@ -125,7 +125,10 @@ export function Inbound({ data }: { data: Data }) {
         <Typography.Text bold>{value(item, "subject") || "(No subject)"}</Typography.Text>
         <Descriptions column={1} labelStyle={{ width: 112 }} data={[
           { label: "Status", value: <StatusTag>{value(item, "status")}</StatusTag> },
-          { label: "Received", value: date(item.received_at) },
+          { label: "Stored", value: date(item.received_at) },
+          { label: "Author Date", value: item.author_date ? date(item.author_date) : "Not supplied / invalid" },
+          { label: "Trusted ingress", value: item.ingress_received_at ? date(item.ingress_received_at) : "Unknown (legacy)" },
+          { label: "Readable since", value: item.ready_at ? date(item.ready_at) : "Unknown / not ready" },
           { label: "Envoy ID", value: <CopyableValue text={value(item, "id")} label="inbound message ID" /> },
           { label: "RFC Message-ID", value: value(item, "message_id") || "Not supplied" },
           { label: "SMTP recipients", value: Array.isArray(item.envelope_recipients) && item.envelope_recipients.length ? item.envelope_recipients.join(", ") : "Unknown / unverified" },

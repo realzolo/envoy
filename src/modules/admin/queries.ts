@@ -110,7 +110,7 @@ export async function dashboardData() {
       (SELECT coalesce(extract(epoch FROM now()-min(available_at)),0) FROM outbox_events WHERE status='pending' AND available_at<=now()) AS oldest_due_seconds,
       (SELECT count(*) FROM callback_deliveries WHERE status='dead_letter') AS dead_letters,
       (SELECT count(*) FROM deliveries WHERE lifecycle_status='unknown') AS unknown,
-      (SELECT count(*) FROM raw_provider_events WHERE processed_at IS NULL AND processing_error IS NOT NULL) AS raw_errors`),
+      (SELECT count(*) FROM raw_provider_events WHERE processed_at IS NULL AND terminated_at IS NULL AND processing_error IS NOT NULL) AS raw_errors`),
     query<{id:string;product:string;service:string;category:string;sender:string;grant:boolean;credential:boolean;provider:boolean;identity:boolean;route:boolean;tested:boolean;observable:boolean;event_seen:boolean}>(`SELECT sg.id||':'||s.id||':'||cat.category AS id,p.name AS product,s.name AS service,cat.category AS category,
       coalesce(sg.from_local_part,'*')||'@'||sd.domain AS sender,sg.status='active' AS grant,
       EXISTS(SELECT 1 FROM service_credentials c WHERE c.service_id=s.id AND c.status='active' AND c.valid_from<=now() AND (c.valid_to IS NULL OR c.valid_to>now())) AS credential,
@@ -202,7 +202,7 @@ const adminQueries = {
     GROUP BY e.id,s.id,s.name,p.id,p.name ORDER BY e.created_at DESC`),
   callbackDeliveries: () => query(`SELECT d.id,d.endpoint_id,e.name AS endpoint,d.event_type,d.payload->>'id' AS event_id,d.payload_purged_at,d.status,d.attempt_count,d.next_attempt_at,d.response_code,d.last_error,d.delivered_at,d.created_at
     FROM callback_deliveries d JOIN callback_endpoints e ON e.id=d.endpoint_id ORDER BY d.created_at DESC LIMIT 200`),
-  rawEvents: () => query(`SELECT r.id,r.native_type,r.provider_event_id,r.signature_valid,r.replay_valid,r.received_at,r.processed_at,r.processing_error,pa.name AS account,pa.type
+  rawEvents: () => query(`SELECT r.id,r.native_type,r.provider_event_id,r.signature_valid,r.replay_valid,r.received_at,r.processed_at,r.processing_error,r.processing_attempt_count,r.terminated_at,r.content_purged_at,pa.name AS account,pa.type
     FROM raw_provider_events r JOIN provider_accounts pa ON pa.id=r.provider_account_id ORDER BY r.received_at DESC LIMIT 200`),
   canonicalEvents: () => query(`SELECT * FROM (
     SELECT de.id,de.event_type,de.occurred_at,de.canonical_payload,d.recipient_email,'recipient' AS scope FROM delivery_events de JOIN deliveries d ON d.id=de.delivery_id
@@ -210,12 +210,17 @@ const adminQueries = {
     ) events ORDER BY occurred_at DESC LIMIT 200`),
   suppressions: () => query(`SELECT s.id,s.scope_type,s.list_id,s.email_normalized,s.reason,s.source,s.bounce_count,s.expires_at,s.created_at,p.name AS product
     FROM suppressions s LEFT JOIN products p ON p.id=s.product_id WHERE s.active=true ORDER BY s.created_at DESC`),
-  inbound: () => query(`SELECT i.id,i.service_id,i.content_purged_at,i.from_email,i.to_emails,i.subject,i.status,i.received_at,p.name AS product,count(a.id) AS attachment_count
+  inbound: () => query(`SELECT i.id,i.service_id,i.content_purged_at,i.from_email,i.to_emails,i.subject,i.status,i.created_at AS received_at,i.author_date,i.ingress_received_at,i.ready_at,p.name AS product,count(a.id) AS attachment_count
     FROM inbound_messages i
     LEFT JOIN products p ON p.id=i.product_id
     LEFT JOIN inbound_attachments a ON a.inbound_message_id=i.id
-    GROUP BY i.id,p.name ORDER BY i.received_at DESC LIMIT 200`),
-  inboundRoutes: () => query(`SELECT r.id,r.local_part_pattern,r.status,sd.domain,p.name AS product,s.name AS service,e.opaque_token,pa.type AS provider_type,ce.name AS callback
+    GROUP BY i.id,p.name ORDER BY i.created_at DESC LIMIT 200`),
+  inboundRoutes: () => query(`SELECT r.id,r.local_part_pattern,r.status,sd.domain,p.name AS product,s.name AS service,e.opaque_token,pa.type AS provider_type,ce.name AS callback,
+      CASE WHEN r.callback_endpoint_id IS NULL THEN 'Polling only'
+        WHEN ce.service_id IS DISTINCT FROM r.service_id THEN 'CALLBACK_BINDING_INVALID'
+        WHEN ce.status<>'active' THEN 'CALLBACK_DISABLED'
+        WHEN NOT('inbound.received'=ANY(ce.subscribed_events)) THEN 'CALLBACK_EVENT_NOT_SUBSCRIBED'
+        ELSE 'Callback and polling configured' END AS notification_state
     FROM inbound_routes r
     JOIN sending_domains sd ON sd.id=r.sending_domain_id
     JOIN products p ON p.id=r.product_id

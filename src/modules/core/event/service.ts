@@ -23,6 +23,8 @@ function eventDiagnostic(event: DeliveryStateEvent): Diagnostic | null {
 }
 
 async function enqueueCallbacks(client: PoolClient, serviceId: string, eventId: string, event: DeliveryStateEvent, data: Record<string, unknown>, scope: "recipient" | "submission") {
+  const owned = await client.query("SELECT id FROM messages WHERE id=$1 AND service_id=$2 AND content_purged_at IS NULL",[data.messageId,serviceId]);
+  if (!owned.rowCount) return;
   const type = `email.${event.type}`;
   const endpoints = (await client.query<{ id: string }>("SELECT id FROM callback_endpoints WHERE service_id=$1 AND status='active' AND $2=ANY(subscribed_events)", [serviceId, type])).rows;
   for (const endpoint of endpoints) {
@@ -159,7 +161,7 @@ export async function processRawProviderEvent(rawEventId: string) {
     processed_at: Date | null; verification: unknown; signature_valid: boolean; replay_valid: boolean; processing_attempt_count: number
   }>(`UPDATE raw_provider_events r SET processing_attempt_count=processing_attempt_count+1,next_attempt_at=now()+interval '2 minutes'
     FROM provider_accounts a WHERE r.id=$1 AND a.id=r.provider_account_id AND r.processed_at IS NULL
-      AND r.next_attempt_at<=now() AND r.processing_attempt_count<20 AND r.content_purged_at IS NULL
+      AND r.next_attempt_at<=now() AND r.processing_attempt_count<20 AND r.content_purged_at IS NULL AND r.terminated_at IS NULL
     RETURNING r.id,r.provider_account_id,r.webhook_endpoint_id,a.type AS provider_type,r.processed_at,r.verification,r.signature_valid,r.replay_valid,r.processing_attempt_count`, [rawEventId])).rows[0];
   if (!raw) return;
   try {

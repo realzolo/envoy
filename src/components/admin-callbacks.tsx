@@ -155,6 +155,7 @@ export function Callbacks({ data }: { data: Data }) {
         ]} />
         {item.last_error ? <Alert type="error" content={value(item, "last_error")} showIcon /> : null}
         {item.payload_purged_at ? <Alert type="info" content="Payload removed under the retention policy. This callback cannot be replayed." /> : <Collapse><Collapse.Item name="payload" header="Signed event payload"><pre className={styles.code}>{JSON.stringify(item.payload, null, 2)}</pre></Collapse.Item></Collapse>}
+        {item.status === "dead_letter" ? <ActionButton danger body={{ action:"callback.terminate",id:item.id }} confirmText="Permanently stop recovery? Retention can then clear the payload. This does not mark delivery successful.">Terminate recovery</ActionButton> : null}
         {item.status === "dead_letter" && !item.payload_purged_at ? <ActionButton body={{ action: "callback.replay_dlq", deliveryId: item.id }} confirmText="Queue this callback delivery again?">Replay this delivery</ActionButton> : null}
       </>}</ResourceDetail>}
     </Space>

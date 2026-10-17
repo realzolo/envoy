@@ -1,4 +1,4 @@
-import { mailAddresses, smtpRecipients } from "../inbound-fields";
+import { declaredAuthorDate, mailAddresses, smtpRecipients } from "../inbound-fields";
 import { createVerify } from "node:crypto";
 import {
   CreateEmailIdentityCommand,
@@ -260,7 +260,8 @@ export const sesModule: ProviderModule = {
           content: new Uint8Array(a.content),
           contentId: a.cid
         })),
-        receivedAt: parsed.date ?? new Date()
+        authorDate: declaredAuthorDate(parsed),
+        receivedAt: new Date()
       }
     }
   },

@@ -158,3 +158,27 @@ describe("native outbound mail semantics", () => {
     expect(value).not.toContain("more_secret");
   });
 });
+
+describe("actual RFC Message-ID confirmation",()=>{
+ it("uses and confirms an explicit Postmark RFC header independently of the provider UUID",async()=>{
+  const fetchMock=vi.fn().mockResolvedValue(Response.json({MessageID:"provider-uuid",ErrorCode:0}));vi.stubGlobal("fetch",fetchMock);
+  const id="<attempt-123@example.com>";
+  const result=await providerRegistry("postmark").sender.send({...message,rfcMessageId:id},contexts.postmark);
+  expect(JSON.parse(fetchMock.mock.calls[0][1].body).Headers).toContainEqual({Name:"Message-ID",Value:id});
+  expect(result).toMatchObject({externalMessageId:"provider-uuid",rfcMessageId:id});
+ });
+ it("confirms Mailgun's returned RFC ID but never guesses from an opaque provider identifier",async()=>{
+  vi.stubGlobal("fetch",vi.fn().mockResolvedValueOnce(Response.json({id:"<accepted@mail.example.com>"})).mockResolvedValueOnce(Response.json({id:"opaque"})));
+  expect(await providerRegistry("mailgun").sender.send(message,contexts.mailgun)).toMatchObject({rfcMessageId:"<accepted@mail.example.com>"});
+  expect(await providerRegistry("mailgun").sender.send(message,contexts.mailgun)).toMatchObject({rfcMessageId:null});
+ });
+ it("leaves SES's rewritten RFC ID unknown even when the generated MIME ID is known",async()=>{
+  const ses=mockClient(SESv2Client);ses.on(SendEmailCommand).resolves({MessageId:"ses-external-id"});
+  try {expect(await providerRegistry("ses").sender.send({...message,rfcMessageId:"<candidate@example.com>"},contexts.ses)).toMatchObject({externalMessageId:"ses-external-id",rfcMessageId:null});}finally{ses.restore();}
+ });
+ it.each(["sendgrid","resend"] as const)("does not substitute the %s external ID for an RFC ID",async provider=>{
+  vi.stubGlobal("fetch",vi.fn().mockResolvedValue(provider==="sendgrid" ? new Response(null,{status:202,headers:{"x-message-id":"external"}}) : Response.json({id:"external"})));
+  const result=await providerRegistry(provider).sender.send({...message,rfcMessageId:"<candidate@example.com>"},contexts[provider]);
+  expect(result).toMatchObject({externalMessageId:"external",rfcMessageId:null});
+ });
+});

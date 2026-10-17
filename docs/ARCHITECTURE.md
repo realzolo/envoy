@@ -152,7 +152,7 @@ route participates; overlapping routes merge into one service-owned copy, and mu
 The deduplication key is provider account + external transport message identity + service (or administrator-only product
 scope). Identical patterns may explicitly target different services. Bcc/envelope recipient data are filtered per copy;
 visible To/Cc remain content headers. Raw MIME is administrator infrastructure data and has no service download API.
-Callback endpoints are checked against the copy's service at enqueue time, even if route configuration is inconsistent.
+Callback endpoints are checked against the copy's service and subscription at enqueue and delivery time, even if route configuration is inconsistent. Each route exposes its own notification status separately from ingress configuration; an unbound route is polling-only.
 
 Trusted sources in the adapters are:
 
@@ -284,8 +284,7 @@ the database; exhausted delivery enters dead-letter state with scoped replay. In
 lease, so duplicate work does not create duplicate attachments or callbacks.
 
 Optional retention is an explicit dry-run/apply command. It clears eligible terminal content and objects, not message
-IDs, payload hashes or idempotency summaries. Active and unknown work is excluded. Object deletion must succeed before
-its database reference is marked purged; failed cleanup can be rerun. Purged attachments cannot be downloaded.
+IDs, payload hashes or idempotency summaries. Active and unknown work is excluded. Age-based cleanup deletes objects before marking references purged. Explicit service content erasure instead commits tombstones and durable deletion intents first, so access revocation survives object-store failures; the same reference-aware cleanup retries physical deletion. Purged attachments cannot be downloaded.
 
 Server processes and database sessions use UTC; API timestamps are UTC ISO 8601 (`Z`). The console formats timestamps in the current browser timezone and labels that zone. Cohort/rate/quota windows are UTC and labeled explicitly.
 
@@ -303,3 +302,60 @@ Configuration readiness, actual canonical send/receive facts, and callback HTTP 
 Runtime capacity and external receiving reachability remain unknown at discovery; no missing evidence is synthesized.
 An HTTP-success callback says nothing about the caller's conversation or ticket processing. See the exact status/error
 contract and compatibility notes in [API.md](API.md#business-mail-connection-and-discovery).
+
+## Inbound clocks, dispatch plans and committed change streams
+
+`author_date` is optional untrusted content; `ingress_received_at` comes from the durable verified raw receipt;
+`created_at` records private-copy observation/storage; `ready_at` records completion of sanitization/scanning.
+The adapter's legacy `receivedAt` hint is never used for ordering or expiry. Public `receivedAt` now aliases copy storage
+time. Lists preserve PostgreSQL microseconds; incremental recovery uses `/inbound-changes` and not temporal scans.
+Retention uses the later of storage and ready time, protecting delayed scans and recently received old mail. Baseline
+adoption leaves historical ingress/ready/author times null rather than guessing from a provider-dependent legacy field.
+
+`inbound_receipts` persists the first normalization decision, keyed by provider account plus transport receipt identity.
+Its content-free route snapshot fixes service scopes, matched recipients and selected callback IDs. Subsequent retries
+ignore newly added routes; retained original scopes never expand implicitly. Each service group processes in a separate
+transaction/claim, and processing continues after another group's transient failure before requesting a raw-event retry.
+Ready/purged copies are deduplication tombstones; retries do not upload them again. Runtime callback checks remain live,
+so a historical binding does not grant access to a new endpoint owner. Explicit raw termination fences unfinished work.
+
+An update trigger appends `inbound.available` when a private copy becomes ready and `inbound.content_purged` on its first
+purge. The change and resource update share a transaction. Each service has an `inbound_streams` row with a transactional
+position, generation and retained floor. Allocating a position updates that row; its write lock stays held through commit.
+A reader takes FOR SHARE on the same head and reads only its committed prefix. Thus an uncommitted lower position cannot
+appear after a reader advances, including rollback, delayed commits, concurrent paged reads and late processing. Numeric
+positions are ordered as bigint, never lexically. Different services do not share a counter/authorization boundary.
+
+Pages contain 1–100 content-free changes, reusable event/page checkpoints, a watermark and retention boundary. The
+90-day cleanup locks the head and removes only an expired prefix; it cannot create gaps in the middle. A cursor below
+the floor or from an old generation yields a stable 410 with explicit gap/reset information; omission starts at the floor
+and advertises any truncation. Business consumers reconcile retained resources and record lost history before a reset.
+This feed is independent of the legacy outbound `/events`, callback delivery, and business processing state.
+
+## Credentials, actual mail identity and content lifecycle
+
+Service rotation inserts a new credential under the same service and bounds the old credential's overlap to 24 hours
+(or its earlier expiry). A once-shown key, separate IDs, approximate usage timestamps and rotation/revocation audit support
+a staged caller switch; immediate revoke remains available. Callback retries use the current endpoint signing version;
+`x-envoy-key-version` identifies the signing secret version independently of payload API versions/algorithm versions.
+Consumers preinstall both secrets, switch the endpoint, then drain old requests before removing old verification.
+
+Submission attempts store a nullable confirmed `rfc_message_id`, separate from the Envoy resource/submission ID and
+provider `external_message_id`. Postmark sends an attempt-specific documented custom RFC header and confirms it after
+acceptance; Mailgun uses a valid returned RFC ID. SES overwrites MIME IDs; SendGrid/Resend current paths and unknown
+responses lack confirmed final RFC headers. They stay null. No shared/guessed RFC ID is manufactured across submissions.
+Native threading facts support caller-managed conversations without introducing conversation models into Envoy.
+
+Explicit service content erasure locks owned resources and active work, clears body/attachment/callback content and
+commits irreversible tombstones plus reference-aware object deletion intents. Inbound copies authorize independently.
+Shared files and administrative raw receipts remain until their other retained references no longer require them;
+provider-side source objects are outside the service erasure contract. Active/unknown sends, active scans and in-flight
+callbacks conflict instead of racing deletion. Future provider facts can still update minimal delivery history, but
+cannot enqueue content callbacks for a purged message. Deduplication, idempotency and scope/audit facts survive; replay
+never reconstructs purged content. Caller caches and backups require their own lifecycle controls.
+
+Dead letters mean recoverable work. Explicit audited termination is separate from delivered success and from content
+purge/age retention. Callback termination releases retention gates without fabricating an HTTP success. Raw-event
+termination fences frozen dispatch, rejects unfinished copies and preserves completed copies. Terminated/purged work
+cannot be replayed. The existing transport timeout does not implement a business verification-code deadline; scheduling
+and expiry enforcement remain outside the current send contract.

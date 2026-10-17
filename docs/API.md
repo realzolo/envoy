@@ -95,7 +95,9 @@ The `201` result contains `id`, filename, media type, byte size, SHA-256, availa
 | `GET /messages/{id}/events` | Canonical timeline, with event scope and diagnostics |
 | `GET /messages/{id}/attempts` | Submission attempts, affected recipients, outcome certainty, and structured errors |
 | `GET /deliveries` and `GET /deliveries/{id}` | Recipient role, lifecycle, engagement, compliance, attempts, and events |
-| `GET /events` | Cursor-paginated canonical events |
+| `GET /events` | Cursor-paginated outbound canonical events (scope unchanged) |
+| `GET /inbound-changes` | Durable inbound availability/purge changes, scoped to the service |
+| `DELETE /{messages,inbound-messages,files}/{id}/content` | Idempotent guarded content erasure |
 | `GET /requests/{requestId}` | Request result and problem details, including failures before a message ID was created |
 | `POST /messages/{id}/cancel` | Cancel eligible recipients before crossing the provider boundary |
 | `POST /messages/{id}/retry` | Retry eligible recipients; unknown outcomes require explicit risk acknowledgement |
@@ -152,8 +154,7 @@ content cleanup; identifiers, state, errors, and idempotency summaries remain us
 
 ## Business mail connection and discovery
 
-Business configuration consists of the Envoy base URL, one service key, the chosen authorized From/receiving address(es),
-and the callback connection (HTTPS URL and signing secret issued by Envoy). Business services never need administrator
+Business configuration consists of the Envoy base URL, one service key and the chosen authorized From/receiving address(es). Callback integrations additionally configure their HTTPS URL and signing secret issued by Envoy; polling-only integrations use the same durable inbound change feed. Business services never need administrator
 credentials, provider accounts, DNS records, domain verification APIs, or a sender profile ID. Each APP can bind its own
 service key; APP identity, mailbox purposes, conversations, assignees and ticket links belong to the caller.
 
@@ -232,9 +233,8 @@ ready state, retained bytes, and the current scanning policy.
 `inbound.received` callbacks retain their stable event ID and existing envelope and add `productId`, `serviceId`,
 `envelopeRecipients`, `messageId`, `replyTo`, `inReplyTo`, and `references` under `data`. Fetch sanitized content and
 private attachment IDs through the service API. `GET /events` remains the outbound delivery-event feed; recover inbound
-mail through `/inbound-messages` pagination and signed inbound callbacks. Use the RFC fields to construct a standard
-reply (`inReplyTo` and `references`); conversation matching and ticket state remain business rules. Missing outbound
-RFC Message-ID is not fabricated from Envoy/provider IDs; use inbound RFC threading fields when available.
+mail through `/inbound-changes`; `/inbound-messages` is a stored-time browse/snapshot API, not an incremental recovery feed. Use the RFC fields to construct a standard
+reply (`inReplyTo` and `references`); conversation matching and ticket state remain business rules. Outbound RFC IDs are available per attempt when confirmed; unconfirmed IDs remain null (see below).
 
 Missing/invalid trusted envelopes are quarantined as administrator-only rejected records with
 `ENVELOPE_RECIPIENT_UNAVAILABLE`; no matching active route yields `NO_INBOUND_ROUTE`. No service callback is emitted.
@@ -247,8 +247,7 @@ not unambiguously identify SMTP recipients. Its outbound sending support is unch
 
 ## Adopting the business connection contract
 
-Sending requests and service credentials are unchanged. Capabilities, inbound detail and inbound callback changes are
-additive. Existing `senderGrants` is retained as a legacy active-grant view; new integrations use `mail` for explicit
+Sending requests and credential wire formats are unchanged. New capability/detail/callback fields are additive; corrected inbound time semantics, browse cursors, rotation lifecycle and schema adoption require the changes described below. Existing `senderGrants` is retained as a legacy active-grant view; new integrations use `mail` for explicit
 ranges and status. `providerCapabilities` is retained but deprecated in OpenAPI; business logic should stop depending
 on its provider names. Strict response/callback decoders need to allow the new fields or regenerate from OpenAPI.
 
@@ -271,6 +270,8 @@ export ENVOY_CALLBACK_SECRET='<callback connection secret issued by Envoy>'
 node examples/service-mail.mjs discover
 node examples/service-mail.mjs send order-123 customer@example.net
 node examples/service-mail.mjs inbound
+node examples/service-mail.mjs recover
+node examples/service-mail.mjs attempts msg_example
 node examples/service-mail.mjs reply inb_example customer@example.net
 node examples/service-mail.mjs serve
 node examples/service-mail.mjs events
@@ -282,3 +283,139 @@ receipt before returning 202. `events` reads those receipts and uses the same se
 Replace its printing with the caller's own transactional business handler and durable processing state; HTTP acknowledgement
 still does not mean that handler finished. Envoy operators register the HTTPS callback URL and subscriptions in Envoy;
 no provider or DNS setting is supplied by this business process.
+
+## Trusted inbound clocks and recovery
+
+| Field | Meaning |
+|---|---|
+| `authorDate` | Nullable, untrusted author-declared RFC Date. Old/future dates remain content facts; missing/invalid values are null |
+| `ingressReceivedAt` | Time Envoy durably accepted the verified provider receipt. It is not the upstream SMTP server's clock. Legacy unverified history is null |
+| `receivedAt` | Compatibility field now meaning the private copy's system storage/observation time (`created_at`). Browse pages use its PostgreSQL microsecond precision plus ID |
+| `readyAt` | Nullable system time the sanitized/scanned content became business-readable. Legacy completion times remain unknown |
+| Change `recordedAt` | System observation of an atomic availability/purge change, never the mail Date or business processing time |
+
+Inbound callback `occurredAt` now records readable completion (the same `readyAt`), rather than the former provider-dependent receive/author Date. Existing pending historical callback payloads retain their original facts; they are not rewritten during adoption. Delayed normalization and attachment scanning may separate all these clocks. Content retention starts at the later of
+copy storage and processing completion, so a just-readable old email is not immediately expired. Browse snapshots can
+include scanning/rejected copies; `readyAt` is not proof that content is still retained. Check `contentPurgedAt`.
+
+`GET /inbound-changes?limit=50&cursor=<opaque>` returns:
+
+```json
+{
+  "data": [{"id":"ich_example","inboundMessageId":"inb_example","type":"inbound.available","recordedAt":"2026-10-17T08:00:00Z","cursor":"opaque-event-checkpoint"}],
+  "nextCursor":"opaque-page-checkpoint", "hasMore":false, "watermark":"opaque-committed-prefix",
+  "retention":{"earliestCursor":"opaque-retained-floor","historyTruncated":false,"days":90}
+}
+```
+
+`limit` is 1–100. IDs are stable across repeated reads. Persist each event or page and its checkpoint durably before
+advancing; replaying a cursor is supported. An empty tail still returns `nextCursor`; reuse it on the next poll.
+`inbound.available` means content became readable, not that a business handler ran; `inbound.content_purged` means
+retained content was removed. Both carry only resource identity and time. Fetch the current resource: an availability
+event can precede a purge you have not consumed yet. Callback IDs and change IDs are separate deduplication namespaces;
+consuming both transports also requires idempotent resource-level business effects.
+
+Each page reads a bounded committed prefix. Per-service transactional head locks serialize allocation **through commit**;
+rollback does not leave an allocated position. A writer cannot commit a lower position after a returned cursor.
+New commits during pagination are consumed on later pages/polls; a late author Date or delayed scan cannot move a change
+behind the cursor. This contract does not rely on sequence allocation, timestamps or UUID sort order. Services progress
+independently. Cursors bind to a service and stream generation; they continue to work after credential rotation.
+
+Changes are kept for at least 90 days and trimmed as a prefix by `data:cleanup --apply`, independently of optional content
+policies. No cursor starts at the current tail implicitly. Omitted cursors start at the retained floor and report
+`historyTruncated`; applications must handle that as a possible gap. A cursor before the floor or for an old generation
+returns **410 `INBOUND_CURSOR_EXPIRED`**, `errors.gap:true` and `errors.resetCursor`. Malformed, future, or other-service
+cursors return **400 `INVALID_INBOUND_CURSOR`**. Do not silently reset: reconcile retained inbound resources with your
+own durable state, record/alert the irrecoverable gap, then explicitly adopt the reset cursor. Already expired content
+cannot be reconstructed by Envoy. Run recovery within your retention window even when callbacks work.
+
+The stored-time list uses new `inb2.` browse cursors; old time cursors fail with **400 `INBOUND_LIST_CURSOR_CHANGED`**.
+Discard old browse checkpoints and initialize the change stream. `/events` keeps its outbound scope and existing cursors.
+
+## Receiver notifications and key rotation
+
+`mail.receivers[].receiving` describes ingress routing. Its independent `notification` contains `mode` (`polling` or
+`callback_and_polling`), `state`, a service-owned `callbackEndpointId` or null, `reasonCodes`, and
+`recoveryResource:"/api/v1/inbound-changes"`. No callback is valid polling-only configuration. A selected callback must
+belong to the service, be active and subscribe to `inbound.received`; violations report `CALLBACK_BINDING_INVALID`,
+`CALLBACK_DISABLED`, or `CALLBACK_EVENT_NOT_SUBSCRIBED`. A healthy unrelated callback cannot make a route's notification
+configured. Discovery recalculates configuration immediately; sending/receipt/callback execution still checks current
+permissions and subscriptions. Subscription removal dead-letters pending/retrying affected callbacks. Already in-flight
+HTTP requests may finish. HTTP 2xx acknowledges receipt only; business processing stays unknown.
+
+Administrator `credential.rotate` creates a **new credential ID for the same service**, returns the plaintext once,
+`previousCredentialId`, `serviceId` and `overlapUntil`. The old key remains valid until its existing expiry or at most
+24 hours, whichever is earlier. Switch all callers, verify the new credential's `last_used_at` (coalesced to five-minute
+usage observations), then explicitly revoke the old ID. `credential.revoke` is immediate and remains the emergency path.
+History, file ownership, rate limits, stream cursors and idempotency are service-scoped, not credential-scoped.
+Never distribute administrator keys or provider credentials to perform this switch.
+
+Callbacks add `x-envoy-key-version`, the endpoint signing secret version used for that attempt. Neither payload
+`apiVersion` nor signature prefix `v1=` is a secret version. Install the new secret in the receiver alongside the old
+secret first; call administrator `callback.rotate_secret` with that preinstalled value; verify new-version deliveries;
+retain old verification until all in-flight requests plus the timestamp replay window have drained (at least seven
+minutes with the current two-minute lease/five-minute consumer window), then remove the old secret. Retries sign with
+the current secret. Accept only locally configured secrets, never a key supplied by the request. The example supports
+`ENVOY_CALLBACK_SECRET_NEXT` during this overlap.
+
+## Outbound RFC Message-ID and standard replies
+
+`GET /messages/{id}/attempts` and delivery details add nullable `rfcMessageId` and `rfcMessageIdStatus` (`confirmed` or
+`unknown`). An Envoy `msg_...` ID identifies a business resource; `submissionId` identifies an envelope group; an attempt
+identifies one provider execution. Provider external IDs remain operational identifiers and are never automatically
+converted to RFC IDs. Different attempts/submissions can have different RFC IDs; do not pick an arbitrary attempt when
+replying to a multi-submission message. Confirmation is an adapter/API contract fact, not proof of inbox delivery.
+
+| Adapter/path | Confirmation behavior |
+|---|---|
+| Postmark | Envoy sends an attempt-specific RFC `Message-ID` through the documented custom header; after acceptance the exact header is confirmed separately from Postmark's UUID |
+| Mailgun MIME | A syntactically valid RFC Message-ID returned by its messages API is confirmed; opaque/non-RFC responses stay null |
+| SES raw MIME | SES overwrites the proposed MIME Message-ID. Its API result is an external ID; no verified actual RFC header is currently available, so null |
+| SendGrid / Resend | Current submission paths expose external IDs without confirmed final RFC headers; null |
+| Mock | No real RFC transport exists; null |
+
+Lost/ambiguous responses and historical attempts remain unknown unless an adapter has a confirmed fact. The generated
+MIME ID alone is not confirmation. Use a confirmed sent RFC ID or an incoming `messageId` with native `inReplyTo` and
+`references`; preserve the chain when replying. Conversation grouping and customer support rules remain in the caller.
+Provider semantics: [Postmark custom Message-ID](https://postmarkapp.com/developer/user-guide/send-email-with-api/send-a-single-email),
+[Mailgun messages API](https://documentation.mailgun.com/docs/mailgun/api-reference/send/mailgun/messages),
+[SES header replacement](https://docs.aws.amazon.com/ses/latest/APIReference/API_SendRawEmail.html),
+[SendGrid X-Message-ID](https://www.twilio.com/docs/sendgrid/glossary/x-message-id).
+
+## Controlled content erasure and recovery termination
+
+`DELETE /inbound-messages/{id}/content`, `DELETE /messages/{id}/content`, and `DELETE /files/{id}/content` require the
+owning service's active key. They are idempotent; unknown/not-owned IDs return 404. Successful requests return 202 with
+`id`, stable `contentPurgedAt`, and `objectDeletion:"pending_or_complete"`: the database tombstone and deletion intents
+are durable, API access is already removed, physical storage reclamation may still be pending.
+
+- Inbound erasure removes sanitized body/subject, attachment names/content references, raw MIME, and associated callback
+  sensitive payloads. Undelivered callbacks become `terminated`; delivered receipts remain delivered with erased payloads.
+  Erasing one service copy does not affect another. Related shared administrative raw receipts are erased only when all
+  referencing copies/resources are purged and processing is complete/terminated; otherwise they follow their separate
+  administrative retention policy. Provider-side source objects and caller-owned copies/backups need their own policy.
+- Outbound erasure clears body/subject, custom headers/metadata/tags, attachment snapshots and associated callback payloads.
+  Unshared owned files are erased; files still referenced by retained messages remain until their last reference clears.
+  A standalone file request returns **409 `CONTENT_SHARED`** while retained message snapshots need it.
+- **409 `CONTENT_BUSY`** protects scanning copies, in-flight callback delivery, active recipient sends and unresolved
+  attempts. Resolve/finish work first; deletion is not permission to resend an unknown result. Necessary IDs, scope,
+  recipient/routing metadata, standard threading identifiers, state, audit and idempotency/deduplication tombstones remain.
+  This is content erasure, not an all-PII account deletion API.
+
+Purged copies cannot regain content through duplicate provider events, raw replay, callback replay, retry or recovery jobs.
+No purge event contains erased content. Already transmitted callbacks/downloads cannot be recalled; consumers own their
+cached data and business retention. Envoy object cleanup runs with `pnpm data:cleanup --apply`, even if age policies are
+unset; object failures keep retry intents. Global age retention and explicit service erasure are distinct operations.
+
+`dead_letter` means recoverable work is retained. Operators can replay a scoped delivery after repairing its endpoint/
+subscription. Administrator `callback.terminate` permanently changes a dead letter to `terminated`, records an audit,
+and leaves `deliveredAt:null`; age retention can then clear its payload/related content. It cannot be replayed or made
+successful by compensation. Administrator `event.terminate` can stop an exhausted (20 attempts), inactive raw event:
+it freezes the receipt as terminated, rejects unfinished copies with `INBOUND_PROCESSING_TERMINATED`, preserves successful
+copies and permits raw-content age cleanup. A terminated raw event cannot be replayed. Termination itself is not a
+business deletion request; use the content endpoint/policy to erase retained copies. Restoration from backups requires
+preserving/reapplying tombstones and external deletion records before replay.
+
+Verification-code delivery deadlines remain an explicit contract gap: `scheduling:false`, no business expiry/deadline
+parameter or deadline-enforced send guarantee exists. The worker's transport timeout is not a code expiry guarantee.
+No general scheduling system is added here.
