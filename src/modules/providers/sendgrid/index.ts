@@ -1,6 +1,6 @@
 import { createHash, createPublicKey, verify as verifySignature } from "node:crypto";
 import type { CanonicalEventType, ProviderModule } from "../contracts";
-import { accepted, checkedJson, event, header, type MultipartValue, parseMultipart } from "../shared";
+import { accepted, submitRequest, eventDate, stableEventId, checkedJson, event, header, type MultipartValue, parseMultipart } from "../shared";
 
 const eventMap: Record<string, CanonicalEventType> = {
   processed: "accepted",
@@ -26,7 +26,7 @@ export const sendgridModule: ProviderModule = {
       nativeIdempotency: false,
       inboundMode: "multipart",
       domainManagement: false,
-      webhookSecurity: "ECDSA signature or OAuth",
+      webhookSecurity: "ECDSA signed event and inbound webhooks",
       eventTypes: Object.keys(eventMap),
       attachments: false,
       scheduling: false
@@ -35,7 +35,7 @@ export const sendgridModule: ProviderModule = {
   sender: {
     async send(message, context) {
       if (context.config.type !== "sendgrid" || context.secret.type !== "sendgrid") throw new Error("Invalid SendGrid configuration");
-      const response = await fetch(`${apiBase(context.config.region)}/v3/mail/send`, {
+      const response = await submitRequest(`${apiBase(context.config.region)}/v3/mail/send`, {
         method: "POST",
         headers: { authorization: `Bearer ${context.secret.apiKey}`, "content-type": "application/json" },
         body: JSON.stringify({
@@ -70,9 +70,10 @@ export const sendgridModule: ProviderModule = {
       };
       let valid = false;
       try {
-        valid = verifySignature("sha256", Buffer.concat([Buffer.from(timestamp), Buffer.from(request.rawBody)]), createPublicKey(publicKey), Buffer.from(signature, "base64"))
+        valid = verifySignature("sha256", Buffer.concat([Buffer.from(timestamp), Buffer.from(request.rawBody)]), publicKey.includes("-----BEGIN") ? createPublicKey(publicKey) : createPublicKey({ key: Buffer.from(publicKey, "base64"), format: "der", type: "spki" }), Buffer.from(signature, "base64"))
       } catch {
       }
+      if (!valid) return { valid: false, replaySafe: false, nativeType: "unknown", parsed: null };
       const replaySafe = Math.abs(Date.now() / 1000 - Number(timestamp)) < 300;
       if (inbound) {
         const parsed = await parseMultipart(request.rawBody, contentType);
@@ -90,7 +91,7 @@ export const sendgridModule: ProviderModule = {
       return {
         valid,
         replaySafe,
-        providerEventId: first?.sg_event_id ? String(first.sg_event_id) : undefined,
+        providerEventId: createHash("sha256").update(request.rawBody).digest("hex"),
         nativeType: first?.event ? String(first.event) : "batch",
         parsed
       };
@@ -106,10 +107,10 @@ export const sendgridModule: ProviderModule = {
         const type = eventMap[String(row.event)];
         if (!type) return [];
         return [event({
-          id: String(row.sg_event_id ?? crypto.randomUUID()),
+          id: String(row.sg_event_id ?? stableEventId(row)),
           externalMessageId: typeof row.sg_message_id === "string" ? row.sg_message_id.split(".")[0] : undefined,
           type,
-          occurredAt: new Date(Number(row.timestamp ?? Date.now() / 1000) * 1000),
+          occurredAt: eventDate(Number(row.timestamp) * 1000),
           recipient: typeof row.email === "string" ? row.email : undefined,
           bounce: type === "bounced" ? {
             classification: String(row.type).includes("bounce") ? "hard" : "soft",

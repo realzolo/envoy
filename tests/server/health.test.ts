@@ -1,18 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@/server/database", () => ({ databaseHealth: vi.fn() }));
-vi.mock("@/server/redis", () => ({ redisHealth: vi.fn() }));
+vi.mock("@/server/queues", () => ({ queueSchemaHealth: vi.fn() }));
 vi.mock("@/server/services/outbox", () => ({ outboxBacklog: vi.fn() }));
 
 import { GET } from "@/app/api/health/route";
 import { databaseHealth } from "@/server/database";
-import { redisHealth } from "@/server/redis";
+import { queueSchemaHealth } from "@/server/queues";
 import { outboxBacklog } from "@/server/services/outbox";
 
 describe("public health endpoint", () => {
   it("returns only the stable public success shape", async () => {
     vi.mocked(databaseHealth).mockResolvedValueOnce(new Date());
-    vi.mocked(redisHealth).mockResolvedValueOnce("PONG");
+    vi.mocked(queueSchemaHealth).mockResolvedValueOnce(undefined);
     vi.mocked(outboxBacklog).mockResolvedValueOnce(0);
 
     const response = await GET();

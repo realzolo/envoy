@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { loadEnvConfig } from "@next/env";
+import { runMigrations } from "bullmq";
 import { db } from "../src/server/database";
 
 loadEnvConfig(process.cwd());
@@ -22,11 +23,10 @@ async function main() {
     await client.query(`
       CREATE TABLE IF NOT EXISTS schema_migrations (
         name text PRIMARY KEY,
-        checksum text,
+        checksum text NOT NULL,
         applied_at timestamptz NOT NULL DEFAULT now()
       )
     `);
-    await client.query("ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS checksum text");
 
     for (const file of migrationFiles) {
       const sql = await readFile(join(migrationsDirectory, file), "utf8");
@@ -34,10 +34,9 @@ async function main() {
       const applied = await client.query<{ checksum: string | null }>("SELECT checksum FROM schema_migrations WHERE name = $1", [file]);
       if (applied.rowCount) {
         const appliedChecksum = applied.rows[0].checksum;
-        if (appliedChecksum && appliedChecksum !== checksum) {
+        if (appliedChecksum !== checksum) {
           throw new Error(`Migration checksum mismatch for ${file}. Applied migrations are immutable; add a new migration instead.`);
         }
-        if (!appliedChecksum) console.warn(`Skipping checksum validation for legacy migration ${file}`);
         continue;
       }
 
@@ -52,6 +51,8 @@ async function main() {
         throw error;
       }
     }
+    const queueVersion = await runMigrations(client, "bullmq");
+    console.log(`BullMQ PostgreSQL schema ready (version ${queueVersion})`);
   } finally {
     if (hasMigrationLock) await client.query("SELECT pg_advisory_unlock(hashtext($1))", ["envoy:schema-migrations"]);
     client.release();

@@ -81,7 +81,7 @@ export type ProviderWebhookSettings = z.infer<typeof providerWebhookSettingsSche
 
 export type ProviderCapabilities = {
   nativeIdempotency: boolean;
-  inboundMode: "webhook-fetch" | "multipart" | "route" | "object-reference" | "none";
+  inboundMode: "webhook-fetch" | "json" | "multipart" | "route" | "object-reference" | "none";
   domainManagement: boolean;
   webhookSecurity: string;
   eventTypes: string[];

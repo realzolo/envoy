@@ -11,12 +11,13 @@ import { loadProviderAccount } from "@/modules/config/provider-account";
 import { sealSecret } from "@/modules/config/envelope";
 import { resolveCallbackTarget } from "@/modules/callbacks/url-policy";
 import { acceptMessage } from "@/modules/core/message/service";
-import { choosePolicyTarget } from "@/modules/core/routing/engine";
+import { choosePolicyTarget, evaluateCandidate, retryDelivery } from "@/modules/core/routing/engine";
 import { providerRegistry } from "@/modules/providers/registry";
 import { createId } from "@/server/ids";
 import { hashApiKey } from "@/server/crypto";
 import { query, transaction } from "@/server/database";
 import { PROVIDER_EVENT_RECEIVED } from "@/server/outbox-events";
+import { queueForEvent } from "@/server/services/outbox";
 import { SERVICE_REQUESTS_PER_MINUTE } from "@/server/service-limits";
 
 const identifierSchema = z.string().trim().min(1).max(160);
@@ -194,6 +195,7 @@ export async function createProviderAccount(input: {
 }
 
 export async function testProviderAccount(id: string, actor: string) {
+  const version = (await query<{ credential_version: number }>("SELECT credential_version FROM provider_credentials WHERE provider_account_id=$1 AND status='active'", [id])).rows[0]?.credential_version;
   const account = await loadProviderAccount(id, { allowNonActive: true });
   let health: { healthy: boolean; details?: Record<string, unknown> };
   try {
@@ -201,11 +203,14 @@ export async function testProviderAccount(id: string, actor: string) {
   } catch (error) {
     health = { healthy: false, details: { error: error instanceof Error ? error.message : "Connection failed" } }
   }
-  await query("UPDATE provider_accounts SET status=CASE WHEN status='disabled' THEN 'disabled' WHEN $2 THEN 'active' ELSE 'degraded' END,health=$3,updated_at=now() WHERE id=$1", [id, health.healthy, {
-    status: health.healthy ? "healthy" : "unhealthy",
-    checkedAt: new Date().toISOString(), ...health.details
-  }]);
-  await audit(actor, "provider_account.test", "provider_account", id, { healthy: health.healthy });
+  await transaction(async client => {
+    await client.query("SELECT id FROM provider_accounts WHERE id=$1 FOR UPDATE", [id]);
+    const updated = await client.query("UPDATE provider_accounts SET status=CASE WHEN status='disabled' THEN 'disabled' WHEN $2 THEN 'active' ELSE 'degraded' END,health=$3,updated_at=now() WHERE id=$1 AND EXISTS(SELECT 1 FROM provider_credentials WHERE provider_account_id=$1 AND status='active' AND credential_version=$4) RETURNING id", [id, health.healthy, {
+      status: health.healthy ? "healthy" : "unhealthy", checkedAt: new Date().toISOString(), credentialVersion: version, ...health.details
+    }, version]);
+    if (!updated.rowCount) throw new Error("Credentials changed during this test. Test the current credentials again.");
+    await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES ($1,'provider_account.test','provider_account',$2,$3)", [actor, id, { healthy: health.healthy, credentialVersion: version }]);
+  });
   return health
 }
 
@@ -230,6 +235,7 @@ export async function rotateProviderCredential(id: string, secretValue: Record<s
   if (!account) throw new Error("Provider account not found");
   const secret = providerSecretSchema.parse({ ...secretValue, type: account.type });
   return transaction(async client => {
+    await client.query("SELECT id FROM provider_accounts WHERE id=$1 FOR UPDATE", [id]);
     const latest = await client.query<{
       credential_version: number
     }>("SELECT credential_version FROM provider_credentials WHERE provider_account_id=$1 ORDER BY credential_version DESC LIMIT 1", [id]);
@@ -295,10 +301,11 @@ export async function createDomain(input: {
       throw new Error(`This Mailgun account sends through ${account.context.config.sendingDomain}. Associate it only with that exact sending domain.`);
     }
   }
-  const domainId = createId("sd");
-  await query("INSERT INTO sending_domains(id,domain) VALUES ($1,$2)", [domainId, domain]);
+  const domainId = (await query<{ id: string }>("INSERT INTO sending_domains(id,domain) VALUES ($1,$2) ON CONFLICT(domain) DO UPDATE SET domain=excluded.domain RETURNING id", [createId("sd"), domain])).rows[0].id;
   const results = [];
   for (const { accountId, account, identity } of accounts) {
+    const existing = (await query<{ id: string; status: string }>("SELECT id,status FROM provider_identities WHERE sending_domain_id=$1 AND provider_account_id=$2", [domainId, accountId])).rows[0];
+    if (existing) { results.push({ accountId, status: existing.status, existing: true }); continue }
     const identityId = createId("pi");
     if (!identity) {
       await query("INSERT INTO provider_identities(id,sending_domain_id,provider_account_id,status,dns_records,last_checked_at) VALUES ($1,$2,$3,'verified','[]',now())", [identityId, domainId, accountId]);
@@ -398,9 +405,9 @@ export async function createRoutingPolicy(input: {
   category?: string;
   priority?: number;
   targets: Array<{ accountId: string; identityId: string; priority?: number; weight?: number; rateLimit?: number }>
-}, actor: string) {
+}, actor: string, existingId?: string) {
   const validated = routingPolicyInputSchema.parse(input);
-  const id = createId("rp");
+  const id = existingId ?? createId("rp");
   await transaction(async client => {
     let productId = validated.productId;
     if (validated.serviceId) {
@@ -426,16 +433,23 @@ export async function createRoutingPolicy(input: {
       const identity = identities.rows.find(item => item.id === target.identityId);
       if (identity?.sending_domain_id !== validated.domainId || identity.status !== "verified" || identity.account_status !== "active") throw new Error("Routing targets must be verified identities for the selected sending domain on active provider accounts");
     }
+    if (existingId) {
+      const current = await client.query("SELECT id FROM routing_policies WHERE id=$1 FOR UPDATE", [id]);
+      if (!current.rowCount) throw new Error("Routing policy not found");
+      await client.query("DELETE FROM routing_targets WHERE policy_id=$1", [id]);
+      await client.query("UPDATE routing_policies SET name=$2,product_id=$3,service_id=$4,sending_domain_id=$5,message_category=$6,priority=$7,updated_at=now() WHERE id=$1", [id, validated.name, productId ?? null, validated.serviceId ?? null, validated.domainId, validated.category ?? null, validated.priority]);
+    } else {
     await client.query("INSERT INTO routing_policies(id,name,product_id,service_id,sending_domain_id,message_category,priority) VALUES ($1,$2,$3,$4,$5,$6,$7)", [id, validated.name, productId ?? null, validated.serviceId ?? null, validated.domainId, validated.category ?? null, validated.priority]);
+    }
     for (const target of validated.targets) await client.query("INSERT INTO routing_targets(id,policy_id,provider_account_id,provider_identity_id,priority,weight,rate_limit_per_minute) VALUES ($1,$2,$3,$4,$5,$6,$7)", [createId("rt"), id, target.accountId, target.identityId, target.priority, target.weight, target.rateLimit]);
-    await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES ($1,'routing_policy.create','routing_policy',$2,$3)", [actor, id, {
+    await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES ($1,$4,'routing_policy',$2,$3)", [actor, id, {
       productId: productId ?? null,
       serviceId: validated.serviceId ?? null,
       domainId: validated.domainId,
       category: validated.category ?? null,
       priority: validated.priority,
       targetCount: validated.targets.length
-    }])
+    }, existingId ? "routing_policy.update" : "routing_policy.create"])
   });
   return id
 }
@@ -479,19 +493,10 @@ export async function simulateRouting(input: {
     usage.monthly_usage::text,usage.daily_usage::text
     FROM routing_policies rp JOIN routing_targets rt ON rt.policy_id=rp.id JOIN provider_accounts pa ON pa.id=rt.provider_account_id
     JOIN provider_identities pi ON pi.id=rt.provider_identity_id AND pi.provider_account_id=pa.id JOIN sending_domains sd ON sd.id=pi.sending_domain_id
-    CROSS JOIN LATERAL(SELECT count(*)FILTER(WHERE da.started_at>=date_trunc('month',now())AND da.status IN('submitting','accepted','reconciled'))monthly_usage,count(*)FILTER(WHERE da.started_at>=date_trunc('day',now())AND da.status IN('submitting','accepted','reconciled'))daily_usage FROM delivery_attempts da WHERE da.provider_account_id=pa.id)usage
-    WHERE rp.status='active' AND rp.sending_domain_id=$1 AND pi.sending_domain_id=$1 AND ($2::text IS NULL OR rp.product_id IS NULL OR rp.product_id=$2) AND ($3::text IS NULL OR rp.service_id IS NULL OR rp.service_id=$3) AND ($4::text IS NULL OR rp.message_category IS NULL OR rp.message_category=$4) ORDER BY rp.priority,rt.priority,rt.id`, [domainId, input.productId || null, input.serviceId || null, input.category || null]);
+    CROSS JOIN LATERAL(SELECT count(*)FILTER(WHERE da.started_at>=date_trunc('month',now())AND da.status IN('submitting','accepted','reconciled','unknown','reconciling'))monthly_usage,count(*)FILTER(WHERE da.started_at>=date_trunc('day',now())AND da.status IN('submitting','accepted','reconciled','unknown','reconciling'))daily_usage FROM delivery_attempts da WHERE da.provider_account_id=pa.id)usage
+    WHERE rp.status='active' AND rp.sending_domain_id=$1 AND pi.sending_domain_id=$1 AND (rp.product_id IS NULL OR rp.product_id=$2) AND (rp.service_id IS NULL OR rp.service_id=$3) AND (rp.message_category IS NULL OR rp.message_category=$4) ORDER BY rp.priority,rt.priority,rt.id`, [domainId, input.productId || null, input.serviceId || null, input.category || null]);
   const candidates = result.rows.map(row => {
-    const reasons: string[] = [];
-    if (row.status === "circuit_open" && (!row.circuit_open_until || row.circuit_open_until > new Date())) reasons.push("circuit_open");
-    if (row.account_status !== "active") reasons.push("account_unavailable");
-    if (["unhealthy", "offline"].includes(String(row.health.status))) reasons.push("account_unhealthy");
-    if (row.identity_status !== "verified") reasons.push("identity_unverified");
-    if (row.domain_status !== "active") reasons.push("domain_disabled");
-    const monthly = typeof row.quota.monthlyLimit === "number" ? row.quota.monthlyLimit : null;
-    const daily = typeof row.quota.dailyLimit === "number" ? row.quota.dailyLimit : null;
-    if (monthly !== null && Number(row.monthly_usage) >= monthly) reasons.push("monthly_quota_exhausted");
-    if (daily !== null && Number(row.daily_usage) >= daily) reasons.push("daily_quota_exhausted");
+    const reasons = evaluateCandidate(row);
     return {
       ...row,
       eligible: reasons.length === 0,
@@ -505,30 +510,13 @@ export async function simulateRouting(input: {
 }
 
 export async function manualRetryDelivery(id: string, acknowledgeDuplicateRisk: boolean, actor: string) {
-  await transaction(async client => {
-    const row = (await client.query<{
-      lifecycle_status: string;
-      current_attempt_id: string | null
-    }>("SELECT lifecycle_status,current_attempt_id FROM deliveries WHERE id=$1 FOR UPDATE", [id])).rows[0];
-    if (!row) throw new Error("Delivery not found");
-    if (row.lifecycle_status === "unknown" && !acknowledgeDuplicateRisk) throw new Error("Duplicate-risk acknowledgement is required for an unknown outcome");
-    if (!["unknown", "failed", "bounced", "deferred"].includes(row.lifecycle_status)) throw new Error("This delivery cannot be retried");
-    if (row.current_attempt_id) {
-      await client.query("UPDATE delivery_attempts SET routing_snapshot=routing_snapshot||jsonb_build_object('manualRetryAuthorizedAt',now()::text) WHERE id=$1", [row.current_attempt_id]);
-      if (row.lifecycle_status === "unknown") await client.query("UPDATE delivery_attempts SET status='failed',outcome_determinate=true,error_category='unknown',error_code='manual_override',error_message='Operator accepted duplicate risk' WHERE id=$1", [row.current_attempt_id])
-    }
-    await client.query("UPDATE deliveries SET lifecycle_status='queued',updated_at=now() WHERE id=$1", [id]);
-    await client.query("INSERT INTO outbox_events(id,aggregate_type,aggregate_id,event_type,payload) VALUES ($1,'delivery',$2,'delivery.requested',$3)", [createId("out"), id, { deliveryId: id }]);
-    await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES ($1,'delivery.manual_retry','delivery',$2,$3)", [actor, id, {
-      previousStatus: row.lifecycle_status,
-      duplicateRiskAcknowledged: acknowledgeDuplicateRisk
-    }])
-  })
+  return retryDelivery(id, { actor, acknowledgeUnknown: acknowledgeDuplicateRisk })
 }
 
 export async function replayRawEvent(id: string, actor: string) {
   await transaction(async client => {
-    await client.query("UPDATE raw_provider_events SET processed_at=NULL,processing_error=NULL WHERE id=$1", [id]);
+    const updated = await client.query("UPDATE raw_provider_events SET processed_at=NULL,processing_error=NULL,processing_attempt_count=0,next_attempt_at=now() WHERE id=$1 AND content_purged_at IS NULL RETURNING id", [id]);
+    if (!updated.rowCount) throw new Error("Raw event not found or its content has expired.");
     await client.query("INSERT INTO outbox_events(id,aggregate_type,aggregate_id,event_type,payload) VALUES ($1,'raw_provider_event',$2,$3,$4)", [createId("out"), id, PROVIDER_EVENT_RECEIVED, { rawEventId: id }]);
     await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id) VALUES ($1,'provider_event.replay','raw_provider_event',$2)", [actor, id])
   })
@@ -567,7 +555,8 @@ export async function sendTestMessage(input: {
   senderProfile?: string;
   subject: string;
   html?: string;
-  text?: string
+  text?: string;
+  idempotencyKey: string
 }, actor: string) {
   const row = (await query<{
     service_id: string;
@@ -586,7 +575,7 @@ export async function sendTestMessage(input: {
       product: row.product_name,
       rateLimitPerMinute: SERVICE_REQUESTS_PER_MINUTE
     },
-    idempotencyKey: `admin-test-${crypto.randomUUID()}`,
+    idempotencyKey: `admin-test-${z.string().uuid().parse(input.idempotencyKey)}`,
     input: {
       category: input.category,
       senderProfile: input.senderProfile,
@@ -684,15 +673,15 @@ export async function rotateCallbackSecret(id: string, requestedSecret: string |
   })
 }
 
-export async function replayDeadLetters(actor: string) {
+export async function replayDeadLetters(actor: string, scope: { endpointId?: string; deliveryId?: string } = {}) {
   return transaction(async client => {
     const rows = (await client.query<{
       id: string
-    }>(`UPDATE callback_deliveries d SET status='pending',next_attempt_at=now(),updated_at=now()
-        FROM callback_endpoints e WHERE d.endpoint_id=e.id AND d.status='dead_letter' AND e.status='active'
-        RETURNING d.id`)).rows;
+    }>(`UPDATE callback_deliveries d SET status='pending',attempt_count=0,next_attempt_at=now(),last_error=NULL,updated_at=now()
+        FROM callback_endpoints e WHERE d.endpoint_id=e.id AND d.status='dead_letter' AND d.payload_purged_at IS NULL AND e.status='active' AND ($1::text IS NULL OR d.endpoint_id=$1) AND ($2::text IS NULL OR d.id=$2)
+        RETURNING d.id`, [scope.endpointId ?? null, scope.deliveryId ?? null])).rows;
     for (const row of rows) await client.query("INSERT INTO outbox_events(id,aggregate_type,aggregate_id,event_type,payload) VALUES ($1,'callback',$2,'callback.requested',$3)", [createId("out"), row.id, { callbackDeliveryId: row.id }]);
-    await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES ($1,'callback_delivery.replay_dead_letters','callback_delivery',NULL,$2)", [actor, { count: rows.length }]);
+    await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES ($1,'callback_delivery.replay_dead_letters','callback_delivery',NULL,$2)", [actor, { count: rows.length, ...scope }]);
     return rows.length
   })
 }
@@ -766,4 +755,42 @@ export async function createInboundRoute(input: {
 export async function toggleInboundRoute(id: string, enabled: boolean, actor: string) {
   await query("UPDATE inbound_routes SET status=$2 WHERE id=$1", [id, enabled ? "active" : "disabled"]);
   await audit(actor, "inbound_route.toggle", "inbound_route", id, { enabled })
+}
+
+export async function updateCallback(id: string, input: { name: string; url: string; events: string[] }, actor: string) {
+  const validated = callbackInputSchema.omit({ serviceId: true, secret: true }).parse(input);
+  const target = await resolveCallbackTarget(validated.url);
+  await transaction(async client => {
+    const updated = await client.query("UPDATE callback_endpoints SET name=$2,url=$3,subscribed_events=$4,updated_at=now() WHERE id=$1 RETURNING id", [id, validated.name, target.url.toString(), validated.events]);
+    if (!updated.rowCount) throw new Error("Callback endpoint not found");
+    await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES ($1,'callback_endpoint.update','callback_endpoint',$2,$3)", [actor,id,{name:validated.name,url:target.url.toString(),events:validated.events}]);
+  })
+}
+
+export async function updateSenderProfile(id: string, input: z.input<typeof senderProfileInputSchema>, actor: string) {
+  const validated = senderProfileInputSchema.parse(input);
+  await transaction(async client => {
+    const updated = await client.query(`UPDATE sender_profiles SET name=$2,from_name=$3,from_local_part=$4,reply_to=$5,message_category=$6,updated_at=now()
+      WHERE id=$1 AND product_id=$7 AND sending_domain_id=$8 RETURNING id`, [id,validated.name,validated.fromName,validated.fromLocalPart,validated.replyTo ?? null,validated.category,validated.productId,validated.domainId]);
+    if (!updated.rowCount) throw new Error("Sender profile not found, or its product/domain was changed. Create a new sender for a different domain.");
+    await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES ($1,'sender_profile.update','sender_profile',$2,$3)", [actor,id,validated]);
+  })
+}
+
+export async function retryOutbox(id: string, actor: string) {
+  return transaction(async client => {
+    const row=(await client.query<{event_type:string}>("SELECT event_type FROM outbox_events WHERE id=$1 AND status='failed' FOR UPDATE",[id])).rows[0];
+    if (!row) throw new Error("Failed work not found; refresh its current state.");
+    // A retained failed BullMQ job must be removed before its stable Outbox ID can execute again.
+    // If this operation crashes, the unchanged failed Outbox remains safe to retry.
+    const job=await queueForEvent(row.event_type).getJob(id);
+    if (job) {
+      const state=await job.getState();
+      if (state==="active") throw new Error("This work is still executing. Wait for it to finish.");
+      await job.remove();
+    }
+    await client.query("UPDATE outbox_events SET status='pending',attempt_count=0,available_at=now() WHERE id=$1",[id]);
+    await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id) VALUES ($1,'outbox.retry','outbox_event',$2)",[actor,id]);
+    return {id}
+  })
 }

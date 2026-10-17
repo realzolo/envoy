@@ -1,207 +1,49 @@
-const bearer = [{ bearerAuth: [] }];
-const pageParameters = [
-  { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 100, default: 50 } },
-  { name: "cursor", in: "query", schema: { type: "string" } },
-];
+import { z } from "zod";
+import { createMessageSchema, createSuppressionSchema, retryMessageSchema, deliveryStatuses, eventTypes, acceptedMessageSchema, messageSummarySchema, messageDetailSchema, deliverySummarySchema, deliveryDetailSchema, publicEventSchema, inboundSummarySchema, inboundDetailSchema, suppressionSchema, senderSchema, problemDetailsSchema } from "@/lib/contracts";
+
+const ref = (name: string) => ({ $ref: `#/components/schemas/${name}` });
+const json = (schema: object) => ({ "application/json": { schema } });
+const page = (name: string) => ({ type: "object", required: ["data", "nextCursor"], properties: { data: { type: "array", items: ref(name) }, nextCursor: { type: ["string", "null"] } } });
+const query = (name: string, schema: object) => ({ name, in: "query", schema });
+const pageParameters = [query("limit", { type: "integer", minimum: 1, maximum: 100, default: 50 }), query("cursor", { type: "string", description: "Opaque cursor from nextCursor; retain the same filters." })];
+const id = { name: "id", in: "path", required: true, schema: { type: "string" } };
+const headers = { "X-Request-ID": { schema: { type: "string" } }, "RateLimit-Limit": { schema: { type: "integer" } }, "RateLimit-Remaining": { schema: { type: "integer" } }, "RateLimit-Reset": { description: "Seconds until the current fixed window resets", schema: { type: "integer" } } };
+const error = (description: string) => ({ description, content: { "application/problem+json": { schema: ref("Problem") } }, headers });
+const errors = { "400": error("Invalid syntax, cursor or filter"), "401": { ...error("Missing or invalid bearer credential"), headers: { ...headers, "WWW-Authenticate": { schema: { type: "string" } } } }, "404": error("Resource unavailable or not owned by this service"), "409": error("Idempotency conflict or duplicate risk requires acknowledgement"), "413": error("Request byte limit exceeded"), "415": error("JSON content type required"), "422": error("Contract or business validation failed"), "429": { ...error("Service request limit exceeded"), headers: { ...headers, "Retry-After": { schema: { type: "integer" } } } }, "503": error("Dependency temporarily unavailable; retry writes using the same idempotency key") };
+function operation(summary: string, schema: object, parameters: object[] = [], status = "200") { return { summary, parameters, responses: { [status]: { description: "Success", headers, content: json(schema) }, ...errors } }; }
+const body = (name: string, required = true) => ({ requestBody: { required, content: json(ref(name)) } });
 
 export function GET(request: Request) {
-  const origin = new URL(request.url).origin;
+  const schemas = Object.fromEntries(Object.entries({ CreateMessage: createMessageSchema, RetryMessage: retryMessageSchema, CreateSuppression: createSuppressionSchema, AcceptedMessage: acceptedMessageSchema, Message: messageSummarySchema, MessageDetail: messageDetailSchema, Delivery: deliverySummarySchema, DeliveryDetail: deliveryDetailSchema, Event: publicEventSchema, Inbound: inboundSummarySchema, InboundDetail: inboundDetailSchema, Suppression: suppressionSchema, Sender: senderSchema, Problem: problemDetailsSchema }).map(([name, schema]) => [name, z.toJSONSchema(schema, { unrepresentable: "any" })]));
+  // Cross-field and UTF-8 byte constraints cannot be inferred from Zod refinements.
+  const create = schemas.CreateMessage;
+  create.anyOf = [{ required: ["html"] }, { required: ["text"] }];
+  if (create.properties) {
+    for (const name of ["html", "text"]) Object.assign(create.properties[name], { description: "Rendered content; maximum 2,000,000 UTF-8 bytes.", "x-maxUtf8Bytes": 2_000_000 });
+    for (const name of ["tags", "metadata"]) Object.assign(create.properties[name], { maxProperties: 20 });
+  }
   return Response.json({
-    openapi: "3.1.0",
-    info: {
-      title: "Envoy Service API",
-      version: "1.0.0",
-      description: "Provider-neutral asynchronous email delivery. Callers own rendering; Envoy owns sender resolution, routing, delivery, events, inbound mail, and suppression enforcement.",
-    },
-    servers: [{ url: `${origin}/api/v1` }],
-    security: bearer,
+    openapi: "3.1.0", info: { title: "Envoy Service API", version: "1.0.0", description: "Provider-neutral asynchronous email. Limits apply to every authenticated endpoint: 600 requests/minute/service, 4,200,000 request bytes, 2,000,000 UTF-8 bytes per rendered content part. Unknown outcomes are never automatically resent across providers." },
+    servers: [{ url: `${new URL(request.url).origin}/api/v1` }], security: [{ bearerAuth: [] }],
     paths: {
-      "/": {
-        get: {
-          security: [],
-          summary: "Discover API resources",
-          responses: { "200": { description: "API discovery" } }
-        }
-      },
+      "/": { get: { security: [], summary: "API discovery", responses: { "200": { description: "Resource links" } } } },
       "/messages": {
-        get: {
-          summary: "List messages",
-          parameters: pageParameters,
-          responses: { "200": { description: "Cursor page of messages" } }
-        },
-        post: {
-          summary: "Queue a rendered email",
-          parameters: [{
-            name: "Idempotency-Key",
-            in: "header",
-            required: true,
-            schema: { type: "string", maxLength: 256 }
-          }],
-          requestBody: {
-            required: true,
-            content: { "application/json": { schema: { $ref: "#/components/schemas/CreateMessage" } } }
-          },
-          responses: {
-            "202": { description: "Message accepted" },
-            "409": { description: "Idempotency conflict" },
-            "422": { description: "Validation failed" }
-          },
-        },
+        get: operation("List messages", page("Message"), [...pageParameters, query("status", { type: "string", enum: ["in_progress", "delivered", "completed", "canceled"] }), query("referenceId", { type: "string" })]),
+        post: { ...operation("Queue rendered content; same key and payload replay the same acceptance", ref("AcceptedMessage"), [{ name: "Idempotency-Key", in: "header", required: true, schema: { type: "string", minLength: 1, maxLength: 256 } }], "202"), ...body("CreateMessage") },
       },
-      "/messages/{id}": {
-        get: {
-          summary: "Get a message and recipient deliveries",
-          parameters: [{ $ref: "#/components/parameters/Id" }],
-          responses: { "200": { description: "Message" }, "404": { description: "Not found" } }
-        }
-      },
-      "/messages/{id}/cancel": {
-        post: {
-          summary: "Cancel deliveries that have not crossed the provider boundary",
-          parameters: [{ $ref: "#/components/parameters/Id" }],
-          responses: { "202": { description: "Cancellation accepted" } }
-        }
-      },
-      "/messages/{id}/retry": {
-        post: {
-          summary: "Retry eligible failed, deferred, or unknown deliveries",
-          parameters: [{ $ref: "#/components/parameters/Id" }],
-          requestBody: {
-            content: {
-              "application/json": {
-                schema: {
-                  type: "object",
-                  properties: { acknowledgeDuplicateRisk: { type: "boolean", default: false } },
-                  additionalProperties: false
-                }
-              }
-            }
-          },
-          responses: {
-            "202": { description: "Retry accepted" },
-            "409": { description: "Duplicate-risk acknowledgement required" }
-          },
-        },
-      },
-      "/deliveries": {
-        get: {
-          summary: "List recipient deliveries",
-          parameters: [...pageParameters, {
-            name: "messageId",
-            in: "query",
-            schema: { type: "string" }
-          }, { name: "status", in: "query", schema: { type: "string" } }],
-          responses: { "200": { description: "Cursor page of deliveries" } }
-        }
-      },
-      "/deliveries/{id}": {
-        get: {
-          summary: "Get a delivery with attempts and canonical events",
-          parameters: [{ $ref: "#/components/parameters/Id" }],
-          responses: { "200": { description: "Delivery" } }
-        }
-      },
-      "/events": {
-        get: {
-          summary: "List canonical delivery events",
-          parameters: [...pageParameters, {
-            name: "deliveryId",
-            in: "query",
-            schema: { type: "string" }
-          }, { name: "type", in: "query", schema: { type: "string" } }],
-          responses: { "200": { description: "Cursor page of events" } }
-        }
-      },
-      "/inbound-messages": {
-        get: {
-          summary: "List routed inbound messages",
-          parameters: pageParameters,
-          responses: { "200": { description: "Cursor page of inbound messages" } }
-        }
-      },
-      "/inbound-messages/{id}": {
-        get: {
-          summary: "Get sanitized inbound content and attachment metadata",
-          parameters: [{ $ref: "#/components/parameters/Id" }],
-          responses: { "200": { description: "Inbound message" } }
-        }
-      },
-      "/suppressions": {
-        get: {
-          summary: "List product suppressions or check one address",
-          parameters: [{ name: "email", in: "query", schema: { type: "string", format: "email" } }],
-          responses: { "200": { description: "Suppressions" } }
-        },
-        post: {
-          summary: "Create a product or list suppression",
-          requestBody: {
-            required: true,
-            content: { "application/json": { schema: { $ref: "#/components/schemas/CreateSuppression" } } }
-          },
-          responses: { "201": { description: "Suppression created" } }
-        },
-      },
-      "/suppressions/{id}": {
-        delete: {
-          summary: "Remove a product-owned suppression",
-          parameters: [{ $ref: "#/components/parameters/Id" }],
-          responses: { "204": { description: "Suppression removed" } }
-        }
-      },
-      "/senders": {
-        get: {
-          summary: "List active logical sender profiles",
-          responses: { "200": { description: "Sender profiles" } }
-        }
-      },
-      "/capabilities": {
-        get: {
-          summary: "Discover fixed service limits and available senders",
-          responses: { "200": { description: "Capabilities" } }
-        }
-      },
-    },
-    components: {
-      securitySchemes: { bearerAuth: { type: "http", scheme: "bearer" } },
-      parameters: { Id: { name: "id", in: "path", required: true, schema: { type: "string" } } },
-      schemas: {
-        Recipient: {
-          type: "object",
-          required: ["email"],
-          properties: { email: { type: "string", format: "email" }, name: { type: "string", maxLength: 100 } },
-          additionalProperties: false,
-        },
-        CreateMessage: {
-          type: "object",
-          required: ["to", "subject"],
-          properties: {
-            category: { type: "string", default: "transactional" },
-            senderProfile: { type: "string" },
-            to: { type: "array", minItems: 1, maxItems: 50, items: { $ref: "#/components/schemas/Recipient" } },
-            subject: { type: "string", maxLength: 998 },
-            html: { type: "string", maxLength: 2000000 },
-            text: { type: "string", maxLength: 2000000 },
-            replyTo: { type: "string", format: "email" },
-            tags: { type: "object", additionalProperties: { type: "string", maxLength: 256 } },
-            referenceId: { type: "string", maxLength: 160 },
-            metadata: { type: "object", additionalProperties: { type: "string", maxLength: 500 } },
-          },
-          anyOf: [{ required: ["html"] }, { required: ["text"] }],
-          additionalProperties: false,
-        },
-        CreateSuppression: {
-          type: "object",
-          required: ["email", "reason"],
-          properties: {
-            email: { type: "string", format: "email" },
-            scope: { type: "string", enum: ["product", "list"], default: "product" },
-            listId: { type: "string" },
-            reason: { type: "string" },
-            expiresAt: { type: "string", format: "date-time" },
-          },
-          additionalProperties: false,
-        },
-      },
-    },
+      "/messages/{id}": { get: operation("Read message and recipient deliveries", ref("MessageDetail"), [id]) },
+      "/messages/{id}/retry": { post: { ...operation("Retry eligible deliveries; skipped entries explain suppressed or ineligible recipients", { type: "object", required: ["messageId", "queued", "skipped"], properties: { messageId: { type: "string" }, queued: { type: "integer" }, skipped: { type: "array", items: { type: "object", required: ["deliveryId", "queued", "reason"], properties: { deliveryId: { type: "string" }, queued: { const: false }, reason: { type: "string" } } } } } }, [id], "202"), ...body("RetryMessage", false) } },
+      "/messages/{id}/cancel": { post: operation("Cancel eligible deliveries before provider submission", { type: "object", properties: { messageId: { type: "string" }, canceled: { type: "integer" } } }, [id], "202") },
+      "/deliveries": { get: operation("List recipient deliveries", page("Delivery"), [...pageParameters, query("messageId", { type: "string" }), query("status", { type: "string", enum: deliveryStatuses })]) },
+      "/deliveries/{id}": { get: operation("Read normalized outcome, attempts and events", ref("DeliveryDetail"), [id]) },
+      "/events": { get: operation("List events; IDs match callback envelope IDs", page("Event"), [...pageParameters, query("deliveryId", { type: "string" }), query("type", { type: "string", enum: eventTypes })]) },
+      "/inbound-messages": { get: operation("List inbound mail owned by this service", page("Inbound"), pageParameters) },
+      "/inbound-messages/{id}": { get: operation("Read sanitized content and attachment metadata", ref("InboundDetail"), [id]) },
+      "/inbound-messages/{id}/attachments/{attachmentId}": { get: { summary: "Download a ready, policy-approved attachment owned by this service", parameters: [id, { ...id, name: "attachmentId" }], responses: { "200": { description: "Attachment download", headers: { ...headers, "Content-Disposition": { schema: { type: "string" } }, "X-Content-Type-Options": { schema: { const: "nosniff" } } }, content: { "application/octet-stream": { schema: { type: "string", contentEncoding: "binary" } } } }, ...errors } } },
+      "/suppressions": { get: operation("List active product suppressions; an email filter includes applicable global records", { type: "object", properties: { data: { type: "array", items: ref("Suppression") } } }, [query("email", { type: "string", format: "email" })]), post: { ...operation("Create a suppression; duplicate returns 200", { type: "object", properties: { id: { type: "string" }, duplicate: { type: "boolean" } } }, [], "201"), ...body("CreateSuppression") } },
+      "/suppressions/{id}": { delete: { summary: "Remove product-owned suppression", parameters: [id], responses: { "204": { description: "Removed", headers }, ...errors } } },
+      "/senders": { get: operation("List logical sender profiles", { type: "object", properties: { data: { type: "array", items: ref("Sender") } } }) },
+      "/capabilities": { get: operation("Discover fixed limits, supported features and senders", { type: "object", required: ["apiVersion", "service", "product", "limits", "content", "features", "senderProfiles", "resources"], properties: { apiVersion: { const: "v1" }, service: { type: "object" }, product: { type: "object" }, limits: { type: "object" }, content: { type: "object" }, features: { type: "object" }, senderProfiles: { type: "array", items: ref("Sender") }, resources: { type: "array", items: { type: "string" } } } }) },
+    }, components: { securitySchemes: { bearerAuth: { type: "http", scheme: "bearer" } }, schemas },
   });
 }

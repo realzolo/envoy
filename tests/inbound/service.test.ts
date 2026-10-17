@@ -42,11 +42,9 @@ const message = {
 };
 
 function configureTransactions() {
-  let count = 0;
   mocks.transaction.mockImplementation(async (callback: (client: { query: ReturnType<typeof vi.fn> }) => Promise<unknown>) => {
-    const transactionNumber = count++;
     const client = {
-      query: vi.fn().mockResolvedValue(transactionNumber < 2 ? { rows: [route], rowCount: 1 } : { rows: [], rowCount: 1 })
+      query: vi.fn().mockImplementation(async (sql: string) => sql.includes("FROM inbound_routes") ? { rows: [route], rowCount: 1 } : { rows: [{ id: "inb_test" }], rowCount: 1 })
     };
     return callback(client);
   });
@@ -55,6 +53,7 @@ function configureTransactions() {
 describe("inbound attachment scanning", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.query.mockReset().mockResolvedValue({ rows: [{ id: "inb_test" }], rowCount: 1 });
     mocks.createId.mockImplementation((prefix: string) => `${prefix}_test`);
     mocks.objectStore.mockReturnValue({ put: mocks.put });
   });
@@ -105,6 +104,7 @@ describe("inbound attachment scanning", () => {
     })).rejects.toThrow("S3 temporarily unavailable");
     expect(mocks.query.mock.calls.some(([sql]) => String(sql).includes("status='rejected'"))).toBe(false);
 
+    mocks.query.mockResolvedValue({ rows: [{ id: "inb_test", status: "scanning" }], rowCount: 1 });
     await expect(persistInbound({
       providerAccountId: "pa_test",
       webhookEndpointId: "pwe_test",
@@ -137,7 +137,7 @@ describe("inbound attachment scanning", () => {
     }));
     mocks.query
       .mockResolvedValueOnce({ rows: [{ id: "inb_test", status: "scanning" }], rowCount: 1 })
-      .mockResolvedValueOnce({ rows: [], rowCount: 1 });
+      .mockResolvedValueOnce({ rows: [{ id: "inb_test" }], rowCount: 1 });
 
     await expect(persistInbound({
       providerAccountId: "pa_test",

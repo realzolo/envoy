@@ -15,6 +15,7 @@ export async function checkedJson(response: Response): Promise<Record<string, un
     const message = String(body.message ?? body.error ?? `Provider returned HTTP ${response.status}`);
     const details = `${message} ${JSON.stringify(body.errors ?? "")}`.toLowerCase();
     const invalidRecipient = (response.status === 400 || response.status === 422) && (/recipient/.test(details) || /\bto (email|address)\b/.test(details) || /personalizations.*\.to\./.test(details));
+    if (response.status >= 500 || response.status === 408) throw new CanonicalProviderError(message, "provider", `http_${response.status}`, "unknown", false);
     const category = response.status === 401 || response.status === 403 ? "authentication" : response.status === 429 ? "rate_limit" : invalidRecipient ? "invalid_recipient" : response.status >= 500 ? "provider" : "policy";
     throw new CanonicalProviderError(message, category, `http_${response.status}`, "not_accepted", response.status === 429 || response.status >= 500);
   }
@@ -55,4 +56,25 @@ export async function parseMultipart(raw: Uint8Array, contentType: string) {
     result[key] = current ? Array.isArray(current) ? [...current, parsed] : [current, parsed] : parsed
   }
   return result
+}
+
+
+// The submission boundary gets one bounded transport attempt. A lost response
+// cannot prove rejection and must never trigger an automatic provider switch.
+export async function submitRequest(url: string, options: RequestInit) {
+  try {
+    return await fetch(url, { ...options, signal: AbortSignal.timeout(30_000) });
+  } catch (error) {
+    throw new CanonicalProviderError(error instanceof Error ? error.message : "Submission response unavailable", "network", "submission_transport_error", "unknown", false);
+  }
+}
+
+export function stableEventId(payload: unknown) {
+  return requestFingerprint(payload);
+}
+
+export function eventDate(value: unknown) {
+  const date = new Date(typeof value === "number" ? value : String(value ?? ""));
+  if (!Number.isFinite(date.getTime())) throw new Error("Provider event is missing a valid occurrence time");
+  return date;
 }

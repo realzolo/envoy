@@ -1,7 +1,7 @@
 import { Resend } from "resend";
 import { Webhook } from "svix";
-import { type CanonicalEventType, CanonicalProviderError, type ManagedIdentityStatus, type ProviderModule } from "../contracts";
-import { accepted, event, header } from "../shared";
+import { type CanonicalEventType, type ManagedIdentityStatus, type ProviderModule } from "../contracts";
+import { accepted, checkedJson, submitRequest, eventDate, event, header, stableEventId } from "../shared";
 
 function client(secret: { type: string; apiKey?: string }) {
   if (secret.type !== "resend" || !secret.apiKey) throw new Error("Invalid Resend credential");
@@ -40,22 +40,22 @@ export const resendModule: ProviderModule = {
   sender: {
     async send(message, context) {
       if (context.config.type !== "resend") throw new Error("Invalid Resend configuration");
-      const result = await client(context.secret).emails.send({
-        from: `${message.from.name} <${message.from.email}>`,
-        to: message.to.name ? `${message.to.name} <${message.to.email}>` : message.to.email,
-        replyTo: message.replyTo,
-        subject: message.subject,
-        html: message.html,
-        text: message.text,
-        tags: Object.entries(message.tags).map(([name, value]) => ({ name, value }))
-      }, { idempotencyKey: context.idempotencyKey });
-      if (result.error) {
-        const name = String(result.error.name ?? "provider_error");
-        const detail = result.error.message.toLowerCase();
-        const category = name.includes("rate_limit") ? "rate_limit" : name.includes("validation") && (/recipient/.test(detail) || /\bto (email|address)\b/.test(detail)) ? "invalid_recipient" : name.includes("validation") ? "policy" : name.includes("auth") ? "authentication" : "provider";
-        throw new CanonicalProviderError(result.error.message, category, name, "not_accepted", category === "rate_limit" || category === "provider");
-      }
-      return accepted(result.data?.id);
+      if (context.secret.type !== "resend") throw new Error("Invalid Resend credential");
+      const response = await submitRequest("https://api.resend.com/emails", {
+        method: "POST",
+        headers: { authorization: `Bearer ${context.secret.apiKey}`, "content-type": "application/json", ...(context.idempotencyKey ? { "idempotency-key": context.idempotencyKey } : {}) },
+        body: JSON.stringify({
+          from: `${message.from.name} <${message.from.email}>`,
+          to: message.to.name ? `${message.to.name} <${message.to.email}>` : message.to.email,
+          reply_to: message.replyTo,
+          subject: message.subject,
+          html: message.html,
+          text: message.text,
+          tags: Object.entries(message.tags).map(([name, value]) => ({ name, value }))
+        })
+      });
+      const body = await checkedJson(response);
+      return accepted(body.id);
     }
   },
   webhook: {
@@ -89,10 +89,10 @@ export const resendModule: ProviderModule = {
       const data = payload.data ?? {};
       const bounce = data.bounce as { type?: string; message?: string } | undefined;
       return [event({
-        id: verified.providerEventId ?? crypto.randomUUID(),
+        id: verified.providerEventId ?? stableEventId(payload),
         externalMessageId: typeof data.email_id === "string" ? data.email_id : undefined,
         type,
-        occurredAt: new Date(payload.created_at ?? Date.now()),
+        occurredAt: eventDate(payload.created_at),
         recipient: Array.isArray(data.to) ? String(data.to[0]) : undefined,
         bounce: type === "bounced" ? {
           classification: bounce?.type === "Permanent" ? "hard" : "soft",
@@ -122,6 +122,27 @@ export const resendModule: ProviderModule = {
       if (!id) return null;
       const result = await client(context.secret).emails.receiving.get(id, { html_format: "cid" });
       if (result.error || !result.data) throw new Error(result.error?.message ?? "Inbound retrieval failed");
+      const attachments = [];
+      for (const attachment of result.data.attachments ?? []) {
+        const detail = await client(context.secret).emails.receiving.attachments.get({ emailId: id, id: attachment.id });
+        if (detail.error || !detail.data) throw new Error(detail.error?.message ?? "Inbound attachment retrieval failed");
+        const response = await fetch(detail.data.download_url, { signal: AbortSignal.timeout(30_000), redirect: "error" });
+        if (!response.ok || Number(response.headers.get("content-length") ?? 0) > 25_000_000) throw new Error("Inbound attachment download failed or exceeds limit");
+        const reader = response.body?.getReader();
+        if (!reader) throw new Error("Inbound attachment is empty");
+        const chunks: Uint8Array[] = [];
+        let size = 0;
+        try {
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            size += value.byteLength;
+            if (size > 25_000_000) throw new Error("Inbound attachment exceeds limit");
+            chunks.push(value);
+          }
+        } finally { await reader.cancel(); }
+        attachments.push({ fileName: attachment.filename ?? "attachment", contentType: attachment.content_type, content: new Uint8Array(Buffer.concat(chunks)), contentId: attachment.content_id ?? undefined });
+      }
       return {
         externalMessageId: id,
         messageId: result.data.message_id,
@@ -132,8 +153,8 @@ export const resendModule: ProviderModule = {
         subject: result.data.subject,
         html: result.data.html ?? undefined,
         text: result.data.text ?? undefined,
-        attachments: [],
-        receivedAt: new Date()
+        attachments,
+        receivedAt: eventDate(result.data.created_at)
       };
     }
   },

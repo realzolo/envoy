@@ -1,5 +1,5 @@
 import { databaseHealth } from "@/server/database";
-import { redisHealth } from "@/server/redis";
+import { queueSchemaHealth } from "@/server/queues";
 import { outboxBacklog } from "@/server/services/outbox";
 
 export const runtime = "nodejs";
@@ -8,7 +8,7 @@ export async function GET() {
   try {
     await Promise.all([
       databaseHealth(),
-      redisHealth(),
+      queueSchemaHealth(),
       outboxBacklog(),
     ]);
     return Response.json({

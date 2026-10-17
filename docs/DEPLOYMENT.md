@@ -2,19 +2,13 @@
 
 The production server checks out the source and builds one Docker image. Docker Compose runs the Web and Worker as
 separate containers, executes database migration as a one-off task, and attaches all three services to the explicit
-`envoy-network` bridge network. PostgreSQL, Redis, and R2 remain external.
+`envoy-network` bridge network. PostgreSQL and R2 remain external.
 
 ## Requirements
 
 - Git
 - Docker Engine
 - Docker Compose v2
-
-## Baseline Schema Release
-
-This release requires a new, empty PostgreSQL database. It changes the baseline schema and does not provide an in-place
-upgrade path from an earlier Envoy database. Export or retain any required data separately, provision the new database,
-then run the normal migration task during initial deployment.
 
 ## Checkout And Configure
 
@@ -25,7 +19,7 @@ cp deploy/env.production.example .env.production
 vi .env.production
 ```
 
-Replace every active `replace_with_*` value. Ensure the database, authenticated Redis, R2 credentials, KEK,
+Replace every active `replace_with_*` value. Ensure the database, R2 credentials, KEK,
 administrator
 credentials and session secret are correct. ClamAV is optional; without it, attachments skip scanning and receive the
 `skipped` status. `.env.production` is ignored by Git and excluded from the Docker build context.
@@ -56,9 +50,6 @@ Outbound callback endpoints must be public HTTPS addresses by default. For trust
 
 ## Update
 
-Do not use this update procedure to upgrade an existing database to the baseline-schema release above. It applies after
-that release has been initialized on a fresh database.
-
 ```bash
 cd /data/envoy
 git pull --ff-only
@@ -78,3 +69,5 @@ docker compose down
 
 To roll back, check out the prior commit and repeat build, migration, and startup. Database migrations are forward-only,
 so confirm the older code is compatible with the current schema first.
+
+Use PostgreSQL 14+ with direct or session-pooled connections. Default Web plus Worker connection budget is 48, plus deployment/monitoring headroom. Migration initializes business and BullMQ schemas explicitly. R2 uses separate `OBJECT_STORE_ACCESS_KEY_ID` / `OBJECT_STORE_SECRET_ACCESS_KEY`; AWS runtime credentials remain available to SES. Leave SSE unset for R2 and use bucket-default encryption.

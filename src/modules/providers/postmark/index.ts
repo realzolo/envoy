@@ -1,7 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import type { CanonicalEventType, ProviderModule } from "../contracts";
-import { accepted, checkedJson, decodeJson, event, header } from "../shared";
+import { accepted, submitRequest, eventDate, stableEventId, checkedJson, decodeJson, event, header } from "../shared";
 
 const eventMap: Record<string, CanonicalEventType> = {
   Delivery: "delivered",
@@ -13,7 +13,7 @@ const eventMap: Record<string, CanonicalEventType> = {
   Inbound: "inbound.received"
 };
 const payloadSchema = z.object({
-  RecordType: z.string(),
+  RecordType: z.string().optional(),
   MessageID: z.string().optional(),
   Recipient: z.string().optional(),
   DeliveredAt: z.string().optional(),
@@ -25,7 +25,7 @@ export const postmarkModule: ProviderModule = {
     displayName: "Postmark",
     capabilities: {
       nativeIdempotency: false,
-      inboundMode: "webhook-fetch",
+      inboundMode: "json",
       domainManagement: false,
       webhookSecurity: "Basic Auth, opaque URL, IP allowlist, schema validation",
       eventTypes: Object.keys(eventMap),
@@ -36,7 +36,7 @@ export const postmarkModule: ProviderModule = {
   sender: {
     async send(message, context) {
       if (context.config.type !== "postmark" || context.secret.type !== "postmark") throw new Error("Invalid Postmark configuration");
-      const response = await fetch("https://api.postmarkapp.com/email", {
+      const response = await submitRequest("https://api.postmarkapp.com/email", {
         method: "POST",
         headers: { "x-postmark-server-token": context.secret.serverToken, "content-type": "application/json" },
         body: JSON.stringify({
@@ -68,14 +68,16 @@ export const postmarkModule: ProviderModule = {
       let schemaValid = false;
       try {
         parsed = decodeJson(request.rawBody);
-        schemaValid = payloadSchema.safeParse(parsed).success
+        const candidate = parsed as Record<string, unknown>;
+        if (!candidate.RecordType && typeof candidate.MessageID === "string" && typeof candidate.From === "string" && typeof candidate.OriginalRecipient === "string") candidate.RecordType = "Inbound";
+        schemaValid = Boolean(candidate.RecordType) && payloadSchema.safeParse(parsed).success
       } catch {
       }
       const p = (parsed ?? {}) as Record<string, unknown>;
       return {
         valid: ipValid && authValid && schemaValid,
         replaySafe: true,
-        providerEventId: typeof p.ID === "number" ? String(p.ID) : typeof p.MessageID === "string" ? `${p.RecordType}:${p.MessageID}:${p.DeliveredAt ?? p.BouncedAt ?? ""}` : undefined,
+        providerEventId: typeof p.ID === "number" ? `${p.RecordType}:${p.ID}` : stableEventId(p),
         nativeType: String(p.RecordType ?? "unknown"),
         parsed
       };
@@ -84,11 +86,16 @@ export const postmarkModule: ProviderModule = {
       const type = eventMap[String(p.RecordType)];
       if (!type) return [];
       return [event({
-        id: verified.providerEventId ?? crypto.randomUUID(),
+        id: verified.providerEventId ?? stableEventId(p),
         externalMessageId: typeof p.MessageID === "string" ? p.MessageID : undefined,
         type,
-        occurredAt: new Date(String(p.DeliveredAt ?? p.BouncedAt ?? p.ReceivedAt ?? new Date().toISOString())),
-        recipient: typeof p.Recipient === "string" ? p.Recipient : undefined
+        occurredAt: eventDate(p.DeliveredAt ?? p.BouncedAt ?? p.ReceivedAt ?? p.Date ?? p.ChangedAt),
+        recipient: typeof p.Recipient === "string" ? p.Recipient : typeof p.Email === "string" ? p.Email : undefined,
+        bounce: type === "bounced" ? {
+          classification: p.Type === "HardBounce" || p.TypeCode === 1 || p.Type === "BadEmailAddress" || p.TypeCode === 100000 ? "hard" : "soft",
+          code: String(p.TypeCode ?? p.Type ?? ""),
+          message: String(p.Description ?? p.Details ?? "")
+        } : undefined
       })]
     }
   },
@@ -111,8 +118,8 @@ export const postmarkModule: ProviderModule = {
         messageId: typeof p.MessageID === "string" ? p.MessageID : undefined,
         from: String(p.From ?? ""),
         to: Array.isArray(p.ToFull) ? p.ToFull.map(item => String((item as Record<string, unknown>).Email ?? "")) : String(p.To ?? "").split(",").filter(Boolean),
-        cc: String(p.Cc ?? "").split(",").filter(Boolean),
-        bcc: String(p.Bcc ?? "").split(",").filter(Boolean),
+        cc: Array.isArray(p.CcFull) ? p.CcFull.map(item => String((item as Record<string, unknown>).Email ?? "")) : String(p.Cc ?? "").split(",").filter(Boolean),
+        bcc: Array.isArray(p.BccFull) ? p.BccFull.map(item => String((item as Record<string, unknown>).Email ?? "")) : String(p.Bcc ?? "").split(",").filter(Boolean),
         subject: String(p.Subject ?? ""),
         html: typeof p.HtmlBody === "string" ? p.HtmlBody : undefined,
         text: typeof p.TextBody === "string" ? p.TextBody : undefined,

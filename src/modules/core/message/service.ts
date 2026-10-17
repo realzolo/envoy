@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { PoolClient } from "pg";
-import type { CreateMessageInput } from "@/lib/contracts";
+import { createMessageSchema, type CreateMessageInput } from "@/lib/contracts";
+import { applyDeliveryEvent } from "@/modules/core/event/service";
 import type { ServiceIdentity } from "@/server/auth";
 import { query, transaction } from "@/server/database";
 import { createId } from "@/server/ids";
@@ -42,17 +43,17 @@ function ensureUniqueRecipients(input: CreateMessageInput) {
   }
 }
 
-export function encodeCursor(row: { accepted_at: Date; id: string }) {
-  return Buffer.from(JSON.stringify({ at: row.accepted_at.toISOString(), id: row.id })).toString("base64url");
+export function encodeCursor(row: { accepted_at: Date; id: string; cursor_at?: string }) {
+  return Buffer.from(JSON.stringify({ at: row.cursor_at ?? row.accepted_at.toISOString(), id: row.id })).toString("base64url");
 }
 
 export function decodeCursor(value: string | null) {
   if (!value) return null;
   try {
     const parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as { at?: string; id?: string };
-    const at = new Date(parsed.at ?? "");
-    if (!parsed.id || Number.isNaN(at.getTime())) return null;
-    return { at, id: parsed.id };
+    if (typeof parsed.id !== "string" || !parsed.id || typeof parsed.at !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{1,6}Z$/.test(parsed.at) || Number.isNaN(Date.parse(parsed.at))) return null;
+    // Keep PostgreSQL microseconds intact; converting through Date would skip cursor rows.
+    return { at: parsed.at, id: parsed.id };
   } catch {
     return null;
   }
@@ -73,11 +74,17 @@ export async function acceptMessage(args: {
   idempotencyKey: string;
   input: CreateMessageInput
 }) {
+  const validated = createMessageSchema.safeParse(args.input);
+  if (!validated.success) throw new MessageValidationError(validated.error.issues.map(issue => `${issue.path.join(".")}: ${issue.message}`));
+  args = { ...args, input: validated.data };
+  if (!args.idempotencyKey.trim() || args.idempotencyKey.length > 256) throw new MessageValidationError(["A valid idempotency key is required."]);
   ensureUniqueRecipients(args.input);
   const payloadHash = hashPayload(args.input);
   return transaction(async client => {
-    const existing = await client.query<{ id: string; payload_hash: string; accepted_at: Date }>(
-      "SELECT id,payload_hash,accepted_at FROM messages WHERE service_id=$1 AND idempotency_key=$2 FOR UPDATE",
+    // A row lock cannot protect the first insert. Serialize the service/key pair, then read.
+    await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [JSON.stringify([args.identity.serviceId, args.idempotencyKey])]);
+    const existing = await client.query<{ id: string; payload_hash: string; accepted_at: Date; product: string; message_category: string; recipient_count: number; reference_id: string | null }>(
+      "SELECT id,payload_hash,accepted_at,sender_snapshot->>'product' AS product,message_category,recipient_count,reference_id FROM messages WHERE service_id=$1 AND idempotency_key=$2 FOR UPDATE",
       [args.identity.serviceId, args.idempotencyKey],
     );
     if (existing.rows[0]) {
@@ -87,22 +94,24 @@ export async function acceptMessage(args: {
         message: {
           id: existing.rows[0].id,
           status: "queued" as const,
-          product: args.identity.product,
-          category: args.input.category,
-          recipientCount: args.input.to.length,
+          product: existing.rows[0].product,
+          category: existing.rows[0].message_category,
+          recipientCount: existing.rows[0].recipient_count,
           acceptedAt: existing.rows[0].accepted_at.toISOString(),
-          referenceId: args.input.referenceId,
+          referenceId: existing.rows[0].reference_id ?? undefined,
         },
       };
     }
 
-    const sender = (await client.query<{ id: string; reply_to: string | null }>(
-      `SELECT sp.id,sp.reply_to FROM sender_profiles sp
+    const sender = (await client.query<{ id: string; reply_to: string | null; from_name: string; from_email: string; name: string; sending_domain_id: string }>(
+      `SELECT sp.id,sp.reply_to,sp.name,sp.from_name,sp.from_local_part||'@'||sd.domain AS from_email,sp.sending_domain_id FROM sender_profiles sp
        JOIN sending_domains sd ON sd.id=sp.sending_domain_id AND sd.status='active'
+       JOIN products p ON p.id=sp.product_id AND p.status='active'
+       JOIN services s ON s.id=$4 AND s.product_id=p.id
        WHERE sp.product_id=$1 AND sp.message_category=$2 AND sp.status='active'
          AND ($3::text IS NULL OR sp.name=$3)
        ORDER BY sp.created_at,sp.id LIMIT 1`,
-      [args.identity.productId, args.input.category, args.input.senderProfile ?? null],
+      [args.identity.productId, args.input.category, args.input.senderProfile ?? null, args.identity.serviceId],
     )).rows[0];
     if (!sender) {
       throw new MessageValidationError([
@@ -113,11 +122,11 @@ export async function acceptMessage(args: {
     }
 
     const id = createId("msg");
-    await client.query(
+    const accepted = await client.query<{ accepted_at: Date }>(
       `INSERT INTO messages(
         id,product_id,service_id,sender_profile_id,idempotency_key,payload_hash,reference_id,metadata,
-        recipient_count,subject,html_body,text_body,message_category,reply_to,provider_tags
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+        recipient_count,subject,html_body,text_body,message_category,reply_to,provider_tags,sender_snapshot
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING accepted_at`,
       [
         id,
         args.identity.productId,
@@ -134,6 +143,7 @@ export async function acceptMessage(args: {
         args.input.category,
         args.input.replyTo ?? sender.reply_to,
         args.input.tags ?? {},
+        { product: args.identity.product, fromName: sender.from_name, fromEmail: sender.from_email, senderProfile: sender.name, domainId: sender.sending_domain_id },
       ],
     );
     for (const recipient of args.input.to) {
@@ -157,7 +167,7 @@ export async function acceptMessage(args: {
         product: args.identity.product,
         category: args.input.category,
         recipientCount: args.input.to.length,
-        acceptedAt: new Date().toISOString(),
+        acceptedAt: accepted.rows[0].accepted_at.toISOString(),
         referenceId: args.input.referenceId,
       },
     };
@@ -177,6 +187,7 @@ type MessageRow = {
   subject: string;
   recipient_count: number;
   accepted_at: Date;
+  cursor_at?: string;
   reference_id: string | null;
   sender_profile: string;
   status: string;
@@ -184,19 +195,19 @@ type MessageRow = {
 
 export async function listMessages(serviceId: string, options: {
   limit: number;
-  cursor?: { at: Date; id: string } | null;
+  cursor?: { at: Date | string; id: string } | null;
   status?: string | null;
   referenceId?: string | null;
 }) {
   const rows = (await query<MessageRow>(
     `WITH summaries AS (
        SELECT m.id,p.name AS product,m.message_category AS category,m.subject,m.recipient_count,m.accepted_at,
-         m.reference_id,sp.name AS sender_profile,${aggregateStatus} AS status
+         m.reference_id,to_char(m.accepted_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_at,m.sender_snapshot->>'senderProfile' AS sender_profile,${aggregateStatus} AS status
        FROM messages m JOIN products p ON p.id=m.product_id
        JOIN sender_profiles sp ON sp.id=m.sender_profile_id
        JOIN deliveries d ON d.message_id=m.id
        WHERE m.service_id=$1
-       GROUP BY m.id,p.name,sp.name
+       GROUP BY m.id,p.name
      ) SELECT * FROM summaries
      WHERE ($2::timestamptz IS NULL OR (accepted_at,id)<($2,$3))
        AND ($4::text IS NULL OR status=$4)
@@ -229,15 +240,16 @@ export async function getMessage(id: string, serviceId: string) {
     reply_to: string | null;
     metadata: Record<string, string>;
     provider_tags: Record<string, string>;
+    content_purged_at: Date | null;
   }>(
     `SELECT m.id,p.name AS product,m.message_category AS category,m.subject,m.html_body,m.text_body,m.reply_to,
-       m.metadata,m.provider_tags,m.recipient_count,m.accepted_at,m.reference_id,sp.name AS sender_profile,
+       m.metadata,m.provider_tags,m.content_purged_at,m.recipient_count,m.accepted_at,m.reference_id,m.sender_snapshot->>'senderProfile' AS sender_profile,
        ${aggregateStatus} AS status
      FROM messages m JOIN products p ON p.id=m.product_id
      JOIN sender_profiles sp ON sp.id=m.sender_profile_id
      JOIN deliveries d ON d.message_id=m.id
      WHERE m.id=$1 AND m.service_id=$2
-     GROUP BY m.id,p.name,sp.name`,
+     GROUP BY m.id,p.name`,
     [id, serviceId],
   )).rows[0];
   if (!message) return null;
@@ -271,11 +283,7 @@ export async function cancelMessage(id: string, serviceId: string) {
       [id],
     );
     for (const delivery of canceled.rows) {
-      const eventId = createId("dev");
-      await client.query(
-        "INSERT INTO delivery_events(id,delivery_id,event_type,occurred_at,canonical_payload) VALUES ($1,$2,'canceled',now(),$3)",
-        [eventId, delivery.id, { id: eventId, type: "canceled", source: "service_api" }],
-      );
+      await applyDeliveryEvent(client, delivery.id, { id: delivery.id, type: "canceled", occurredAt: new Date(), metadata: { source: "service_api" } }, `delivery:${delivery.id}:canceled`, { forceLifecycle: true });
       await client.query(
         "UPDATE outbox_events SET status='published',published_at=COALESCE(published_at,now()) WHERE status='pending' AND event_type='delivery.requested' AND payload->>'deliveryId'=$1",
         [delivery.id],
@@ -285,42 +293,64 @@ export async function cancelMessage(id: string, serviceId: string) {
   });
 }
 
+export type RetryOptions = { acknowledgeUnknown: boolean; actor: string };
+
+async function readRetryState(client: PoolClient, deliveryId: string) {
+  await client.query("SELECT m.id FROM messages m JOIN deliveries d ON d.message_id=m.id WHERE d.id=$1 FOR UPDATE OF m", [deliveryId]);
+  return (await client.query<{
+    id: string; lifecycle_status: string; compliance_status: string; current_attempt_id: string | null;
+    blocked: boolean; enabled: boolean; uncertain: boolean; content_expired: boolean
+  }>(`SELECT d.id,d.lifecycle_status,d.compliance_status,d.current_attempt_id,
+      EXISTS(SELECT 1 FROM suppressions su WHERE su.active AND su.email_normalized=d.recipient_email
+        AND (su.expires_at IS NULL OR su.expires_at>now()) AND (su.scope_type='global'
+          OR (su.product_id=m.product_id AND (su.scope_type='product' OR su.list_id=m.metadata->>'listId')))) AS blocked,
+      (p.status='active' AND sp.status='active' AND sd.status='active') AS enabled,
+      m.content_purged_at IS NOT NULL AS content_expired,
+      COALESCE(a.status IN ('unknown','reconciling','submitting') OR NOT a.outcome_determinate,false) AS uncertain
+    FROM deliveries d JOIN messages m ON m.id=d.message_id JOIN products p ON p.id=m.product_id
+    JOIN services s ON s.id=m.service_id JOIN sender_profiles sp ON sp.id=m.sender_profile_id
+    JOIN sending_domains sd ON sd.id=sp.sending_domain_id LEFT JOIN delivery_attempts a ON a.id=d.current_attempt_id
+    WHERE d.id=$1 FOR UPDATE OF d`, [deliveryId])).rows[0];
+}
+
+function eligibility(row: Awaited<ReturnType<typeof readRetryState>>) {
+  if (!row) return { allowed: false, reason: "not_found", requiresUnknownAcknowledgement: false };
+  const reason = row.content_expired ? "content_expired" : row.blocked || row.compliance_status !== "clean" ? "suppressed" : !row.enabled ? "configuration_disabled" : !["failed", "deferred", "unknown", "bounced"].includes(row.lifecycle_status) ? "status_not_retryable" : null;
+  return { allowed: !reason, reason, requiresUnknownAcknowledgement: row.uncertain };
+}
+
+export async function getDeliveryRetryEligibility(deliveryId: string) {
+  return transaction(async client => eligibility(await readRetryState(client, deliveryId)));
+}
+
+async function retryLockedDelivery(client: PoolClient, deliveryId: string, options: RetryOptions) {
+  const row = await readRetryState(client, deliveryId);
+  const check = eligibility(row);
+  if (!check.allowed || !row) return { deliveryId, queued: false, reason: check.reason };
+  if (row.uncertain && !options.acknowledgeUnknown) throw new DuplicateRiskError("Unknown outcomes require duplicate-risk acknowledgement.");
+  if (row.current_attempt_id) await client.query(
+    "UPDATE delivery_attempts SET retry_authorized_at=now(),retry_authorized_by=$2,reconcile_after=NULL WHERE id=$1",
+    [row.current_attempt_id, options.actor],
+  );
+  await applyDeliveryEvent(client, deliveryId, {
+    id: createId("retry"), type: "queued", occurredAt: new Date(), metadata: { source: "authorized_retry", actor: options.actor }
+  }, `retry:${createId("req")}`, { forceLifecycle: true });
+  await client.query("UPDATE deliveries SET defer_count=0 WHERE id=$1", [deliveryId]);
+  await client.query("INSERT INTO outbox_events(id,aggregate_type,aggregate_id,event_type,payload) VALUES ($1,'delivery',$2,'delivery.requested',$3)", [createId("out"), deliveryId, { deliveryId }]);
+  return { deliveryId, queued: true, reason: null };
+}
+
+export async function retryDelivery(deliveryId: string, options: RetryOptions) {
+  return transaction(client => retryLockedDelivery(client, deliveryId, options));
+}
+
 export async function retryMessage(id: string, serviceId: string, acknowledgeUnknown: boolean) {
   return transaction(async client => {
     const owned = await client.query("SELECT 1 FROM messages WHERE id=$1 AND service_id=$2 FOR UPDATE", [id, serviceId]);
     if (!owned.rowCount) return null;
-    const candidates = await client.query<{
-      id: string;
-      lifecycle_status: string;
-      current_attempt_id: string | null;
-    }>(
-      `SELECT id,lifecycle_status,current_attempt_id FROM deliveries
-       WHERE message_id=$1 AND compliance_status='clean' AND lifecycle_status IN ('failed','deferred','unknown')
-       FOR UPDATE`,
-      [id],
-    );
-    if (!acknowledgeUnknown && candidates.rows.some(row => row.lifecycle_status === "unknown")) {
-      throw new DuplicateRiskError("Unknown outcomes require duplicate-risk acknowledgement.");
-    }
-    for (const delivery of candidates.rows) {
-      if (delivery.current_attempt_id) {
-        await client.query(
-          "UPDATE delivery_attempts SET routing_snapshot=routing_snapshot||jsonb_build_object('serviceRetryAuthorizedAt',now()::text) WHERE id=$1",
-          [delivery.current_attempt_id],
-        );
-        if (delivery.lifecycle_status === "unknown") {
-          await client.query(
-            "UPDATE delivery_attempts SET status='failed',outcome_determinate=true,error_category='unknown',error_code='service_override',error_message='Caller accepted duplicate risk' WHERE id=$1",
-            [delivery.current_attempt_id],
-          );
-        }
-      }
-      await client.query("UPDATE deliveries SET lifecycle_status='queued',updated_at=now() WHERE id=$1", [delivery.id]);
-      await client.query(
-        "INSERT INTO outbox_events(id,aggregate_type,aggregate_id,event_type,payload) VALUES ($1,'delivery',$2,'delivery.requested',$3)",
-        [createId("out"), delivery.id, { deliveryId: delivery.id }],
-      );
-    }
-    return { messageId: id, queued: candidates.rowCount ?? 0 };
+    const candidates = await client.query<{ id: string }>("SELECT id FROM deliveries WHERE message_id=$1 ORDER BY id", [id]);
+    const results = [];
+    for (const delivery of candidates.rows) results.push(await retryLockedDelivery(client, delivery.id, { acknowledgeUnknown, actor: `service:${serviceId}` }));
+    return { messageId: id, queued: results.filter(result => result.queued).length, skipped: results.filter(result => !result.queued) };
   });
 }

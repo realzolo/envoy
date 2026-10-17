@@ -57,7 +57,7 @@ Delivery facts are independent dimensions:
 - engagement: `unopened`, `opened`, `clicked`;
 - compliance: `clean`, `complained`, `unsubscribed`, `suppressed`.
 
-Event application is idempotent and timestamp-aware, so delayed events cannot overwrite newer facts.
+Event application locks each delivery, deduplicates stable source keys, and applies deterministic timestamp/state precedence. Local transitions and provider events commit canonical facts, projections, suppression effects, and callback outbox work together. Engagement does not regress from clicked to opened. Terminal facts may resolve an earlier transient state even when the transient write arrived later.
 
 ## Provider setup
 
@@ -106,7 +106,7 @@ provider setup flow and allows sending to be configured without inventing webhoo
 After account creation, copy the opaque endpoint displayed under **Provider Accounts** into the provider console. Never
 place a provider credential in that URL. **Provider Accounts** owns provider event-webhook setup; **Callbacks** only
 configures outbound canonical callbacks to business services. Envoy redacts authorization headers before raw event
-persistence and reconstructs the asynchronous verification context from encrypted configuration.
+persistence and persists the verified receipt and security version. Workers parse that accepted receipt without requiring a fresh signature window or current verification key.
 
 ### DNS and identity workflow
 
@@ -197,3 +197,40 @@ and controlled retry. An `unknown` delivery can only be retried when the caller 
   re-evaluation.
 - Raw provider events and callback deliveries are replayable from the console. Manual retry of an unknown delivery
   requires explicit duplicate-risk acknowledgement and is always audited.
+
+## PostgreSQL runtime
+
+BullMQ uses an explicit PostgreSQL backend factory and a dedicated `bullmq` schema. Business transactions retain an
+Outbox: BullMQ's public API uses its own pool and does not join a business `PoolClient` transaction. Dispatch uses the
+Outbox ID as the stable job ID. A crash after enqueue but before publication marking is safe to replay. State-based,
+bounded recovery replenishes missing delivery, reconciliation, event, inbound and callback work; published rows are not
+blindly replayed. PostgreSQL notifications only wake workers; durable table state survives disconnections.
+
+`pnpm db:migrate` applies both business and BullMQ migrations. Startup validates queue schema compatibility and does
+not implicitly migrate. Use PostgreSQL 14+ and direct or session-pooled connections; LISTEN must keep a session.
+With default business pool 10 and queue pool 2, a Web process budgets up to 18 connections and a Worker up to 30
+(including four LISTEN connections). One of each needs capacity for 48 plus migrations, monitoring and headroom;
+replicas multiply these limits. Configure `DATABASE_POOL_SIZE` and `QUEUE_POOL_SIZE` together.
+
+Shared fixed-window limits use database time, advisory locking and atomic UPSERT. Provider and identity reservations
+commit together or neither is consumed. Login protection fails closed if storage is unavailable. Worker heartbeats
+expire after 45 seconds; the public health endpoint checks database/schema readiness separately from operational
+pipeline health.
+
+## Bounded recovery and retention
+
+Provider calls have one 30-second submission deadline and no implicit non-idempotent SDK retry. A submission execution
+lease lasts two minutes. Only current attempts may commit send outcomes. Unknown attempts keep their uncertainty when
+an operator authorizes a fresh attempt. Current suppression, product, sender, accepted domain and content eligibility
+are rechecked at the send and retry boundary. Sender and From information are immutable acceptance snapshots.
+
+Missing routes defer for at most 60 cycles. Automatic reconciliation stops at 12 checks. An unassociated accepted raw
+event retries for at most 20 passes and remains visible for operator replay. Callback timing and attempts are owned by
+the database; exhausted delivery enters dead-letter state with scoped replay. Inbound processing claims one execution
+lease, so duplicate work does not create duplicate attachments or callbacks.
+
+Optional retention is an explicit dry-run/apply command. It clears eligible terminal content and objects, not message
+IDs, payload hashes or idempotency summaries. Active and unknown work is excluded. Object deletion must succeed before
+its database reference is marked purged; failed cleanup can be rerun. Purged attachments cannot be downloaded.
+
+Server processes and database sessions use UTC; API timestamps are UTC ISO 8601 (`Z`). The console formats timestamps in the current browser timezone and labels that zone. Cohort/rate/quota windows are UTC and labeled explicitly.

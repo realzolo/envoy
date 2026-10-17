@@ -36,7 +36,7 @@ export async function authenticateService(request: Request): Promise<ServiceIden
   const service = result.rows[0];
   if (!service) return null;
 
-  void query("UPDATE service_credentials SET last_used_at = now() WHERE id = $1", [service.credential_id]);
+  void query("UPDATE service_credentials SET last_used_at = now() WHERE id = $1 AND (last_used_at IS NULL OR last_used_at < now() - interval '5 minutes')", [service.credential_id]).catch(error => console.error("Credential usage update failed", error));
 
   return {
     serviceId: service.id,

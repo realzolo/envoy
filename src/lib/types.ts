@@ -12,6 +12,7 @@ export type DeliveryStatus =
 
 export type EmailRecord = {
   id: string;
+  messageId?: string;
   recipient: string;
   recipientName?: string;
   subject: string;

@@ -1,21 +1,14 @@
+import { validationErrors, serviceRoute, readJson, apiProblem } from "@/server/service-api";
 import { retryMessageSchema } from "@/lib/contracts";
 import { DuplicateRiskError, retryMessage } from "@/modules/core/message/service";
-import { authenticateService } from "@/server/auth";
 
-export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
-  const identity = await authenticateService(request);
-  if (!identity) {
-    return Response.json({ title: "Unauthorized", status: 401 }, {
-      status: 401,
-      headers: { "content-type": "application/problem+json" },
-    });
-  }
-  const parsed = retryMessageSchema.safeParse(await request.json().catch(() => ({})));
+export const POST = serviceRoute(async (request, identity, context: { params: Promise<{ id: string }> }) => {
+  const parsed = retryMessageSchema.safeParse(await readJson(request, true));
   if (!parsed.success) {
     return Response.json({
       title: "Validation failed",
       status: 422,
-      errors: parsed.error.flatten().fieldErrors,
+      errors: validationErrors(parsed.error),
     }, { status: 422, headers: { "content-type": "application/problem+json" } });
   }
   try {
@@ -25,10 +18,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       parsed.data.acknowledgeDuplicateRisk,
     );
     if (!result) {
-      return Response.json({ title: "Not found", status: 404 }, {
-        status: 404,
-        headers: { "content-type": "application/problem+json" },
-      });
+      return apiProblem("Not found", 404);
     }
     return Response.json(result, { status: 202 });
   } catch (error) {
@@ -40,4 +30,4 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     }
     throw error;
   }
-}
+});

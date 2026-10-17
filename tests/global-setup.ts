@@ -1,6 +1,7 @@
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Client } from "pg";
+import { runMigrations } from "bullmq";
 
 const adminUrl = process.env.TEST_DATABASE_ADMIN_URL ?? "postgresql://envoy:envoy@localhost:5432/postgres";
 const testUrl = "postgresql://envoy:envoy@localhost:5432/envoy_test";
@@ -21,6 +22,8 @@ export default async function setup() {
   for (const file of (await readdir(migrationsDirectory)).filter(name => name.endsWith(".sql")).sort()) {
     await database.query(await readFile(join(migrationsDirectory, file), "utf8"));
   }
+
+  await runMigrations(database, "bullmq");
 
   const [{ hashApiKey }, { sealSecret }] = await Promise.all([
     import("../src/server/crypto"),

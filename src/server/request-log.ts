@@ -10,11 +10,11 @@ export async function recordRequest(input: {
   actor?: string | null;
   details?: Record<string, unknown>;
 }) {
-  await query(
+  try { await query(
     `INSERT INTO request_logs(request_id, method, path, status_code, duration_ms, actor, details)
      VALUES ($1,$2,$3,$4,$5,$6,$7)`,
     [input.requestId ?? createId("req"), input.method, input.path, input.statusCode,
       input.durationMs, input.actor ?? null, input.details ?? {}],
-  );
+  ); } catch (error) { console.error("Request log write failed", error); }
 }
 

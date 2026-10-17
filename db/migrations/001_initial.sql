@@ -161,10 +161,12 @@ CREATE TABLE routing_targets
 
 CREATE TABLE messages
 (
+    content_purged_at timestamptz,
     id                text PRIMARY KEY,
     product_id        text        NOT NULL REFERENCES products (id) ON DELETE RESTRICT,
     service_id        text        NOT NULL REFERENCES services (id) ON DELETE RESTRICT,
     sender_profile_id text        NOT NULL REFERENCES sender_profiles (id) ON DELETE RESTRICT,
+    sender_snapshot   jsonb       NOT NULL,
     idempotency_key   text        NOT NULL,
     payload_hash      text        NOT NULL,
     reference_id      text,
@@ -197,6 +199,7 @@ CREATE TABLE deliveries
                                                                    ('clean', 'complained', 'unsubscribed',
                                                                     'suppressed')),
     current_attempt_id text,
+    defer_count        integer     NOT NULL DEFAULT 0 CHECK (defer_count >= 0),
     queued_at          timestamptz NOT NULL DEFAULT now(),
     accepted_at        timestamptz,
     delivered_at       timestamptz,
@@ -226,6 +229,11 @@ CREATE TABLE delivery_attempts
     provider_response_ref    text,
     started_at               timestamptz NOT NULL DEFAULT now(),
     finished_at              timestamptz,
+    submission_deadline_at   timestamptz NOT NULL DEFAULT now() + interval '2 minutes',
+    retry_authorized_at      timestamptz,
+    retry_authorized_by      text,
+    reconciliation_count     integer NOT NULL DEFAULT 0 CHECK (reconciliation_count >= 0),
+    reconcile_after          timestamptz,
     UNIQUE (delivery_id, attempt_number),
     UNIQUE (provider_account_id, external_message_id)
 );
@@ -234,6 +242,7 @@ ALTER TABLE deliveries
 
 CREATE TABLE raw_provider_events
 (
+    content_purged_at timestamptz,
     id                  text PRIMARY KEY,
     provider_account_id text        NOT NULL REFERENCES provider_accounts (id) ON DELETE RESTRICT,
     webhook_endpoint_id text        NOT NULL REFERENCES provider_webhook_endpoints (id) ON DELETE RESTRICT,
@@ -247,6 +256,10 @@ CREATE TABLE raw_provider_events
     received_at         timestamptz NOT NULL DEFAULT now(),
     processed_at        timestamptz,
     processing_error    text,
+    verification        jsonb,
+    security_version    integer NOT NULL DEFAULT 0,
+    processing_attempt_count integer NOT NULL DEFAULT 0 CHECK (processing_attempt_count >= 0),
+    next_attempt_at     timestamptz NOT NULL DEFAULT now(),
     UNIQUE (provider_account_id, provider_event_id)
 );
 
@@ -256,10 +269,10 @@ CREATE TABLE delivery_events
     delivery_id           text        NOT NULL REFERENCES deliveries (id) ON DELETE CASCADE,
     raw_provider_event_id text        REFERENCES raw_provider_events (id) ON DELETE SET NULL,
     event_type            text        NOT NULL,
+    source_key            text        NOT NULL UNIQUE,
     occurred_at           timestamptz NOT NULL,
     canonical_payload     jsonb       NOT NULL,
-    created_at            timestamptz NOT NULL DEFAULT now(),
-    UNIQUE (delivery_id, event_type, occurred_at)
+    created_at            timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE TABLE suppressions
@@ -316,6 +329,7 @@ CREATE TABLE inbound_routes
 
 CREATE TABLE inbound_messages
 (
+    content_purged_at timestamptz,
     id                    text PRIMARY KEY,
     inbound_route_id      text        REFERENCES inbound_routes (id) ON DELETE SET NULL,
     product_id            text        REFERENCES products (id) ON DELETE SET NULL,
@@ -334,6 +348,8 @@ CREATE TABLE inbound_messages
     raw_mime_object_key   text,
     status                text        NOT NULL DEFAULT 'scanning' CHECK (status IN ('scanning', 'ready', 'rejected')),
     rejection_reason      text,
+    processing_token      text,
+    processing_deadline_at timestamptz,
     received_at           timestamptz NOT NULL,
     created_at            timestamptz NOT NULL DEFAULT now(),
     UNIQUE (provider_account_id, external_message_id)
@@ -341,6 +357,7 @@ CREATE TABLE inbound_messages
 
 CREATE TABLE inbound_attachments
 (
+    content_purged_at timestamptz,
     id                 text PRIMARY KEY,
     inbound_message_id text        NOT NULL REFERENCES inbound_messages (id) ON DELETE CASCADE,
     file_name          text        NOT NULL,
@@ -354,6 +371,7 @@ CREATE TABLE inbound_attachments
 
 CREATE TABLE callback_deliveries
 (
+    payload_purged_at timestamptz,
     id                 text PRIMARY KEY,
     endpoint_id        text        NOT NULL REFERENCES callback_endpoints (id) ON DELETE CASCADE,
     delivery_event_id  text        REFERENCES delivery_events (id) ON DELETE SET NULL,
@@ -422,3 +440,38 @@ CREATE INDEX inbound_messages_received_idx ON inbound_messages (received_at DESC
 CREATE INDEX inbound_messages_service_received_cursor ON inbound_messages (service_id, received_at DESC, id DESC);
 CREATE INDEX delivery_events_delivery_occurred_cursor ON delivery_events (delivery_id, occurred_at DESC, id DESC);
 CREATE INDEX request_logs_created_idx ON request_logs (created_at DESC);
+
+
+CREATE UNIQUE INDEX callback_delivery_event_once ON callback_deliveries(endpoint_id, delivery_event_id) WHERE delivery_event_id IS NOT NULL;
+CREATE UNIQUE INDEX callback_inbound_event_once ON callback_deliveries(endpoint_id, inbound_message_id, event_type) WHERE inbound_message_id IS NOT NULL;
+CREATE INDEX deliveries_recovery ON deliveries(lifecycle_status, updated_at) WHERE lifecycle_status IN ('queued','deferred','submitting','unknown');
+CREATE INDEX attempts_reconcile_due ON delivery_attempts(reconcile_after) WHERE status IN ('unknown','reconciling');
+CREATE INDEX raw_events_retry_due ON raw_provider_events(next_attempt_at) WHERE processed_at IS NULL;
+CREATE INDEX inbound_scan_due ON inbound_messages(processing_deadline_at) WHERE status='scanning';
+CREATE INDEX provider_attempt_usage ON delivery_attempts(provider_account_id, started_at);
+
+CREATE TABLE rate_limit_counters (
+    scope text NOT NULL,
+    key text NOT NULL,
+    window_start timestamptz NOT NULL,
+    count bigint NOT NULL CHECK(count >= 0),
+    expires_at timestamptz NOT NULL,
+    PRIMARY KEY(scope, key, window_start)
+);
+CREATE INDEX rate_limit_expiry ON rate_limit_counters(expires_at);
+
+CREATE TABLE worker_heartbeats (
+    worker_id text PRIMARY KEY,
+    last_seen_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX worker_heartbeat_recency ON worker_heartbeats(last_seen_at);
+
+-- Upload intents make object-store/database handoff failures reclaimable.
+CREATE TABLE pending_object_deletions (
+    object_key text PRIMARY KEY,
+    available_at timestamptz NOT NULL DEFAULT now() + interval '10 minutes',
+    created_at timestamptz NOT NULL DEFAULT now(),
+    last_error text,
+    attempt_count integer NOT NULL DEFAULT 0 CHECK (attempt_count >= 0)
+);
+CREATE INDEX pending_object_deletions_due ON pending_object_deletions(available_at);

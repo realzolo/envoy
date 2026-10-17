@@ -15,7 +15,7 @@ import {
   type ProviderModule,
   type ProviderSendContext
 } from "../contracts";
-import { accepted, decodeJson, event } from "../shared";
+import { accepted, decodeJson, event, eventDate, stableEventId } from "../shared";
 import { isTrustedSnsSigningCertificateUrl, snsSignatureAlgorithm } from "./sns-security";
 
 function credentials(context: ProviderSendContext) {
@@ -41,7 +41,7 @@ function credentials(context: ProviderSendContext) {
 
 function ses(context: ProviderSendContext) {
   if (context.config.type !== "ses") throw new Error("Invalid SES configuration");
-  return new SESv2Client({ region: context.config.region, credentials: credentials(context) })
+  return new SESv2Client({ region: context.config.region, credentials: credentials(context), maxAttempts: 1, requestHandler: { connectionTimeout: 5_000, requestTimeout: 30_000 } })
 }
 
 function snsString(payload: Record<string, unknown>) {
@@ -80,6 +80,7 @@ const eventMap: Record<string, CanonicalEventType> = {
   Click: "clicked",
   Complaint: "complained",
   RenderingFailure: "failed",
+  "Rendering Failure": "failed",
   Subscription: "unsubscribed",
   Received: "inbound.received"
 };
@@ -120,6 +121,7 @@ export const sesModule: ProviderModule = {
         const value = error as { $metadata?: { httpStatusCode?: number }; name?: string; message?: string };
         const status = value.$metadata?.httpStatusCode;
         if (!status) throw new CanonicalProviderError(value.message ?? "SES request outcome is unknown", "network", value.name ?? "ses_transport_error", "unknown", true);
+        if (status >= 500 || status === 408) throw new CanonicalProviderError(value.message ?? `SES returned HTTP ${status}`, "provider", value.name ?? `http_${status}`, "unknown", false);
         const category = status === 429 ? "rate_limit" : status === 401 || status === 403 ? "authentication" : status >= 500 ? "provider" : "policy";
         throw new CanonicalProviderError(value.message ?? `SES returned HTTP ${status}`, category, value.name ?? `http_${status}`, "not_accepted", status === 429 || status >= 500)
       }
@@ -163,20 +165,28 @@ export const sesModule: ProviderModule = {
       const type = eventMap[native];
       if (!type) return [];
       const mail = (p.mail ?? {}) as Record<string, unknown>;
-      const destination = Array.isArray(mail.destination) ? mail.destination.map(String) : [];
-      const bounce = (p.bounce ?? {}) as Record<string, unknown>;
-      return [event({
-        id: verified.providerEventId ?? crypto.randomUUID(),
-        externalMessageId: typeof mail.messageId === "string" ? mail.messageId : undefined,
-        type,
-        occurredAt: new Date(String(mail.timestamp ?? new Date().toISOString())),
-        recipient: destination[0],
-        bounce: type === "bounced" ? {
-          classification: bounce.bounceType === "Permanent" ? "hard" : "soft",
-          code: String(bounce.bounceSubType ?? "")
-        } : undefined,
-        inboundReference: type === "inbound.received" ? String(mail.messageId ?? "") : undefined
-      })]
+      const detailsKey: Record<string, string> = { Delivery: "delivery", Bounce: "bounce", Complaint: "complaint", Reject: "reject", RenderingFailure: "failure", "Rendering Failure": "failure", DeliveryDelay: "deliveryDelay", Open: "open", Click: "click", Send: "send", Subscription: "subscription", Received: "receipt" };
+      const details = (p[detailsKey[native]] ?? {}) as Record<string, unknown>;
+      const recipientsKey = native === "Bounce" ? "bouncedRecipients" : native === "Complaint" ? "complainedRecipients" : native === "DeliveryDelay" ? "delayedRecipients" : "recipients";
+      const recipients = Array.isArray(details[recipientsKey]) ? details[recipientsKey] as unknown[] : Array.isArray(mail.destination) ? mail.destination : [];
+      const occurredAt = eventDate(details.timestamp ?? mail.timestamp);
+      return (recipients.length ? recipients : [undefined]).map((recipient, index) => {
+        const info = recipient && typeof recipient === "object" ? recipient as Record<string, unknown> : {};
+        const email = typeof recipient === "string" ? recipient : typeof info.emailAddress === "string" ? info.emailAddress : undefined;
+        return event({
+          id: `${verified.providerEventId ?? stableEventId(p)}:${email ?? index}`,
+          externalMessageId: typeof mail.messageId === "string" ? mail.messageId : undefined,
+          type,
+          occurredAt,
+          recipient: email,
+          bounce: type === "bounced" ? {
+            classification: details.bounceType === "Permanent" ? "hard" : "soft",
+            code: String(info.status ?? details.bounceSubType ?? ""),
+            message: typeof info.diagnosticCode === "string" ? info.diagnosticCode : undefined
+          } : undefined,
+          inboundReference: type === "inbound.received" ? String(mail.messageId ?? "") : undefined
+        });
+      });
     }
   },
   identity: {

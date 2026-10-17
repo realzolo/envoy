@@ -1,20 +1,13 @@
-import { authenticateService } from "@/server/auth";
+import { serviceRoute, apiProblem } from "@/server/service-api";
 import { getMessage } from "@/modules/core/message/service";
 
 export const runtime = "nodejs";
 
-export async function GET(
-  request: Request,
-  context: { params: Promise<{ id: string }> },
-) {
-  const identity = await authenticateService(request);
-  if (!identity) {
-    return Response.json({ title: "Unauthorized", status: 401 }, { status: 401 });
-  }
+export const GET = serviceRoute(async (request, identity, context: { params: Promise<{ id: string }> }) => {
 
   const message = await getMessage((await context.params).id, identity.serviceId);
   if (!message) {
-    return Response.json({ title: "Not found", status: 404 }, { status: 404 });
+    return apiProblem("Not found", 404);
   }
 
   return Response.json({
@@ -26,6 +19,7 @@ export async function GET(
     subject: message.subject,
     html: message.html_body,
     text: message.text_body,
+    contentPurgedAt: message.content_purged_at?.toISOString() ?? null,
     replyTo: message.reply_to,
     metadata: message.metadata,
     tags: message.provider_tags,
@@ -42,4 +36,4 @@ export async function GET(
       updatedAt: delivery.updated_at.toISOString()
     })),
   });
-}
+});

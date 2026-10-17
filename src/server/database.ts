@@ -11,10 +11,16 @@ export function getDatabaseUrl() {
 }
 
 export function db() {
+  const max=Number(process.env.DATABASE_POOL_SIZE ?? 10);
+  if (!Number.isInteger(max) || max<1 || max>100) throw new Error("DATABASE_POOL_SIZE must be between 1 and 100");
   globalDatabase.__envoyPool ??= new Pool({
     connectionString: getDatabaseUrl(),
-    max: Number(process.env.DATABASE_POOL_SIZE ?? 10),
+    max,
+    options: "-c timezone=UTC",
     idleTimeoutMillis: 30_000,
+    connectionTimeoutMillis: 5_000,
+    statement_timeout: 30_000,
+    idle_in_transaction_session_timeout: 60_000,
   });
   return globalDatabase.__envoyPool;
 }

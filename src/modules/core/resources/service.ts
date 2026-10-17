@@ -1,16 +1,18 @@
 import { query, transaction } from "@/server/database";
+import { objectStore } from "@/modules/config/object-store";
 import { createId } from "@/server/ids";
 import { encodeCursor } from "@/modules/core/message/service";
 
-type Cursor = { at: Date; id: string } | null | undefined;
+type Cursor = { at: Date | string; id: string } | null | undefined;
 
-function nextCursor<T extends { id: string }>(rows: T[], limit: number, date: (row: T) => Date) {
+function nextCursor<T extends { id: string; cursor_at?: string }>(rows: T[], limit: number, date: (row: T) => Date) {
   const hasMore = rows.length > limit;
   const data = hasMore ? rows.slice(0, limit) : rows;
   return {
     data,
     nextCursor: hasMore ? encodeCursor({
       id: data[data.length - 1].id,
+      cursor_at: data[data.length - 1].cursor_at,
       accepted_at: date(data[data.length - 1])
     }) : null,
   };
@@ -36,7 +38,7 @@ export async function listDeliveries(serviceId: string, options: {
     category: string;
   }>(
     `SELECT d.id,d.message_id,d.recipient_email,d.recipient_name,d.lifecycle_status,d.engagement_status,
-       d.compliance_status,d.queued_at,d.updated_at,m.subject,m.message_category AS category
+       d.compliance_status,d.queued_at,to_char(d.queued_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_at,d.updated_at,m.subject,m.message_category AS category
      FROM deliveries d JOIN messages m ON m.id=d.message_id
      WHERE m.service_id=$1 AND ($2::text IS NULL OR d.message_id=$2)
        AND ($3::text IS NULL OR d.lifecycle_status=$3)
@@ -97,7 +99,7 @@ export async function getDelivery(id: string, serviceId: string) {
        WHERE da.delivery_id=$1 ORDER BY da.attempt_number DESC`,
       [id],
     ),
-    query(
+    query<Omit<PublicEventRow, "delivery_id" | "message_id">>(
       "SELECT id,event_type,occurred_at,canonical_payload FROM delivery_events WHERE delivery_id=$1 ORDER BY occurred_at DESC,id DESC",
       [id],
     ),
@@ -117,8 +119,13 @@ export async function getDelivery(id: string, serviceId: string) {
     acceptedAt: delivery.accepted_at?.toISOString() ?? null,
     deliveredAt: delivery.delivered_at?.toISOString() ?? null,
     updatedAt: delivery.updated_at.toISOString(),
-    attempts: attempts.rows,
-    events: events.rows,
+    attempts: attempts.rows.map(row => ({
+      id: row.id, number: row.attempt_number, status: row.status,
+      outcomeDeterminate: row.outcome_determinate,
+      error: row.error_category ? { category: row.error_category, code: "submission_failed" } : null,
+      startedAt: row.started_at?.toISOString(), finishedAt: row.finished_at?.toISOString() ?? null,
+    })),
+    events: events.rows.map(row => publicEvent({ ...row, delivery_id: delivery.id, message_id: delivery.message_id })),
   };
 }
 
@@ -136,7 +143,7 @@ export async function listEvents(serviceId: string, options: {
     occurred_at: Date;
     canonical_payload: Record<string, unknown>;
   }>(
-    `SELECT de.id,de.delivery_id,d.message_id,de.event_type,de.occurred_at,de.canonical_payload
+    `SELECT de.id,de.delivery_id,d.message_id,de.event_type,de.occurred_at,to_char(de.occurred_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_at,de.canonical_payload
      FROM delivery_events de JOIN deliveries d ON d.id=de.delivery_id JOIN messages m ON m.id=d.message_id
      WHERE m.service_id=$1 AND ($2::text IS NULL OR de.delivery_id=$2)
        AND ($3::text IS NULL OR de.event_type=$3)
@@ -146,14 +153,7 @@ export async function listEvents(serviceId: string, options: {
   )).rows;
   const page = nextCursor(rows, options.limit, row => row.occurred_at);
   return {
-    data: page.data.map(row => ({
-      id: row.id,
-      messageId: row.message_id,
-      deliveryId: row.delivery_id,
-      type: row.event_type,
-      occurredAt: row.occurred_at.toISOString(),
-      data: row.canonical_payload,
-    })),
+    data: page.data.map(publicEvent),
     nextCursor: page.nextCursor,
   };
 }
@@ -168,7 +168,7 @@ export async function listInboundMessages(serviceId: string, options: { limit: n
     received_at: Date;
     attachment_count: string;
   }>(
-    `SELECT i.id,i.from_email,i.to_emails,i.subject,i.status,i.received_at,count(a.id)::text AS attachment_count
+    `SELECT i.id,i.from_email,i.to_emails,i.subject,i.status,i.received_at,to_char(i.received_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_at,count(a.id)::text AS attachment_count
      FROM inbound_messages i LEFT JOIN inbound_attachments a ON a.inbound_message_id=i.id
      WHERE i.service_id=$1 AND ($2::timestamptz IS NULL OR (i.received_at,i.id)<($2,$3))
      GROUP BY i.id ORDER BY i.received_at DESC,i.id DESC LIMIT $4`,
@@ -201,10 +201,11 @@ export async function getInboundMessage(id: string, serviceId: string) {
     subject: string;
     sanitized_html: string | null;
     text_body: string | null;
+    content_purged_at: Date | null;
     status: string;
     rejection_reason: string | null;
     received_at: Date;
-  }>("SELECT id,external_message_id,message_id,from_email,to_emails,cc_emails,bcc_emails,subject,sanitized_html,text_body,status,rejection_reason,received_at FROM inbound_messages WHERE id=$1 AND service_id=$2", [id, serviceId])).rows[0];
+  }>("SELECT id,external_message_id,message_id,from_email,to_emails,cc_emails,bcc_emails,subject,sanitized_html,text_body,content_purged_at,status,rejection_reason,received_at FROM inbound_messages WHERE id=$1 AND service_id=$2", [id, serviceId])).rows[0];
   if (!message) return null;
   const attachments = (await query<{
     id: string;
@@ -213,11 +214,10 @@ export async function getInboundMessage(id: string, serviceId: string) {
     size_bytes: string;
     content_id: string | null;
     scan_status: string;
-  }>("SELECT id,file_name,content_type,size_bytes::text,content_id,scan_status FROM inbound_attachments WHERE inbound_message_id=$1 ORDER BY created_at,id", [id])).rows;
+    content_purged_at: Date | null;
+  }>("SELECT id,file_name,content_type,size_bytes::text,content_id,scan_status,content_purged_at FROM inbound_attachments WHERE inbound_message_id=$1 ORDER BY created_at,id", [id])).rows;
   return {
     id: message.id,
-    externalMessageId: message.external_message_id,
-    messageId: message.message_id,
     from: message.from_email,
     to: message.to_emails,
     cc: message.cc_emails,
@@ -225,6 +225,7 @@ export async function getInboundMessage(id: string, serviceId: string) {
     subject: message.subject,
     html: message.sanitized_html,
     text: message.text_body,
+    contentPurgedAt: message.content_purged_at?.toISOString() ?? null,
     status: message.status,
     rejectionReason: message.rejection_reason,
     receivedAt: message.received_at.toISOString(),
@@ -235,6 +236,7 @@ export async function getInboundMessage(id: string, serviceId: string) {
       size: Number(item.size_bytes),
       contentId: item.content_id,
       scanStatus: item.scan_status,
+      contentAvailable: item.content_purged_at === null,
     })),
   };
 }
@@ -279,6 +281,7 @@ export async function createSuppression(input: {
 }) {
   return transaction(async client => {
     const email = input.email.toLowerCase();
+    await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [JSON.stringify(["suppression", input.productId, input.scope, input.listId ?? null, email])]);
     const existing = (await client.query<{ id: string }>(
       `SELECT id FROM suppressions WHERE active=true AND product_id=$1 AND scope_type=$2
        AND COALESCE(list_id,'')=COALESCE($3,'') AND email_normalized=$4 FOR UPDATE`,
@@ -331,4 +334,42 @@ export async function listSenderProfiles(productId: string) {
     replyTo: row.reply_to,
     availableProviders: Number(row.provider_count),
   }));
+}
+
+
+type PublicEventRow = { id: string; message_id: string; delivery_id: string; event_type: string; occurred_at: Date; canonical_payload: Record<string, unknown> };
+function publicEvent(row: PublicEventRow) {
+  const payload = row.canonical_payload;
+  const bounce = payload.bounce && typeof payload.bounce === "object" ? payload.bounce as Record<string, unknown> : null;
+  return {
+    id: row.id, messageId: row.message_id, deliveryId: row.delivery_id,
+    type: row.event_type, occurredAt: row.occurred_at.toISOString(),
+    data: {
+      ...(typeof payload.attemptId === "string" ? { attemptId: payload.attemptId } : {}),
+      ...(typeof payload.recipient === "string" ? { recipient: payload.recipient } : {}),
+      ...(bounce && (bounce.classification === "hard" || bounce.classification === "soft") ? { bounce: { classification: bounce.classification } } : {}),
+    },
+  };
+}
+
+// serviceId is mandatory for service callers; administrators call without it
+// only after their own session authorization. Object keys never leave the server.
+export async function getInboundAttachment(id: string, attachmentId: string, serviceId?: string) {
+  const file = (await query<{ file_name: string; content_type: string; object_key: string; size_bytes: string; scan_status: string }>(
+    `SELECT a.file_name,a.content_type,a.object_key,a.size_bytes::text,a.scan_status
+     FROM inbound_attachments a JOIN inbound_messages i ON i.id=a.inbound_message_id
+     WHERE i.id=$1 AND a.id=$2 AND a.content_purged_at IS NULL AND i.status='ready' AND ($3::text IS NULL OR i.service_id=$3)
+       AND (a.scan_status='clean' OR (a.scan_status='skipped' AND $4::boolean))`,
+    [id, attachmentId, serviceId ?? null, !process.env.CLAMAV_HOST?.trim()],
+  )).rows[0];
+  if (!file) return null;
+  const bytes = await objectStore().get(file.object_key);
+  const filename = file.file_name.replace(/[\\"\r\n\x00-\x1f]/g, "_");
+  return new Response(Buffer.from(bytes), { headers: {
+    "content-type": "application/octet-stream",
+    "content-length": String(bytes.byteLength),
+    "content-disposition": `attachment; filename="${filename.replace(/[^\x20-\x7e]/g, "_")}"; filename*=UTF-8''${encodeURIComponent(filename).replace(/['()*]/g, ch => `%${ch.charCodeAt(0).toString(16).toUpperCase()}`)}`,
+    "x-content-type-options": "nosniff", "cache-control": "private, no-store",
+    "content-security-policy": "sandbox",
+  } });
 }

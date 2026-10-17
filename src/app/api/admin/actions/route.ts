@@ -1,3 +1,7 @@
+import { MAX_REQUEST_BYTES } from "@/lib/contracts";
+import { BodyTooLargeError, readRequestBytes } from "@/server/request-body";
+import { z } from "zod";
+import { MessageValidationError, IdempotencyConflictError, DuplicateRiskError } from "@/modules/core/message/service";
 import { providerTypeSchema } from "@/modules/providers/contracts";
 import { getAdminSession } from "@/server/admin-auth";
 import { recordRequest } from "@/server/request-log";
@@ -25,10 +29,11 @@ export async function POST(request: Request) {
   const started = Date.now();
   const session = await getAdminSession();
   if (!session) return Response.json({ error: "Unauthorized" }, { status: 401 });
-  const body = await request.json().catch(() => ({})) as Body;
+  let body:Body={};
   let result: unknown = null;
   let status = 200;
   try {
+    body = z.object({action:z.string().min(1)}).passthrough().parse(JSON.parse(Buffer.from(await readRequestBytes(request,MAX_REQUEST_BYTES)).toString("utf8"))) as Body;
     switch (body.action) {
       case"product.create":
         result = {
@@ -86,9 +91,10 @@ export async function POST(request: Request) {
       case"identity.toggle":
         await actions.toggleIdentity(text(body, "id"), body.enabled === true, session.email);
         break;
+      case"sender.update":
       case"sender.create":
         result = {
-          id: await actions.createSenderProfile({
+          id: await (body.action === "sender.update" ? (input: Parameters<typeof actions.updateSenderProfile>[1], actor: string) => actions.updateSenderProfile(text(body,"id"),input,actor) : actions.createSenderProfile)({
             productId: text(body, "productId"),
             domainId: text(body, "domainId"),
             name: text(body, "name"),
@@ -103,6 +109,7 @@ export async function POST(request: Request) {
       case"sender.toggle":
         await actions.toggleSenderProfile(text(body, "id"), body.enabled === true, session.email);
         break;
+      case"routing.update":
       case"routing.create":
         result = {
           id: await actions.createRoutingPolicy({
@@ -119,9 +126,9 @@ export async function POST(request: Request) {
               weight: number;
               rateLimit: number
             }> : []
-          }, session.email)
+          }, session.email, body.action === "routing.update" ? text(body,"id") : undefined)
         };
-        status = 201;
+        status = body.action === "routing.update" ? 200 : 201;
         break;
       case"routing.simulate":
         result = await actions.simulateRouting({
@@ -135,8 +142,12 @@ export async function POST(request: Request) {
         await actions.toggleRoutingPolicy(text(body, "id"), body.enabled === true, session.email);
         break;
       case"delivery.retry":
-        await actions.manualRetryDelivery(text(body, "id"), body.acknowledgeDuplicateRisk === true, session.email);
+        result = await actions.manualRetryDelivery(text(body, "id"), body.acknowledgeDuplicateRisk === true, session.email);
         status = 202;
+        break;
+      case"outbox.retry":
+        result = await actions.retryOutbox(text(body,"id"),session.email);
+        status=202;
         break;
       case"event.replay":
         await actions.replayRawEvent(text(body, "id"), session.email);
@@ -160,6 +171,7 @@ export async function POST(request: Request) {
         break;
       case"message.test":
         result = await actions.sendTestMessage({
+          idempotencyKey: text(body, "idempotencyKey"),
           serviceId: text(body, "serviceId"),
           recipient: text(body, "recipient"),
           category: text(body, "category"),
@@ -193,6 +205,9 @@ export async function POST(request: Request) {
         }, session.email);
         status = 201;
         break;
+      case"callback.update":
+        await actions.updateCallback(text(body,"id"), { name:text(body,"name"), url:text(body,"url"), events:strings(body.events) },session.email);
+        break;
       case"callback.toggle":
         await actions.toggleCallback(text(body, "id"), body.enabled === true, session.email);
         break;
@@ -204,7 +219,7 @@ export async function POST(request: Request) {
         status = 202;
         break;
       case"callback.replay_dlq":
-        result = { count: await actions.replayDeadLetters(session.email) };
+        result = { count: await actions.replayDeadLetters(session.email, { endpointId: typeof body.endpointId === "string" ? body.endpointId : undefined, deliveryId: typeof body.deliveryId === "string" ? body.deliveryId : undefined }) };
         status = 202;
         break;
       case"inbound_route.create":
@@ -236,14 +251,15 @@ export async function POST(request: Request) {
     });
     return Response.json({ ok: true, result }, { status })
   } catch (error) {
-    await recordRequest({
-      method: "POST",
-      path: "/api/admin/actions",
-      statusCode: 422,
-      durationMs: Date.now() - started,
-      actor: session.email,
-      details: { action: body.action, error: error instanceof Error ? error.message : "Action failed" }
-    });
-    return Response.json({ error: error instanceof Error ? error.message : "Action failed" }, { status: 422 })
+    const code = typeof error === "object" && error && "code" in error ? String(error.code) : "";
+    status = error instanceof IdempotencyConflictError || error instanceof DuplicateRiskError || code === "23505" ? 409
+      : error instanceof BodyTooLargeError ? 413 : error instanceof SyntaxError ? 400 : /^(08|53|57)/.test(code) ? 503 : code ? 500 : 422;
+    const message = code ? code === "23505" ? "This configuration already exists." : status === 503 ? "The database is temporarily unavailable." : "The operation could not be completed. Check the server logs."
+      : error instanceof MessageValidationError ? error.issues.join("; ") : error instanceof z.ZodError ? "Check the highlighted fields."
+      : error instanceof IdempotencyConflictError ? "This submission key has already been used with different content."
+      : error instanceof Error ? error.message : "Action failed";
+    const fields = error instanceof z.ZodError ? Object.fromEntries(error.issues.map(issue => [issue.path.join("."), issue.message])) : undefined;
+    await recordRequest({method:"POST",path:"/api/admin/actions",statusCode:status,durationMs:Date.now()-started,actor:session.email,details:{action:body.action,error:message}});
+    return Response.json({ error: message, fields }, { status })
   }
 }

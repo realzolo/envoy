@@ -20,6 +20,9 @@ services:
     ports:
       - "127.0.0.1:6178:6178"
     restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
     stop_grace_period: 30s
     healthcheck:
       test:
@@ -36,6 +39,9 @@ services:
     <<: *envoy-service
     command: [ "node", "node_modules/tsx/dist/cli.mjs", "src/worker/index.ts" ]
     restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
     stop_grace_period: 30s
 
   migrate:

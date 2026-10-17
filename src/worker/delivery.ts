@@ -45,17 +45,11 @@ export async function processDelivery(job: Job<{ deliveryId: string }>) {
       }, error.retryable);
       return;
     }
-    if (error instanceof TypeError) {
-      await markUnknown(submission.attemptId, error.message);
-      return
-    }
-    await markDeterminateFailure(submission.attemptId, {
-      category: "provider",
-      code: "provider_rejected",
-      message: error instanceof Error ? error.message : "Provider rejected the request"
-    }, false);
+    // Once send() starts, an unclassified exception cannot prove the provider rejected the request.
+    await markUnknown(submission.attemptId, error instanceof Error ? error.message : "Provider submission outcome is unknown");
     return;
   }
+
   if (result.outcome === "unknown") {
     await markUnknown(submission.attemptId, result.reason);
     return

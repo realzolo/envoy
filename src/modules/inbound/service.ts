@@ -3,6 +3,7 @@ import sanitizeHtml from "sanitize-html";
 import type { CanonicalInboundMessage, WebhookVerification } from "@/modules/providers/contracts";
 import { objectStore } from "@/modules/config/object-store";
 import { createId } from "@/server/ids";
+import { completeObjectUploads, registerObjectUpload } from "@/server/services/object-cleanup";
 import { query, transaction } from "@/server/database";
 
 const MAX_MESSAGE_BYTES = 25 * 1024 * 1024;
@@ -65,8 +66,10 @@ export async function persistInbound(input: {
   const message = input.message;
   const duplicate = (await query<{
     id: string;
-    status: string
-  }>("SELECT id,status FROM inbound_messages WHERE provider_account_id=$1 AND external_message_id=$2", [input.providerAccountId, message.externalMessageId])).rows[0];
+    status: string;
+    content_purged_at: Date | null
+  }>("SELECT id,status,content_purged_at FROM inbound_messages WHERE provider_account_id=$1 AND external_message_id=$2", [input.providerAccountId, message.externalMessageId])).rows[0];
+  if (duplicate?.content_purged_at) throw new InboundTerminalError("Inbound content has expired");
   if (duplicate && duplicate.status !== "scanning") return duplicate.id;
   let id = duplicate?.id ?? createId("inb");
   const recipients = message.to.map(address);
@@ -88,12 +91,11 @@ export async function persistInbound(input: {
                            split_part(recipient, '@', 1) LIKE replace(replace(r.local_part_pattern, '_', '~_'), '*', '%') ESCAPE '~'))
                       ORDER BY (r.local_part_pattern <> '*') DESC LIMIT 1`, [input.webhookEndpointId, recipients])).rows[0] ?? null);
   if (!route) {
-    const error = new InboundTerminalError("No inbound route matched the recipients");
-    if (duplicate) {
-      await query("UPDATE inbound_messages SET status='rejected',rejection_reason=$2 WHERE id=$1", [id, error.message]);
-      return id;
-    }
-    throw error;
+    const stored = await query<{ id: string }>(`INSERT INTO inbound_messages(id,provider_account_id,raw_provider_event_id,external_message_id,message_id,from_email,to_emails,cc_emails,bcc_emails,subject,sanitized_html,text_body,status,rejection_reason,received_at)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'rejected','No inbound route matched the recipients',$13)
+      ON CONFLICT(provider_account_id,external_message_id) DO UPDATE SET status='rejected',rejection_reason='No inbound route matched the recipients' WHERE inbound_messages.status='scanning' AND (inbound_messages.processing_token IS NULL OR inbound_messages.processing_deadline_at<=now()) RETURNING id`, [id,input.providerAccountId,input.rawEventId,message.externalMessageId,message.messageId??null,address(message.from),recipients,message.cc.map(address),message.bcc.map(address),message.subject,message.html?sanitizeHtml(message.html):null,message.text??null,message.receivedAt]);
+    if (!stored.rows[0]) throw new Error("Inbound message is being processed by another worker");
+    return stored.rows[0].id;
   }
   const inserted = duplicate ? null : await query(`INSERT INTO inbound_messages(id, inbound_route_id, product_id, service_id,
                                                              provider_account_id, raw_provider_event_id,
@@ -111,39 +113,61 @@ export async function persistInbound(input: {
     if (existing.status !== "scanning") return existing.id;
     id = existing.id;
   }
-  const prefix = `inbound/${id}`;
+  const token = createId("claim");
+  const claimed = await query<{ received_at: Date }>("UPDATE inbound_messages SET processing_token=$2,processing_deadline_at=now()+interval '2 minutes' WHERE id=$1 AND status='scanning' AND (processing_token IS NULL OR processing_deadline_at<=now()) RETURNING received_at", [id, token]);
+  if (!claimed.rowCount) {
+    const current = (await query<{ status: string }>("SELECT status FROM inbound_messages WHERE id=$1", [id])).rows[0];
+    if (current?.status !== "scanning") return id;
+    throw new Error("Inbound message is being processed by another worker");
+  }
+  const receivedAt = claimed.rows[0]?.received_at ?? message.receivedAt;
+  const prefix = `inbound/${id}/${token}`;
+  const writtenKeys: string[] = [];
   let rawKey: string | null = null;
   const attachments: Array<(typeof message.attachments)[number] & {
     objectKey: string;
     scanStatus: "clean" | "skipped";
   }> = [];
   try {
-    const aggregateBytes = message.rawMime?.byteLength ?? message.attachments.reduce((total, file) => total + file.content.byteLength, 0);
+    const decodedBytes = Buffer.byteLength((message.html ?? "") + (message.text ?? "") + message.subject, "utf8") + message.attachments.reduce((total, file) => total + file.content.byteLength, 0);
+    const aggregateBytes = Math.max(message.rawMime?.byteLength ?? 0, decodedBytes);
     if (aggregateBytes > MAX_MESSAGE_BYTES) throw new InboundTerminalError("Inbound message exceeds the size limit");
     for (const file of message.attachments) if (file.content.byteLength > MAX_ATTACHMENT_BYTES) throw new InboundTerminalError(`Attachment exceeds the size limit: ${file.fileName}`);
-    if (message.rawMime) {
-      rawKey = `${prefix}/raw.eml`;
-      await objectStore().put(rawKey, message.rawMime, "message/rfc822")
-    }
-    for (const file of message.attachments) {
+    // Scan all files before uploading; rejected content should not leave partial objects.
+    for (const [index, file] of message.attachments.entries()) {
+      const renewed = await query("UPDATE inbound_messages SET processing_deadline_at=now()+interval '2 minutes' WHERE id=$1 AND processing_token=$2 RETURNING id", [id, token]);
+      if (!renewed.rowCount) throw new Error("Inbound processing ownership expired");
       const scanStatus = await scanAttachment(file.content);
       if (scanStatus === "infected") throw new InboundTerminalError(`Malware detected in attachment: ${file.fileName}`);
-      const key = `${prefix}/attachments/${createId("file")}`;
-      await objectStore().put(key, file.content, file.contentType);
-      attachments.push({ ...file, objectKey: key, scanStatus })
+      attachments.push({ ...file, objectKey: `${prefix}/attachments/${index}`, scanStatus });
+    }
+    if (message.rawMime) {
+      rawKey = `${prefix}/raw.eml`;
+      writtenKeys.push(rawKey);
+      await registerObjectUpload(rawKey);
+      await objectStore().put(rawKey, message.rawMime, "message/rfc822");
+    }
+    for (const file of attachments) {
+      const renewed = await query("UPDATE inbound_messages SET processing_deadline_at=now()+interval '2 minutes' WHERE id=$1 AND processing_token=$2 RETURNING id", [id, token]);
+      if (!renewed.rowCount) throw new Error("Inbound processing ownership expired");
+      writtenKeys.push(file.objectKey);
+      await registerObjectUpload(file.objectKey);
+      await objectStore().put(file.objectKey, file.content, file.contentType);
     }
     await transaction(async client => {
-      await client.query("UPDATE inbound_messages SET raw_mime_object_key=$2,status='ready',rejection_reason=NULL WHERE id=$1", [id, rawKey]);
+      const completed = await client.query("UPDATE inbound_messages SET raw_mime_object_key=$2,status='ready',rejection_reason=NULL,processing_token=NULL,processing_deadline_at=NULL WHERE id=$1 AND processing_token=$3 AND status='scanning' RETURNING id", [id, rawKey, token]);
+      if (!completed.rowCount) throw new Error("Inbound processing ownership expired");
       for (const file of attachments) await client.query("INSERT INTO inbound_attachments(id,inbound_message_id,file_name,content_type,size_bytes,object_key,content_id,scan_status) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)", [createId("ina"), id, file.fileName, file.contentType, file.content.byteLength, file.objectKey, file.contentId ?? null, file.scanStatus]);
+      await completeObjectUploads(client, writtenKeys);
       if (route.callback_endpoint_id) {
         const callback = await client.query<{ id: string }>("SELECT id FROM callback_endpoints WHERE id=$1 AND status='active' AND 'inbound.received'=ANY(subscribed_events)", [route.callback_endpoint_id]);
         if (!callback.rows[0]) return;
         const callbackId = createId("cbx");
         const payload = {
-          id: createId("event"),
+          id: `inbound:${id}:received`,
           apiVersion: "2026-09-01",
           type: "inbound.received",
-          occurredAt: message.receivedAt.toISOString(),
+          occurredAt: receivedAt.toISOString(),
           data: {
             inboundMessageId: id,
             from: address(message.from),
@@ -162,10 +186,13 @@ export async function persistInbound(input: {
       }
     })
   } catch (error) {
+    // COMMIT itself may have lost its response: reference-aware cleanup must decide what is orphaned.
+    await Promise.allSettled(writtenKeys.map(key => registerObjectUpload(key)));
     if (error instanceof InboundTerminalError) {
-      await query("UPDATE inbound_messages SET status='rejected',rejection_reason=$2 WHERE id=$1", [id, error.message]);
+      await query("UPDATE inbound_messages SET status='rejected',rejection_reason=$2 WHERE id=$1 AND processing_token=$3", [id, error.message, token]);
       return id;
     }
+    await query("UPDATE inbound_messages SET processing_token=NULL,processing_deadline_at=NULL WHERE id=$1 AND processing_token=$2", [id, token]);
     throw error;
   }
   return id;

@@ -16,7 +16,7 @@ vi.mock("@/server/admin-auth", () => ({
   validAdminCredentials: stubs.validAdminCredentials,
 }));
 vi.mock("@/server/network", () => ({ clientIpFromTrustedProxy: stubs.clientIpFromTrustedProxy }));
-vi.mock("@/server/redis", () => ({ enforceScopedRateLimit: stubs.enforceScopedRateLimit }));
+vi.mock("@/server/runtime-store", () => ({ enforceScopedRateLimit: stubs.enforceScopedRateLimit }));
 
 import { POST } from "@/app/api/admin/session/route";
 

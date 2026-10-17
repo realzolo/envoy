@@ -1,6 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { CanonicalEventType, ProviderModule } from "../contracts";
-import { accepted, checkedJson, decodeJson, event, header, type MultipartValue, parseMultipart } from "../shared";
+import { accepted, submitRequest, eventDate, stableEventId, checkedJson, decodeJson, event, header, type MultipartValue, parseMultipart } from "../shared";
 
 const eventMap: Record<string, CanonicalEventType> = {
   accepted: "accepted",
@@ -37,7 +37,7 @@ export const mailgunModule: ProviderModule = {
       form.set("html", message.html);
       if (message.replyTo) form.set("h:Reply-To", message.replyTo);
       const host = context.config.region === "eu" ? "https://api.eu.mailgun.net" : "https://api.mailgun.net";
-      const response = await fetch(`${host}/v3/${context.config.sendingDomain}/messages`, {
+      const response = await submitRequest(`${host}/v3/${context.config.sendingDomain}/messages`, {
         method: "POST",
         headers: { authorization: `Basic ${Buffer.from(`api:${context.secret.apiKey}`).toString("base64")}` },
         body: form
@@ -75,22 +75,27 @@ export const mailgunModule: ProviderModule = {
       if (verified.nativeType === "inbound") return [event({
         id: verified.providerEventId ?? crypto.randomUUID(),
         type: "inbound.received",
-        occurredAt: new Date(),
+        occurredAt: eventDate(Number((verified.parsed as Record<string, unknown>).timestamp) * 1000),
         inboundReference: verified.providerEventId
       })];
       const payload = verified.parsed as Record<string, unknown>;
       const data = (payload["event-data"] ?? {}) as Record<string, unknown>;
-      const type = eventMap[String(data.event)];
+      const type = data.event === "failed" ? data.severity === "temporary" ? "deferred" : "bounced" : eventMap[String(data.event)];
       if (!type) return [];
       const message = (data.message ?? {}) as Record<string, unknown>;
       const headers = (message.headers ?? {}) as Record<string, unknown>;
       const recipient = typeof data.recipient === "string" ? data.recipient : undefined;
       return [event({
-        id: String(data.id),
+        id: String(data.id ?? verified.providerEventId ?? stableEventId(data)),
         externalMessageId: typeof headers["message-id"] === "string" ? String(headers["message-id"]) : undefined,
         type,
-        occurredAt: new Date(Number(data.timestamp ?? Date.now() / 1000) * 1000),
-        recipient
+        occurredAt: eventDate(Number(data.timestamp) * 1000),
+        recipient,
+        bounce: type === "bounced" || type === "deferred" ? {
+          classification: data.severity === "permanent" ? "hard" : "soft",
+          code: String(((data["delivery-status"] ?? {}) as Record<string, unknown>).code ?? ""),
+          message: String(((data["delivery-status"] ?? {}) as Record<string, unknown>).message ?? "")
+        } : undefined
       })]
     }
   },
