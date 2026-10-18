@@ -375,7 +375,7 @@ current policy is checked again after I/O. A read-only guard commit failure cann
 Downloads apply the same proof/digest checks while erasure/reprocessing waits on resource locks. These locks authorize
 an in-flight read; they cannot recall a previously downloaded copy. Retention semantics of `contentAvailable` are unchanged.
 
-This development project preserves executed migration checksums and advances directly to the final schema with `002_service_domain_permissions.sql`; no data conversion layer exists. There are no legacy scan adapters,
+Fresh installations use `001_initial.sql` as the sole application migration to create the final schema, including domain permissions and one callback per Service. Applied migration checksums remain enforced. There are no legacy scan adapters,
 unchecked-content bypasses, migration-adoption patches, provider capability compatibility views or automatic historical resends.
 
 

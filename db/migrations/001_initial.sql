@@ -15,6 +15,7 @@ CREATE TABLE services
     id                    text PRIMARY KEY,
     product_id            text        NOT NULL REFERENCES products (id) ON DELETE CASCADE,
     name                  text        NOT NULL,
+    suppression_management_allowed boolean NOT NULL DEFAULT false,
     created_at            timestamptz NOT NULL DEFAULT now(),
     updated_at            timestamptz NOT NULL DEFAULT now(),
     UNIQUE (product_id, name),
@@ -109,24 +110,26 @@ CREATE TABLE provider_identities
     UNIQUE (id, provider_account_id)
 );
 
-CREATE TABLE sender_grants
+CREATE TABLE service_domain_grants
 (
     id text PRIMARY KEY,
-    product_id text NOT NULL REFERENCES products(id) ON DELETE CASCADE,
-    service_id text,
+    service_id text NOT NULL REFERENCES services(id) ON DELETE CASCADE,
     sending_domain_id text NOT NULL REFERENCES sending_domains(id) ON DELETE CASCADE,
-    from_local_part text,
+    send_allowed boolean NOT NULL DEFAULT false,
+    receive_allowed boolean NOT NULL DEFAULT false,
     status text NOT NULL DEFAULT 'active' CHECK(status IN ('active','disabled')),
+    revision integer NOT NULL DEFAULT 1,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
-    FOREIGN KEY(service_id,product_id) REFERENCES services(id,product_id) ON DELETE CASCADE
+    UNIQUE(service_id,sending_domain_id),
+    CHECK(send_allowed OR receive_allowed)
 );
-CREATE UNIQUE INDEX sender_grant_scope ON sender_grants(product_id,COALESCE(service_id,'*'),sending_domain_id,COALESCE(from_local_part,''));
 
 CREATE TABLE outbound_files
 (
     id text PRIMARY KEY,
     service_id text NOT NULL REFERENCES services(id) ON DELETE RESTRICT,
+    sending_domain_id text NOT NULL REFERENCES sending_domains(id) ON DELETE RESTRICT,
     file_name text NOT NULL,
     content_type text NOT NULL,
     size_bytes bigint NOT NULL CHECK(size_bytes>0),
@@ -390,21 +393,20 @@ CREATE TABLE callback_endpoints
     created_at        timestamptz NOT NULL DEFAULT now(),
     updated_at        timestamptz NOT NULL DEFAULT now()
 );
+CREATE UNIQUE INDEX callback_one_per_service ON callback_endpoints(service_id);
 
 CREATE TABLE inbound_routes
 (
     id                           text PRIMARY KEY,
     provider_webhook_endpoint_id text        NOT NULL REFERENCES provider_webhook_endpoints (id) ON DELETE CASCADE,
     sending_domain_id            text        NOT NULL REFERENCES sending_domains (id) ON DELETE CASCADE,
-    local_part_pattern           text        NOT NULL DEFAULT '*',
     product_id                   text        NOT NULL REFERENCES products (id) ON DELETE CASCADE,
-    service_id                   text REFERENCES services (id) ON DELETE CASCADE,
-    callback_endpoint_id         text        REFERENCES callback_endpoints (id) ON DELETE SET NULL,
+    service_id                   text        NOT NULL REFERENCES services (id) ON DELETE CASCADE,
     status                       text        NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
     created_at                   timestamptz NOT NULL DEFAULT now(),
     FOREIGN KEY (service_id, product_id) REFERENCES services (id, product_id) ON DELETE CASCADE
 );
-CREATE UNIQUE INDEX inbound_route_scope ON inbound_routes(provider_webhook_endpoint_id,sending_domain_id,local_part_pattern,COALESCE(service_id,'product:' || product_id));
+CREATE UNIQUE INDEX inbound_route_scope ON inbound_routes(provider_webhook_endpoint_id,sending_domain_id,service_id);
 
 CREATE TABLE inbound_messages
 (

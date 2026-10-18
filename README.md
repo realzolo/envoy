@@ -173,7 +173,7 @@ a dot and the original UTF-8 body within a fixed 300-second window, then durably
 secret only by pausing delivery, waiting for in-flight requests to finish, updating both sides and resuming; replay and
 incremental recovery remain available. See [callback operations](docs/OPERATIONS.md).
 
-Run versioned checksummed schema migrations with `pnpm db:setup`. The user-authorized pre-launch `001_initial.sql` directly defines the single-secret callback schema. The development final-model migration `002_service_domain_permissions.sql` directly removes old address grants and per-route callback/pattern fields; empty business tables are required. An existing checksum mismatch is refused; no adoption patch, data reset or ledger bypass is provided.
+Initialize a fresh database with `pnpm db:setup`. The sole application migration, `001_initial.sql`, directly defines domain sending/receiving grants, the independent Service suppression-management permission, domain-owned files, Service-scoped inbound routes and one callback with one current encrypted secret per Service. Applied migration checksums remain enforced.
 
 Attachment safety belongs entirely to Envoy. Upload success means durable receipt; callers wait for `usage.canSend`
 before sending. All outbound/inline attachments and inbound downloads require a byte-bound current clean result;

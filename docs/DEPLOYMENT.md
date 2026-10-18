@@ -66,8 +66,8 @@ docker compose restart web worker
 docker compose down
 ```
 
-The user-authorized pre-launch schema has one current callback secret directly in `001_initial.sql`.
-Migration still refuses a checksum mismatch; no data-bearing database is reset and no ledger is rewritten to force startup. Forward migration `002_service_domain_permissions.sql` directly installs the final domain authorization model and requires empty development business tables; it does not adapt old grants or mailbox routes. Deploy matching Web and Worker binaries together. For an attachment policy change, follow the
+For fresh installations, `001_initial.sql` directly creates the final domain authorization model, domain-owned files, Service-scoped inbound routes and one callback with one current secret per Service.
+Migration still refuses a checksum mismatch; no data-bearing database is reset and no ledger is rewritten to force startup. Deploy matching Web and Worker binaries together. For an attachment policy change, follow the
 stopped/drained all-instance procedure in [Operations](OPERATIONS.md#attachment-safety-operations).
 
 Use PostgreSQL 14+ with direct or session-pooled connections. Default Web plus Worker connection budget is 48, plus deployment/monitoring headroom. Migration initializes business and BullMQ schemas explicitly. R2 uses separate `OBJECT_STORE_ACCESS_KEY_ID` / `OBJECT_STORE_SECRET_ACCESS_KEY`; AWS runtime credentials remain available to SES. Leave SSE unset for R2 and use bucket-default encryption.
