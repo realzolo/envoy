@@ -1,3 +1,4 @@
+import { scanClean } from "../helpers/scanner";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { GET as capabilities } from "@/app/api/v1/capabilities/route";
 import { GET as readInbound } from "@/app/api/v1/inbound-messages/[id]/route";
@@ -107,6 +108,8 @@ describe("service mail discovery and inbound ownership", () => {
     expect(await getInboundMessage(aId,sid("b"))).toBeNull();
     expect(await getInboundAttachment(aId,a.attachments[0].id,sid("b"))).toBeNull();
     expect(await getInboundAttachment(bId,a.attachments[0].id,sid("b"))).toBeNull();
+    await expect(getInboundAttachment(aId,a.attachments[0].id,sid("a"))).rejects.toMatchObject({code:"FILE_NOT_READY"});
+    await scanClean(a.attachments[0].id);
     expect(await (await getInboundAttachment(aId,a.attachments[0].id,sid("a")))!.text()).toBe("private attachment");
     expect((await readInbound(request("b",`/api/v1/inbound-messages/${aId}`),{ params: Promise.resolve({ id: aId }) })).status).toBe(404);
     expect((await listInboundMessages(sid("c"),{ limit: 100 })).data).toEqual([]);

@@ -5,3 +5,7 @@ process.env.DATABASE_URL = "postgresql://envoy:envoy@localhost:5432/envoy_test";
 process.env.ENVOY_KEK_BASE64 = "xNKUJulg5w3Uf+hmV9yWMPa6BxUJbUVvJFBquKimvnc=";
 process.env.OBJECT_STORAGE_DRIVER = "local";
 process.env.OBJECT_STORAGE_PREFIX = "envoy-test";
+
+// Tests use only explicitly bound local scanner fixtures, never deployment scanners.
+process.env.CLAMAV_HOST = "";
+process.env.ATTACHMENT_POLICY_VERSION = "1";

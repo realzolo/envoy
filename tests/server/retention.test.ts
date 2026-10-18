@@ -191,7 +191,7 @@ describe("bounded content retention", () => {
     created.inbound.push(id);
     await query(`INSERT INTO inbound_messages(id,provider_account_id,from_email,to_emails,subject,text_body,raw_mime_object_key,status,received_at,created_at)
       VALUES ($1,'pa_mock','sender@example.test','{recipient@example.test}','Private inbound','Private body','retention/mime','ready',now()-interval '4000 days',now()-interval '4000 days')`, [id]);
-    await query("INSERT INTO inbound_attachments(id,inbound_message_id,file_name,content_type,size_bytes,object_key,scan_status) VALUES ($1,$1,'file.txt','text/plain',12,'retention/attachment','clean')", [id]);
+    await query("INSERT INTO inbound_attachments(id,inbound_message_id,file_name,content_type,size_bytes,object_key,sha256) VALUES ($1,$1,'file.txt','text/plain',12,'retention/attachment','digest')", [id]);
     const audit = await query<{ id: string }>("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details,created_at) VALUES ('admin','update','provider','pa_mock','{\"private\":true}',now()-interval '4000 days') RETURNING id::text");
     created.audits.push(audit.rows[0].id);
     const fakeStore = store();

@@ -1,4 +1,3 @@
-import { createServer } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -20,7 +19,7 @@ vi.mock("@/server/ids", () => ({
   createId: mocks.createId
 }));
 
-import { persistInbound, scanAttachment } from "@/modules/inbound/service";
+import { persistInbound } from "@/modules/inbound/service";
 
 const route = {
   id: "ir_test",
@@ -61,34 +60,6 @@ describe("inbound attachment scanning", () => {
   });
 
   afterEach(() => vi.unstubAllEnvs());
-
-  it.each([undefined, "", "   "])("skips scanning in production when CLAMAV_HOST is %s", async host => {
-    vi.stubEnv("NODE_ENV", "production");
-    if (host === undefined) delete process.env.CLAMAV_HOST;
-    else vi.stubEnv("CLAMAV_HOST", host);
-
-    await expect(scanAttachment(new Uint8Array([1, 2, 3]))).resolves.toBe("skipped");
-  });
-
-  it("fails closed when ClamAV does not return a scan result", async () => {
-    const server = createServer(socket => {
-      let received = Buffer.alloc(0);
-      socket.on("data", chunk => {
-        received = Buffer.concat([received, chunk]);
-        if (received.subarray(-4).equals(Buffer.alloc(4))) socket.end("stream: ERROR\\0");
-      });
-    });
-    await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Test server has no TCP port");
-    vi.stubEnv("CLAMAV_HOST", "127.0.0.1");
-    vi.stubEnv("CLAMAV_PORT", String(address.port));
-    try {
-      await expect(scanAttachment(new Uint8Array([1, 2, 3]))).rejects.toThrow("ClamAV scan did not return a valid result");
-    } finally {
-      await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
-    }
-  });
 
   it("keeps a scanning message retryable after an object-store failure", async () => {
     configureTransactions();

@@ -2,6 +2,7 @@ import { Queue, Worker, type Processor } from "bullmq";
 import { assertSchemaCompatibility, createPostgresBackend, type PostgresQueueBackend } from "bullmq";
 import { getDatabaseUrl, db } from "@/server/database";
 
+export const ATTACHMENT_QUEUE = "envoy-attachments";
 export const DELIVERY_QUEUE = "envoy-delivery";
 export const EVENT_QUEUE = "envoy-events";
 export const CALLBACK_QUEUE = "envoy-callbacks";
@@ -29,7 +30,7 @@ function createQueue(name: string): PostgresQueue {
 
 const globalQueues = globalThis as typeof globalThis & { __envoyQueues?: ReturnType<typeof createQueues> };
 function createQueues() {
-  return { delivery: createQueue(DELIVERY_QUEUE), events: createQueue(EVENT_QUEUE), callbacks: createQueue(CALLBACK_QUEUE), reconciliation: createQueue(RECONCILIATION_QUEUE) };
+  return { attachments: createQueue(ATTACHMENT_QUEUE), delivery: createQueue(DELIVERY_QUEUE), events: createQueue(EVENT_QUEUE), callbacks: createQueue(CALLBACK_QUEUE), reconciliation: createQueue(RECONCILIATION_QUEUE) };
 }
 export function queues() {
   return globalQueues.__envoyQueues ??= createQueues();

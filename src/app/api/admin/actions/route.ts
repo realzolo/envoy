@@ -1,3 +1,4 @@
+import { retryAttachmentScan } from "@/modules/attachments/tasks";
 import { createMessageSchema, MAX_REQUEST_BYTES } from "@/lib/contracts";
 import { BodyTooLargeError, readRequestBytes } from "@/server/request-body";
 import { z } from "zod";
@@ -36,6 +37,9 @@ export async function POST(request: Request) {
   try {
     body = z.object({action:z.string().min(1)}).passthrough().parse(JSON.parse(Buffer.from(await readRequestBytes(request,MAX_REQUEST_BYTES)).toString("utf8"))) as Body;
     switch (body.action) {
+      case "attachment.reprocess":
+        result=await retryAttachmentScan(text(body,"id"),z.enum(["outbound","inbound"]).parse(body.kind),null,session.email);
+        break;
       case"product.create":
         result = {
           id: await actions.createProduct({

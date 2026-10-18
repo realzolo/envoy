@@ -51,7 +51,7 @@ vi .env.production
 - 对业务服务的出站回调默认只允许公网 HTTPS 地址；仅当需要调用受信任内网服务时设置 `ENVOY_ALLOW_PRIVATE_CALLBACKS=true`，此时仅内网出站回调可使用 HTTP
 - R2 Endpoint、存储桶和独立的 `OBJECT_STORE_ACCESS_KEY_ID` / `OBJECT_STORE_SECRET_ACCESS_KEY` 正确；AWS 默认凭据链保留给 SES，不与 R2 共用
 - `OBJECT_STORAGE_PREFIX=envoy`
-- ClamAV 为可选配置；不使用时保持 `CLAMAV_HOST` 和 `CLAMAV_PORT` 注释，附件会跳过扫描并标记为 `skipped`
+- 扫描设施仅在 Envoy 配置。缺少扫描器时附件不可使用，不会静默放行；业务无需配置扫描主机、端口或超时。详见 [附件安全合同及接入清单](ATTACHMENT-SAFETY.md)
 
 生成 KEK 和 Session Secret：
 

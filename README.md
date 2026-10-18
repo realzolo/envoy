@@ -94,7 +94,7 @@ The service API is self-describing at `GET /api/v1` and `GET /api/v1/openapi.jso
 | `/inbound-messages`     | List and inspect sanitized inbound mail; download eligible private attachments     |
 | `/suppressions`         | Check, create, and remove product-owned suppressions                             |
 | `/requests/{requestId}` | Query request outcomes, including validation and authorization failures before message creation |
-| `/files` | Upload private, service-owned outbound attachments |
+| `/files` | Receive private files, query asynchronous safety, retry recoverable processing and download approved bytes |
 | `/messages/{id}/events` | Inspect the complete delivery timeline |
 | `/messages/{id}/attempts` | Inspect submission attempts and structured diagnostics |
 | `/capabilities`         | Discover product/service, sender/receiver ranges, limits, configuration status and evidence                            |
@@ -170,4 +170,11 @@ and delivery diagnostics; Inbound provides private downloads only for ready mess
 
 Server processes and database sessions use UTC; API timestamps are UTC ISO 8601 (`Z`). The console formats timestamps in the current browser timezone and labels that zone. Cohort/rate/quota windows are UTC and labeled explicitly.
 
-Existing 63f5032 installations must use the reviewed [schema adoption procedure](docs/OPERATIONS.md#schema-adoption-for-existing-63f5032-installations) before starting this version. New installations continue to use `pnpm db:setup`. No automatic database reset or ledger bypass is performed.
+This new project uses only the authoritative initial schema (`pnpm db:setup`). An existing checksum mismatch is refused; no adoption patch, data reset or ledger bypass is provided.
+
+Attachment safety belongs entirely to Envoy. Upload success means durable receipt; callers wait for `usage.canSend`
+before sending. All outbound/inline attachments and inbound downloads require a byte-bound current clean result;
+scanner absence or timeout fails closed. Start the PostgreSQL worker and configure the scanner **only in Envoy**.
+The **Attachment Safety** console distinguishes configuration from observed task results. See the
+[API and architecture contract, runnable flow and Morph/Sonaops cutover checklist](docs/ATTACHMENT-SAFETY.md).
+Do not remove business-side scanners until this Envoy capability is verified and available in the target deployment.

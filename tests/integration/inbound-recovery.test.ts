@@ -1,3 +1,4 @@
+import { scanClean } from "../helpers/scanner";
 import { afterAll,beforeAll,describe,expect,it,vi } from "vitest";
 import { createMessageSchema } from "@/lib/contracts";
 import { query,db } from "@/server/database";
@@ -241,7 +242,8 @@ describe("independent recovery, notification binding and lifecycle",()=>{
  });
  it("protects shared outbound files and persists confirmed/unknown RFC facts per attempt",async()=>{
   const file=await uploadOutboundFile(a,"private.txt","text/plain",Buffer.from("retained bytes"));
-  await expect(resolveOutboundAttachments(b,[{fileId:file.id,disposition:"attachment"}])).rejects.toThrow("not owned");
+  await expect(resolveOutboundAttachments(b,[{fileId:file.id,disposition:"attachment"}])).rejects.toMatchObject({code:"FILE_UNAVAILABLE"});
+  await scanClean(file.id);
   const input=createMessageSchema.parse({from:{email:`help@${domain}`},to:[{email:"recipient@example.net"}],subject:"test",text:"body",attachments:[{fileId:file.id,disposition:"attachment"}]});
   const first=await acceptMessage({identity,input,idempotencyKey:createId("shared")}),second=await acceptMessage({identity,input,idempotencyKey:createId("shared")});
   await expect(purgeContent("file",file.id,a)).rejects.toMatchObject({code:"CONTENT_SHARED"});
@@ -262,7 +264,7 @@ describe("independent recovery, notification binding and lifecycle",()=>{
   expect((await query("SELECT content_purged_at FROM outbound_files WHERE id=$1",[file.id])).rows[0].content_purged_at).toBeNull();
   await purgeContent("message",second.message.id,a);
   expect((await query("SELECT content_purged_at FROM outbound_files WHERE id=$1",[file.id])).rows[0].content_purged_at).toBeInstanceOf(Date);
-  await expect(resolveOutboundAttachments(a,[{fileId:file.id,disposition:"attachment"}])).rejects.toThrow("unavailable");
+  await expect(resolveOutboundAttachments(a,[{fileId:file.id,disposition:"attachment"}])).rejects.toMatchObject({code:"FILE_UNAVAILABLE"});
  });
  it("plans actual discovery queries without an authorization or evidence cache",async()=>{
   const spy=vi.spyOn(db(),"query");let calls:unknown[][]=[];

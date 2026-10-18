@@ -1,6 +1,7 @@
+import { downloadAttachment } from "@/modules/attachments/access";
+import { attachmentUsage, type SafetyRow } from "@/modules/attachments/safety";
 import { diagnosticSchema } from "@/lib/contracts";
 import { query, transaction } from "@/server/database";
-import { objectStore } from "@/modules/config/object-store";
 import { createId } from "@/server/ids";
 import { encodeCursor } from "@/modules/core/message/service";
 
@@ -220,9 +221,9 @@ export async function getInboundMessage(id: string, serviceId: string) {
     content_type: string;
     size_bytes: string;
     content_id: string | null;
-    scan_status: string;
+    sha256: string; safety: SafetyRow | null;
     content_purged_at: Date | null;
-  }>("SELECT id,file_name,content_type,size_bytes::text,content_id,scan_status,content_purged_at FROM inbound_attachments WHERE inbound_message_id=$1 ORDER BY created_at,id", [id])).rows;
+  }>("SELECT a.id,a.file_name,a.content_type,a.size_bytes::text,a.content_id,a.sha256,a.content_purged_at,row_to_json(s) AS safety FROM inbound_attachments a LEFT JOIN attachment_safety s ON s.resource_id=a.id WHERE a.inbound_message_id=$1 ORDER BY a.created_at,a.id", [id])).rows;
   return {
     id: message.id,
     messageId: message.message_id ?? null,
@@ -250,7 +251,7 @@ export async function getInboundMessage(id: string, serviceId: string) {
       contentType: item.content_type,
       size: Number(item.size_bytes),
       contentId: item.content_id,
-      scanStatus: item.scan_status,
+      usage: attachmentUsage(item.content_purged_at === null,item.sha256,item.safety,"inbound"),
       contentAvailable: item.content_purged_at === null,
     })),
   };
@@ -420,21 +421,5 @@ export async function getRequestDiagnostic(requestId: string, serviceId: string)
 // serviceId is mandatory for service callers; administrators call without it
 // only after their own session authorization. Object keys never leave the server.
 export async function getInboundAttachment(id: string, attachmentId: string, serviceId?: string) {
-  const file = (await query<{ file_name: string; content_type: string; object_key: string; size_bytes: string; scan_status: string }>(
-    `SELECT a.file_name,a.content_type,a.object_key,a.size_bytes::text,a.scan_status
-     FROM inbound_attachments a JOIN inbound_messages i ON i.id=a.inbound_message_id
-     WHERE i.id=$1 AND a.id=$2 AND a.content_purged_at IS NULL AND i.status='ready' AND ($3::text IS NULL OR i.service_id=$3)
-       AND (a.scan_status='clean' OR (a.scan_status='skipped' AND $4::boolean))`,
-    [id, attachmentId, serviceId ?? null, !process.env.CLAMAV_HOST?.trim()],
-  )).rows[0];
-  if (!file) return null;
-  const bytes = await objectStore().get(file.object_key);
-  const filename = file.file_name.replace(/[\\"\r\n\x00-\x1f]/g, "_");
-  return new Response(Buffer.from(bytes), { headers: {
-    "content-type": "application/octet-stream",
-    "content-length": String(bytes.byteLength),
-    "content-disposition": `attachment; filename="${filename.replace(/[^\x20-\x7e]/g, "_")}"; filename*=UTF-8''${encodeURIComponent(filename).replace(/['()*]/g, ch => `%${ch.charCodeAt(0).toString(16).toUpperCase()}`)}`,
-    "x-content-type-options": "nosniff", "cache-control": "private, no-store",
-    "content-security-policy": "sandbox",
-  } });
+  return downloadAttachment("inbound",attachmentId,serviceId,id);
 }

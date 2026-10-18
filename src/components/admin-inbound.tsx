@@ -6,7 +6,7 @@ import { Alert, Button, Collapse, Card, Descriptions, Grid, Input, Select, Space
 
 import { useState } from "react";
 
-import { ActionForm, type Data, type FormValues, requiredRule, rows, value, formValue, date, StatusTag, useAction, Field, Panel, Submit, Notice, ActionButton, EmptyState, Prerequisite, DataTable, TableCard, CopyableValue } from "@/components/admin-console-shared";
+import { ActionForm, type Data, type FormValues, requiredRule, rows, record, value, formValue, date, StatusTag, useAction, Field, Panel, Submit, Notice, ActionButton, EmptyState, Prerequisite, DataTable, TableCard, CopyableValue } from "@/components/admin-console-shared";
 import { ResourceDetail } from "@/components/admin-resource-detail";
 
 export function Inbound({ data }: { data: Data }) {
@@ -127,7 +127,7 @@ export function Inbound({ data }: { data: Data }) {
           { label: "Status", value: <StatusTag>{value(item, "status")}</StatusTag> },
           { label: "Stored", value: date(item.received_at) },
           { label: "Author Date", value: item.author_date ? date(item.author_date) : "Not supplied / invalid" },
-          { label: "Trusted ingress", value: item.ingress_received_at ? date(item.ingress_received_at) : "Unknown (legacy)" },
+          { label: "Trusted ingress", value: item.ingress_received_at ? date(item.ingress_received_at) : "Unknown" },
           { label: "Readable since", value: item.ready_at ? date(item.ready_at) : "Unknown / not ready" },
           { label: "Envoy ID", value: <CopyableValue text={value(item, "id")} label="inbound message ID" /> },
           { label: "RFC Message-ID", value: value(item, "message_id") || "Not supplied" },
@@ -153,7 +153,7 @@ export function Inbound({ data }: { data: Data }) {
         <DataTable searchable={false} minWidth="640px" data={rows(item.attachments)} columns={[
           { title: "File", render: (_, file) => value(file, "file_name") },
           { title: "Size / type", render: (_, file) => `${Number(file.size_bytes).toLocaleString("en-US")} B · ${value(file, "content_type")}` },
-          { title: "Scan", render: (_, file) => <StatusTag>{value(file, "scan_status")}</StatusTag> },
+          { title: "Scan", render: (_, file) => <StatusTag>{value(record(file.usage), "state")}</StatusTag> },
           { title: "Download", render: (_, file) => file.content_purged_at ? "Removed" : item.status === "ready" && file.downloadable !== false ? <Button href={`/api/admin/inbound/${encodeURIComponent(value(item, "id"))}/attachments/${encodeURIComponent(value(file, "id"))}`} size="small">Download</Button> : "Unavailable" },
         ]} emptyText="No attachments." />
         </div>

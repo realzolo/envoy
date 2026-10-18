@@ -1,3 +1,4 @@
+import { scanClean } from "../helpers/scanner";
 import type { Job } from "bullmq";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { POST as submitMail } from "@/app/api/v1/messages/route";
@@ -71,6 +72,7 @@ describe("native API integration", () => {
     const file = await uploaded.json();
     expect(file).toMatchObject({ fileName: "业务标识.png", size: 4, contentAvailable: true });
     expect(file).not.toHaveProperty("objectKey");
+    await scanClean(file.id);
     const response = await submitMail(request("/api/v1/messages", { method: "POST", key: crypto.randomUUID(), body: { ...base, attachments: [{ fileId: file.id, disposition: "inline", contentId: "logo" }] } }));
     expect(response.status).toBe(202);
     const accepted = await response.json();

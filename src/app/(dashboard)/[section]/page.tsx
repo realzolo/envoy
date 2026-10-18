@@ -6,6 +6,7 @@ import { PageHeader } from "@/components/page-header";
 import { adminData, type AdminSection } from "@/modules/admin/queries";
 
 const sections = {
+  attachments: ["Attachment Safety", "Inspect private attachment processing, bounded retries and observed scanner results."],
   providers: ["Provider Accounts", "Connect sending providers, verify credentials, and secure delivery event webhooks."],
   domains: ["Domains", "Register mail domains and manage outbound provider identities and DNS verification separately from inbound routes."],
   senders: ["Senders", "Authorize sender domains and addresses for products or services, and manage optional console presets."],

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { AttachmentUseError, registerAttachment, attachmentUsage, assertUsable, type SafetyRow } from "@/modules/attachments/safety";
 import type { PoolClient } from "pg";
 import { query, transaction } from "@/server/database";
 import { objectStore } from "@/modules/config/object-store";
@@ -7,7 +8,7 @@ import { createId } from "@/server/ids";
 import { MAX_ATTACHMENT_BYTES, MAX_FILE_BYTES, type CreateMessageInput } from "@/lib/contracts";
 
 export type AttachmentSnapshot = { fileId: string; fileName: string; contentType: string; size: number; sha256: string; objectKey: string; disposition: "attachment" | "inline"; contentId: string | null };
-type FileRow = { id: string; service_id: string; file_name: string; content_type: string; size_bytes: string; sha256: string; object_key: string; content_purged_at: Date | null; created_at: Date };
+type FileRow = { id: string; service_id: string; file_name: string; content_type: string; size_bytes: string; sha256: string; object_key: string; content_purged_at: Date | null; created_at: Date; safety: SafetyRow | null };
 
 export class FileValidationError extends Error {}
 
@@ -25,14 +26,15 @@ export async function uploadOutboundFile(serviceId: string, fileName: string, co
   await transaction(async client => {
     await completeObjectUploads(client, [key]);
     await client.query(`INSERT INTO outbound_files(id,service_id,file_name,content_type,size_bytes,sha256,object_key) VALUES ($1,$2,$3,$4,$5,$6,$7)`, [id,serviceId,fileName,contentType,bytes.byteLength,sha256,key]);
+    await registerAttachment(client,id,"outbound",serviceId,sha256);
   });
   return (await getOutboundFile(id, serviceId))!;
 }
 
 export async function getOutboundFile(id: string, serviceId: string) {
-  const row = (await query<FileRow>("SELECT * FROM outbound_files WHERE id=$1 AND service_id=$2", [id,serviceId])).rows[0];
+  const row = (await query<FileRow>("SELECT f.*,row_to_json(s) AS safety FROM outbound_files f LEFT JOIN attachment_safety s ON s.resource_id=f.id WHERE f.id=$1 AND f.service_id=$2", [id,serviceId])).rows[0];
   if (!row) return null;
-  return { id: row.id, fileName: row.file_name, contentType: row.content_type, size: Number(row.size_bytes), sha256: row.sha256, contentAvailable: row.content_purged_at === null, createdAt: row.created_at.toISOString() };
+  return { id: row.id, fileName: row.file_name, contentType: row.content_type, size: Number(row.size_bytes), sha256: row.sha256, contentAvailable: row.content_purged_at === null, usage: attachmentUsage(row.content_purged_at === null,row.sha256,row.safety), createdAt: row.created_at.toISOString() };
 }
 
 export async function resolveOutboundAttachments(serviceId: string, attachments: CreateMessageInput["attachments"], client?: PoolClient): Promise<AttachmentSnapshot[]> {
@@ -40,13 +42,18 @@ export async function resolveOutboundAttachments(serviceId: string, attachments:
   const parameters = [attachments.map(item => item.fileId), serviceId];
   // Row locks prevent retention from purging an attachment while its immutable
   // message reference is being committed by the acceptance transaction.
-  const sql = `SELECT * FROM outbound_files WHERE id=ANY($1::text[]) AND service_id=$2 AND content_purged_at IS NULL${client ? " FOR SHARE" : ""}`;
+  const sql = `SELECT f.*, (SELECT row_to_json(s) FROM attachment_safety s WHERE s.resource_id=f.id) AS safety FROM outbound_files f WHERE f.id=ANY($1::text[]) AND f.service_id=$2 ORDER BY f.id${client ? " FOR SHARE" : ""}`;
   const rows = client ? (await client.query<FileRow>(sql, parameters)).rows : (await query<FileRow>(sql, parameters)).rows;
+  if (client && rows.length) {
+    const safety = (await client.query<SafetyRow & {resource_id:string}>("SELECT * FROM attachment_safety WHERE resource_id=ANY($1::text[]) ORDER BY resource_id FOR SHARE",[rows.map(row=>row.id)])).rows;
+    for (const row of rows) row.safety=safety.find(item=>item.resource_id===row.id) ?? null;
+  }
   const byId = new Map(rows.map(row => [row.id,row]));
   let total = 0;
   const snapshot = attachments.map(item => {
     const file = byId.get(item.fileId);
-    if (!file) throw new FileValidationError(`Attachment ${item.fileId} is unavailable or is not owned by this service.`);
+    if (!file) throw new AttachmentUseError("FILE_UNAVAILABLE","FILE_NOT_AVAILABLE");
+    assertUsable(file.content_purged_at === null,file.sha256,file.safety);
     total += Number(file.size_bytes);
     return { fileId: file.id, fileName: item.fileName ?? file.file_name, contentType: file.content_type, size: Number(file.size_bytes), sha256: file.sha256, objectKey: file.object_key, disposition: item.disposition, contentId: item.contentId ?? null };
   });

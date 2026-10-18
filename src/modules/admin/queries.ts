@@ -1,3 +1,4 @@
+import { scanPolicy } from "@/modules/attachments/scanner";
 import type { MessageFilters } from "@/modules/admin/message-filters";
 import { getRetryEligibility } from "@/modules/core/routing/engine";
 import type { DeliveryStatus, EmailRecord } from "@/lib/types";
@@ -142,6 +143,7 @@ export async function dashboardData() {
 }
 
 export type AdminSection =
+  | "attachments"
   | "providers"
   | "domains"
   | "senders"
@@ -239,6 +241,13 @@ async function rows(name: keyof typeof adminQueries) {
 
 export async function adminData(section: AdminSection) {
   switch (section) {
+    case "attachments": {
+      const [tasks,observations]=await Promise.all([
+        query("SELECT resource_id,kind,service_id,status,reason,attempt_count,policy_version,checked_at,lease_expires_at,next_attempt_at FROM attachment_safety ORDER BY updated_at DESC,resource_id LIMIT 200"),
+        query("SELECT status,count(*)::int AS count,max(checked_at) AS last_observed_at FROM attachment_safety GROUP BY status ORDER BY status")
+      ]);
+      return { tasks:tasks.rows,observations:observations.rows,configuration:scanPolicy() };
+    }
     case "providers": {
       const providers = await rows("providers");
       return { providers, descriptors: providerDescriptors() };

@@ -1,6 +1,8 @@
+import { processAttachmentScan, scheduleAttachmentScans } from "@/modules/attachments/tasks";
+import { scanPolicy } from "@/modules/attachments/scanner";
 import { randomUUID } from "node:crypto";
 import { loadEnvConfig } from "@next/env";
-import { CALLBACK_QUEUE, closeQueues, createQueueWorker, DELIVERY_QUEUE, EVENT_QUEUE, queueSchemaHealth, RECONCILIATION_QUEUE } from "@/server/queues";
+import { ATTACHMENT_QUEUE, CALLBACK_QUEUE, closeQueues, createQueueWorker, DELIVERY_QUEUE, EVENT_QUEUE, queueSchemaHealth, RECONCILIATION_QUEUE } from "@/server/queues";
 import { cleanupRuntimeStore, removeWorkerHeartbeat, writeWorkerHeartbeat } from "@/server/runtime-store";
 import { dispatchOutboxBatch, markOutboxJobFailed } from "@/server/services/outbox";
 import { recoverWorkBatch } from "@/server/services/recovery";
@@ -16,6 +18,7 @@ loadEnvConfig(process.cwd());
 async function main() {
   await queueSchemaHealth();
   const workers = [
+    createQueueWorker(ATTACHMENT_QUEUE, job => processAttachmentScan(job.data.resourceId), scanPolicy().concurrency),
     createQueueWorker(DELIVERY_QUEUE, processDelivery, Number(process.env.DELIVERY_CONCURRENCY ?? 10)),
     createQueueWorker(EVENT_QUEUE, processEvent, Number(process.env.EVENT_CONCURRENCY ?? 10)),
     createQueueWorker(CALLBACK_QUEUE, processCallback, Number(process.env.CALLBACK_CONCURRENCY ?? 5)),
@@ -62,6 +65,7 @@ async function main() {
   process.once("SIGTERM", stop);
   try {
     await Promise.all(workers.map(worker => worker.waitUntilReady()));
+    schedule("Attachment scan scheduler", scheduleAttachmentScans, 1000);
     schedule("Outbox dispatcher", dispatchOutboxBatch, 500);
     schedule("Work recovery", recoverWorkBatch, 30_000);
     schedule("Worker heartbeat", () => writeWorkerHeartbeat(workerId), 15_000);

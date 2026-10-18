@@ -1,4 +1,6 @@
-import { createConnection } from "node:net";
+import { digest } from "@/modules/attachments/scanner";
+import { registerAttachment } from "@/modules/attachments/safety";
+import { MAX_FILE_BYTES } from "@/lib/contracts";
 import sanitizeHtml from "sanitize-html";
 import type { CanonicalInboundMessage, WebhookVerification } from "@/modules/providers/contracts";
 import { objectStore } from "@/modules/config/object-store";
@@ -7,7 +9,6 @@ import { completeObjectUploads, registerObjectUpload } from "@/server/services/o
 import { query, transaction } from "@/server/database";
 
 const MAX_MESSAGE_BYTES = 25 * 1024 * 1024;
-const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 
 /** Errors caused by the message or routing policy should not consume worker retries. */
 export class InboundTerminalError extends Error {
@@ -17,40 +18,6 @@ export class InboundTerminalError extends Error {
   }
 }
 
-export async function scanAttachment(data: Uint8Array) {
-  const host = process.env.CLAMAV_HOST?.trim();
-  if (!host) return "skipped" as const;
-  const port = Number(process.env.CLAMAV_PORT ?? 3310);
-  return new Promise<"clean" | "infected">((resolve, reject) => {
-    const socket = createConnection({ host, port });
-    const chunks: Buffer[] = [];
-    socket.setTimeout(30_000, () => socket.destroy(new Error("ClamAV scan timed out")));
-    socket.on("connect", () => {
-      socket.write("zINSTREAM\0");
-      const buffer = Buffer.from(data);
-      for (let offset = 0; offset < buffer.length; offset += 8192) {
-        const chunk = buffer.subarray(offset, offset + 8192);
-        const size = Buffer.alloc(4);
-        size.writeUInt32BE(chunk.length);
-        socket.write(size);
-        socket.write(chunk)
-      }
-      socket.write(Buffer.alloc(4))
-    });
-    socket.on("data", chunk => chunks.push(chunk));
-    socket.on("end", () => {
-      const response = Buffer.concat(chunks).toString();
-      if (response.includes("FOUND")) {
-        resolve("infected");
-      } else if (response.includes("OK")) {
-        resolve("clean");
-      } else {
-        reject(new Error("ClamAV scan did not return a valid result"));
-      }
-    });
-    socket.on("error", reject)
-  })
-}
 
 function address(value: string) {
   const match = value.match(/<([^>]+)>/);
@@ -177,20 +144,16 @@ async function persistRoutedInbound(input: InboundInput, scope: string, routes: 
   let rawKey: string | null = null;
   const attachments: Array<(typeof message.attachments)[number] & {
     objectKey: string;
-    scanStatus: "clean" | "skipped";
+    sha256: string;
   }> = [];
   try {
     const decodedBytes = Buffer.byteLength((message.html ?? "") + (message.text ?? "") + message.subject, "utf8") + message.attachments.reduce((total, file) => total + file.content.byteLength, 0);
     const aggregateBytes = Math.max(message.rawMime?.byteLength ?? 0, decodedBytes);
     if (aggregateBytes > MAX_MESSAGE_BYTES) throw new InboundTerminalError("Inbound message exceeds the size limit", "INBOUND_MESSAGE_TOO_LARGE");
-    for (const file of message.attachments) if (file.content.byteLength > MAX_ATTACHMENT_BYTES) throw new InboundTerminalError(`Attachment exceeds the size limit: ${file.fileName}`, "INBOUND_ATTACHMENT_TOO_LARGE");
-    // Scan all files before uploading; rejected content should not leave partial objects.
+    for (const file of message.attachments) if (file.content.byteLength > MAX_FILE_BYTES) throw new InboundTerminalError(`Attachment exceeds the size limit: ${file.fileName}`, "INBOUND_ATTACHMENT_TOO_LARGE");
+    // Store private bytes first. The shared durable safety pipeline controls every attachment download.
     for (const [index, file] of message.attachments.entries()) {
-      const renewed = await query("UPDATE inbound_messages SET processing_deadline_at=now()+interval '2 minutes' WHERE id=$1 AND processing_token=$2 RETURNING id", [id, token]);
-      if (!renewed.rowCount) throw new Error("Inbound processing ownership expired");
-      const scanStatus = await scanAttachment(file.content);
-      if (scanStatus === "infected") throw new InboundTerminalError(`Malware detected in attachment: ${file.fileName}`, "INBOUND_MALWARE_DETECTED");
-      attachments.push({ ...file, objectKey: `${prefix}/attachments/${index}`, scanStatus });
+      attachments.push({ ...file, objectKey: `${prefix}/attachments/${index}`, sha256: digest(file.content) });
     }
     if (message.rawMime) {
       rawKey = `${prefix}/raw.eml`;
@@ -208,7 +171,11 @@ async function persistRoutedInbound(input: InboundInput, scope: string, routes: 
     await transaction(async client => {
       const completed = await client.query("UPDATE inbound_messages SET raw_mime_object_key=$2,status='ready',ready_at=clock_timestamp(),rejection_reason=NULL,processing_token=NULL,processing_deadline_at=NULL WHERE id=$1 AND processing_token=$3 AND status='scanning' AND content_purged_at IS NULL RETURNING id,ready_at", [id, rawKey, token]);
       if (!completed.rowCount) throw new Error("Inbound processing ownership expired");
-      for (const file of attachments) await client.query("INSERT INTO inbound_attachments(id,inbound_message_id,file_name,content_type,size_bytes,object_key,content_id,scan_status) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)", [createId("ina"), id, file.fileName, file.contentType, file.content.byteLength, file.objectKey, file.contentId ?? null, file.scanStatus]);
+      for (const file of attachments) {
+        const attachmentId=createId("ina");
+        await client.query("INSERT INTO inbound_attachments(id,inbound_message_id,file_name,content_type,size_bytes,object_key,content_id,sha256) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)", [attachmentId, id, file.fileName, file.contentType, file.content.byteLength, file.objectKey, file.contentId ?? null,file.sha256]);
+        await registerAttachment(client,attachmentId,"inbound",route.service_id,file.sha256);
+      }
       await completeObjectUploads(client, writtenKeys);
       for (const callbackEndpointId of new Set(routes.map(item => item.callback_endpoint_id).filter(Boolean))) {
         const callback = await client.query<{ id: string }>("SELECT id FROM callback_endpoints WHERE id=$1 AND service_id=$2 AND status='active' AND 'inbound.received'=ANY(subscribed_events)", [callbackEndpointId,route.service_id]);

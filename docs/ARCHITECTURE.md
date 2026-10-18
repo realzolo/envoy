@@ -174,10 +174,9 @@ Missing or invalid envelopes and unmatched mail remain administrator-only with s
 are content, not the database observation time reported as receiving evidence. Routes without a service remain
 administrator-only and cannot leak into a product's services.
 
-Raw MIME and attachments are
-size-limited, stored outside PostgreSQL, scanned through ClamAV when configured, and HTML is sanitized before
-persistence.
-Attachments are stored with `scan_status=skipped` when ClamAV is disabled.
+Raw MIME and attachments are size-limited and stored privately outside PostgreSQL; HTML is sanitized before persistence.
+Both directions register byte-bound persistent safety tasks. Inbound body readiness is separate from attachment usability.
+No attachment download or outbound submission is permitted without a current clean proof. Missing scanning fails closed.
 The business callback receives only canonical metadata and Envoy identifiers.
 
 ## Suppression policy
@@ -301,16 +300,14 @@ invented mailbox lists. Inbound patterns describe only configured routes and do 
 Configuration readiness, actual canonical send/receive facts, and callback HTTP delivery are independent dimensions.
 Runtime capacity and external receiving reachability remain unknown at discovery; no missing evidence is synthesized.
 An HTTP-success callback says nothing about the caller's conversation or ticket processing. See the exact status/error
-contract and compatibility notes in [API.md](API.md#business-mail-connection-and-discovery).
+contract in [API.md](API.md#business-mail-connection-and-discovery).
 
 ## Inbound clocks, dispatch plans and committed change streams
 
 `author_date` is optional untrusted content; `ingress_received_at` comes from the durable verified raw receipt;
-`created_at` records private-copy observation/storage; `ready_at` records completion of sanitization/scanning.
-The adapter's legacy `receivedAt` hint is never used for ordering or expiry. Public `receivedAt` now aliases copy storage
-time. Lists preserve PostgreSQL microseconds; incremental recovery uses `/inbound-changes` and not temporal scans.
-Retention uses the later of storage and ready time, protecting delayed scans and recently received old mail. Baseline
-adoption leaves historical ingress/ready/author times null rather than guessing from a provider-dependent legacy field.
+`created_at` records private-copy observation/storage; `ready_at` records completion of sanitized body storage.
+Public `receivedAt` records copy storage time. Lists preserve PostgreSQL microseconds; incremental recovery uses `/inbound-changes` and not temporal scans.
+Retention uses the later of storage and ready time, protecting delayed scans and recently received old mail. Unknown timestamps remain null; no history is guessed.
 
 `inbound_receipts` persists the first normalization decision, keyed by provider account plus transport receipt identity.
 Its content-free route snapshot fixes service scopes, matched recipients and selected callback IDs. Subsequent retries
@@ -330,7 +327,7 @@ Pages contain 1–100 content-free changes, reusable event/page checkpoints, a w
 90-day cleanup locks the head and removes only an expired prefix; it cannot create gaps in the middle. A cursor below
 the floor or from an old generation yields a stable 410 with explicit gap/reset information; omission starts at the floor
 and advertises any truncation. Business consumers reconcile retained resources and record lost history before a reset.
-This feed is independent of the legacy outbound `/events`, callback delivery, and business processing state.
+This feed is independent of the outbound `/events`, callback delivery, and business processing state.
 
 ## Credentials, actual mail identity and content lifecycle
 
@@ -359,3 +356,28 @@ purge/age retention. Callback termination releases retention gates without fabri
 termination fences frozen dispatch, rejects unfinished copies and preserves completed copies. Terminated/purged work
 cannot be replayed. The existing transport timeout does not implement a business verification-code deadline; scheduling
 and expiry enforcement remain outside the current send contract.
+
+## Shared attachment safety
+
+`modules/attachments` owns the scanner protocol, unified availability policy, durable tasks and guarded byte access.
+Neither files nor the outbound executor depends on inbound business logic. See [Attachment Safety](ATTACHMENT-SAFETY.md).
+`attachment_safety` binds a private resource, expected/scanned SHA-256 and policy version. It stores bounded reason codes,
+never engine responses/signatures. `attachment_scan_scopes` persists fair dispatch order, with at most one queued/live
+scan per owner; a large service cannot put its whole batch ahead of another. The scheduler atomically writes outbox jobs
+and dispatch leases, then the existing PostgreSQL queue executes them. Five claims, finite backoff, two-minute leases
+and random fencing tokens handle process death and duplicate tasks. Malicious/blocked verdicts are terminal to retry.
+
+Upload bytes and their task reference commit together after reference-aware object registration. Inbound normalization
+stores each private attachment and task with body readiness/callback publication. The task reads bounded bytes, verifies
+the immutable digest, scans outside locks, then locks parent/resource/safety in that order and commits only its current
+lease result. Purge triggers invalidate leases and revoke usability. Delayed results never recreate objects or content.
+
+Admission locks every owned file/proof and rejects unapproved files before creating message/idempotency records. The
+executor preserves its existing attempt/unknown logic and takes shared resource/proof locks through preparation and
+provider submission. All normal/inline attachments are loaded and digest-verified before the single provider boundary;
+current policy is checked again after I/O. A read-only guard commit failure cannot discard a definitive provider response.
+Downloads apply the same proof/digest checks while erasure/reprocessing waits on resource locks. These locks authorize
+an in-flight read; they cannot recall a previously downloaded copy. Retention semantics of `contentAvailable` are unchanged.
+
+This new project retains only its authoritative initial schema and final contract. There are no legacy scan adapters,
+unchecked-content bypasses, migration-adoption patches, provider capability compatibility views or automatic historical resends.

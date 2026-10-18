@@ -8,6 +8,7 @@ export type OutboxRow = { id: string; event_type: string; payload: Record<string
 
 export function queueForEvent(eventType: string): PostgresQueue {
   const all = queues();
+  if (eventType === "attachment.scan.requested") return all.attachments;
   if (eventType === "submission.requested") return all.delivery;
   if (eventType === PROVIDER_EVENT_RECEIVED) return all.events;
   if (eventType === "callback.requested") return all.callbacks;

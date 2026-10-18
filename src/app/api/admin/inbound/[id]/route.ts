@@ -1,3 +1,4 @@
+import { attachmentUsage } from "@/modules/attachments/safety";
 import { getAdminSession } from "@/server/admin-auth";
 import { query } from "@/server/database";
 
@@ -9,6 +10,6 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
     FROM inbound_messages i LEFT JOIN products p ON p.id=i.product_id LEFT JOIN services s ON s.id=i.service_id
     LEFT JOIN inbound_routes r ON r.id=i.inbound_route_id LEFT JOIN sending_domains sd ON sd.id=r.sending_domain_id WHERE i.id=$1`,[id])).rows[0];
   if (!message) return Response.json({error:"Inbound message not found"},{status:404});
-  const attachments = (await query(`SELECT id,file_name,content_type,size_bytes,content_id,scan_status,content_purged_at FROM inbound_attachments WHERE inbound_message_id=$1 ORDER BY created_at,id`,[id])).rows;
-  return Response.json({...message,attachments:attachments.map(file=>({...file,downloadable:message.status==="ready" && !file.content_purged_at && (file.scan_status==="clean" || (file.scan_status==="skipped" && !process.env.CLAMAV_HOST))}))},{headers:{"cache-control":"no-store"}})
+  const attachments = (await query(`SELECT a.id,a.file_name,a.content_type,a.size_bytes,a.content_id,a.sha256,a.content_purged_at,row_to_json(s) AS safety FROM inbound_attachments a LEFT JOIN attachment_safety s ON s.resource_id=a.id WHERE a.inbound_message_id=$1 ORDER BY a.created_at,a.id`,[id])).rows;
+  return Response.json({...message,attachments:attachments.map(file=>({...file,usage:attachmentUsage(!file.content_purged_at,file.sha256,file.safety,"inbound"),downloadable:message.status==="ready" && attachmentUsage(!file.content_purged_at,file.sha256,file.safety,"inbound").canDownload}))},{headers:{"cache-control":"no-store"}})
 }

@@ -3,7 +3,8 @@ import { createMessageSchema, inboundDetailSchema, messageDetailSchema } from "@
 import { apiProblem, readJson, serviceRoute } from "@/server/service-api";
 import { authenticateService } from "@/server/auth";
 import { enforceRateLimit } from "@/server/runtime-store";
-import { query } from "@/server/database";
+import { digest } from "@/modules/attachments/scanner";
+import { query,transaction } from "@/server/database";
 import { recordRequest } from "@/server/request-log";
 import { getDelivery, getInboundAttachment, getInboundMessage, getRequestDiagnostic } from "@/modules/core/resources/service";
 import { GET as openapi } from "@/app/api/v1/openapi.json/route";
@@ -14,6 +15,7 @@ vi.mock("@/server/database", () => ({ query: vi.fn(), transaction: vi.fn() }));
 vi.mock("@/modules/config/object-store", () => ({ objectStore: () => ({ get: vi.fn().mockResolvedValue(Buffer.from("safe-attachment")) }) }));
 const identity = { serviceId: "svc", serviceName: "Test", productId: "prd", product: "Test", rateLimitPerMinute: 600 };
 beforeEach(() => {
+  vi.mocked(transaction).mockImplementation(async work=>work({query} as never));
   vi.mocked(authenticateService).mockResolvedValue(identity);
   vi.mocked(enforceRateLimit).mockResolvedValue({ allowed: true, limit: 600, remaining: 599, resetAt: new Date(Date.now() + 60000) });
   vi.mocked(query).mockResolvedValue({ rows: [], rowCount: 0, command: "SELECT", oid: 0, fields: [] });
@@ -91,8 +93,11 @@ describe("public API boundary", () => {
     const [sql, parameters] = vi.mocked(query).mock.calls[0];
     expect(sql).toContain("i.status='ready'");
     expect(sql).toContain("i.service_id=$3");
-    expect(parameters).toEqual(["inb", "att", "other-service", false]);
-    vi.mocked(query).mockResolvedValueOnce({ rows: [{ file_name: '汉字\r\n".html', content_type: "text/html", object_key: "private/path" }], rowCount: 1 } as never);
+    expect(parameters).toEqual(["att", "inb", "other-service"]);
+    const sha256=digest(Buffer.from("safe-attachment"));
+    const file={file_name:'汉字\r\n".html',sha256,content_type:"text/html",object_key:"private/path",size_bytes:"15",content_purged_at:null};
+    vi.mocked(query).mockResolvedValueOnce({rows:[file]} as never).mockResolvedValueOnce({rows:[]} as never)
+      .mockResolvedValueOnce({rows:[file]} as never).mockResolvedValueOnce({rows:[{status:"clean",expected_sha256:sha256,scanned_sha256:sha256,policy_version:"1",attempt_count:1,reason:null}]} as never);
     const response = await getInboundAttachment("inb", "att", "svc");
     expect(response?.headers.get("content-type")).toBe("application/octet-stream");
     expect(response?.headers.get("content-disposition")).toContain("attachment;");
@@ -108,7 +113,7 @@ describe("public API boundary", () => {
     expect(message.contentPurgedAt).toBe(contentPurgedAt ? "2026-10-17T00:00:00.000Z" : null);
 
     vi.mocked(query).mockResolvedValueOnce({ rows: [{ id: "inb", from_email: "a@example.net", to_emails: ["b@example.net"], cc_emails: [], bcc_emails: [], subject: contentPurgedAt ? "" : "Hello", sanitized_html: null, text_body: contentPurgedAt ? null : "Hello", status: "ready", rejection_reason: null, received_at: at, content_purged_at: contentPurgedAt }] } as never)
-      .mockResolvedValueOnce({ rows: [null, at].map((purgedAt, index) => ({ id: `att${index}`, file_name: "receipt.txt", content_type: "text/plain", size_bytes: "12", content_id: null, scan_status: "clean", content_purged_at: purgedAt, object_key: "private/object-key" })) } as never);
+      .mockResolvedValueOnce({ rows: [null, at].map((purgedAt, index) => ({ id: `att${index}`, file_name: "receipt.txt", content_type: "text/plain", size_bytes: "12", content_id: null, sha256:"digest", content_purged_at: purgedAt, object_key: "private/object-key" })) } as never);
     const inboundResult = await getInboundMessage("inb", "svc");
     const inbound = inboundDetailSchema.parse(inboundResult);
     expect(inbound.contentPurgedAt).toBe(message.contentPurgedAt);
@@ -126,7 +131,17 @@ describe("public API boundary", () => {
     for(const resource of ["messages","inbound-messages","files"]) expect(document.paths[`/${resource}/{id}/content`].delete.responses["202"]).toBeDefined();
     expect(document.webhooks.inboundReceived.post.parameters.some((header:{name:string})=>header.name==="x-envoy-key-version")).toBe(true);
     expect(document.paths["/capabilities"].get.responses["200"].content["application/json"].schema.required).toContain("mail");
-    expect(document.paths["/capabilities"].get.responses["200"].content["application/json"].schema.properties.providerCapabilities.deprecated).toBe(true);
+    expect(document.paths["/capabilities"].get.responses["200"].content["application/json"].schema.properties.attachmentSafety).toBeDefined();
+    const capabilities=document.paths["/capabilities"].get.responses["200"].content["application/json"].schema.properties;
+    expect(capabilities.attachmentSafety.properties.runtimeAvailability.const).toBe("unknown");
+    expect(capabilities).not.toHaveProperty("providerCapabilities");
+    expect(document.components.schemas.File.required).toContain("usage");
+    expect(document.components.schemas.File.properties.usage.properties).toMatchObject({
+      canSend:{type:"boolean"},canDownload:{type:"boolean"},recovery:{enum:["poll","retry","none"]}
+    });
+    expect(document.paths["/files/{id}/download"].get.responses["409"]).toBeDefined();
+    for(const path of ["/files/{id}/reprocess","/inbound-messages/{id}/attachments/{attachmentId}/reprocess"])
+      expect(document.paths[path].post.responses["202"]).toBeDefined();
     expect(document.webhooks.inboundReceived.post.requestBody.content["application/json"].schema.$ref).toContain("InboundReceivedEvent");
     expect(document.components.schemas.Problem.required).toContain("requestId");
     expect(document.components.schemas.CreateMessage.properties.metadata.propertyNames.pattern).toContain("64");

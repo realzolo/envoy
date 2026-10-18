@@ -21,8 +21,7 @@ vi .env.production
 
 Replace every active `replace_with_*` value. Ensure the database, R2 credentials, KEK,
 administrator
-credentials and session secret are correct. ClamAV is optional; without it, attachments skip scanning and receive the
-`skipped` status. `.env.production` is ignored by Git and excluded from the Docker build context.
+credentials and session secret are correct. Configure the Envoy-only scanner for attachment use; without it, files remain unavailable and are never silently approved. See [Attachment Safety](ATTACHMENT-SAFETY.md). `.env.production` is ignored by Git and excluded from the Docker build context.
 
 ## Build And Start
 
@@ -67,7 +66,8 @@ docker compose restart web worker
 docker compose down
 ```
 
-To roll back, check out the prior commit and repeat build, migration, and startup. Database migrations are forward-only,
-so confirm the older code is compatible with the current schema first.
+The initial schema is authoritative. Migration refuses a checksum mismatch; never reset a data-bearing database
+or edit its ledger to force startup. Run only binaries matching that schema. For an attachment policy change, follow the
+stopped/drained all-instance procedure in [Operations](OPERATIONS.md#attachment-safety-operations).
 
 Use PostgreSQL 14+ with direct or session-pooled connections. Default Web plus Worker connection budget is 48, plus deployment/monitoring headroom. Migration initializes business and BullMQ schemas explicitly. R2 uses separate `OBJECT_STORE_ACCESS_KEY_ID` / `OBJECT_STORE_SECRET_ACCESS_KEY`; AWS runtime credentials remain available to SES. Leave SSE unset for R2 and use bucket-default encryption.

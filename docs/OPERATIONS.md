@@ -96,48 +96,13 @@ headers or widening patterns. Resend inbound currently remains quarantined becau
 does not explicitly establish an envelope-recipient source. Configure a supported alternative ingress inside Envoy
 before enabling business receipt; this does not change Resend outbound support.
 
-## Schema adoption for existing 63f5032 installations
+## Authoritative schema
 
-The repository continues to keep `db/migrations/001_initial.sql` authoritative. New installations use `pnpm db:setup`.
-Data-bearing installations at the reviewed **63f5032** baseline use `scripts/adopt-schema.ts`, not deletion of migration
-history, database resets, or manual checksum edits. This work has not migrated any existing developer/production database.
-The supported applied checksum is `7f55d451509eb7abb824d6eb0e9ca29636965ab46495c33abc7eb8199a901533`.
-Unknown/older/custom baselines are refused and require a separately reviewed adoption; do not label guessed legacy
-To-based ownership as verified. The script also checks key catalog fields/indexes and refuses partial adoption/drift.
-
-1. Back up PostgreSQL (including `bullmq`), object storage and the KEK/keyring using your normal protected mechanism.
-   Verify a restore into an isolated staging database first. Do not put connection credentials in shell history or logs.
-2. Stop **Web, Worker, retention and all other writers**. Complete/reject scanning copies with the old version first;
-   the script refuses outstanding scans and in-flight callback deliveries. Unknown outbound results are reported by
-   preflight and preserved; do not resend them just to upgrade.
-3. Set `ENVOY_ADOPTION_DATABASE_URL` through your secret injection mechanism to the **staging clone**, then run:
-
-   ```bash
-   pnpm exec tsx scripts/adopt-schema.ts
-   pnpm exec tsx scripts/adopt-schema.ts --apply --processes-stopped-and-backup-verified
-   pnpm exec tsx scripts/adopt-schema.ts
-   ```
-
-   The default is rollback-only preflight. `--apply` takes the migration advisory lock and exclusive NOWAIT table locks;
-   concurrent writers/unsupported history cause refusal. DDL, baseline events, checksum update and audit commit together.
-   It retains the migration ledger row and original `applied_at`, auditing old and new checksums. Re-running after success
-   reports `already_current` and verifies the key new catalog fields. No real sending/provider/DNS action occurs.
-4. Verify row counts, ownership, IDs/deduplication, nullable historical times, `inbound_changes` baseline events and
-   `schema.adopt` audit. The baseline records current observation of already-readable retained copies; it does **not**
-   backdate or claim historical ingress/ready times. Existing route scopes are frozen against replay expansion. Old
-   receipts without a reconstructable durable plan stay frozen with no new dispatch. Existing content-purge tombstones
-   are retained. No callback or message is automatically replayed during adoption.
-5. After staging acceptance, repeat the stopped-process/verified-backup procedure for the intended installation using
-   its explicitly injected URL. Start only this version, verify health/worker and service discovery, then activate caller
-   recovery. Normal `db:migrate` now validates the authoritative checksum and queue schema. Keep pre-upgrade restore
-   artifacts: rolling back this schema requires restoring the stopped-system backup with its matching binary, not
-   reverting only the application container. Reapply deletion tombstones if any later backup recovery is needed.
-
-Caller changes: allow the additive time/notification/attempt fields and `terminated` callback state; discard old inbound
-time cursors (`INBOUND_LIST_CURSOR_CHANGED`) and adopt `/inbound-changes` with explicit gap handling. `receivedAt` now
-means copy storage time, not the former provider-dependent Date. `/events`, message acceptance and service isolation are
-unchanged. Credential rotation now returns a new ID and up to 24 hours of overlap; automation must revoke the **old** ID
-explicitly after switching. No provider/DNS administration is added to caller setup.
+This is a new project. `db/migrations/001_initial.sql` is the only authoritative application schema; fresh installations
+use `pnpm db:setup`. There is no schema-adoption compatibility path. The migrator refuses an applied checksum that does
+not match this schema. Do not delete migration history, edit the ledger/checksum, reset a data-bearing database, or label
+unscanned files safe to force startup. An unsupported existing installation must remain stopped pending a separately
+authorized data decision. This attachment change does not execute a migration on an existing developer/production database.
 
 ## Inbound recovery and lifecycle operations
 
@@ -173,3 +138,29 @@ BUFFERS)` on a staging clone at representative volumes before introducing a proj
 are not evidence of production latency. This change adds service/provider/time and submission-event evidence indexes,
 uses the existing message/service and event/timeline indexes, and adds no authorization/evidence cache. Observe slow
 queries and connection budgets. Revocations and runtime authorization never depend on cached evidence.
+
+## Attachment safety operations
+
+See [Attachment Safety](ATTACHMENT-SAFETY.md) for the complete API, queue/fencing contract and Morph/Sonaops cutover checklist.
+Envoy alone configures `CLAMAV_HOST`, `CLAMAV_PORT` (default 3310), `CLAMAV_TIMEOUT_MS` (100–30000, default 15000),
+`ATTACHMENT_SCAN_CONCURRENCY` (1–16, default 4) and `ATTACHMENT_POLICY_VERSION` (default `1`). The only mode is
+`require_clean`: no unscanned bypass exists. Never give scanner addresses/configuration to a business service.
+
+Deploy a private scanner with current signatures and an INSTREAM byte limit of at least 10,000,000 bytes. Start Envoy's
+PostgreSQL worker as well as Web; the worker schedules fair scan jobs every second through the existing PostgreSQL
+BullMQ/outbox backend. Missing scanners fail closed. **Attachment Safety** shows configuration, current task states,
+controlled reasons, attempts, policy and observed-result timestamps; those observations are not a live health guarantee.
+Repair temporary failures, then use **Reprocess** (or the service-owned resource endpoint). Malicious/integrity-blocked
+resources require removal and a new upload, never ordinary retry. Observe failed outbox jobs too.
+
+Policy/signature changes: stop admission and drain/stop sending workers, update the same policy version/configuration
+on all Web/Worker instances, then restart. Do not perform a mixed-policy rolling deployment. A changed version invalidates
+prior clean proofs and schedules retained bytes for scanning. Accepted queued sends whose attachments are no longer
+approved fail before provider submission; after files become usable, retry only eligible determinate failures with the
+existing message retry API. Unknown/accepted/canceled submissions are not automatically replayed. No historical file is
+backfilled clean; no upgrade/adoption or historical resend path is provided.
+
+Run the existing cleanup task for unreferenced uploads, quarantined files and deletion intents. Purge triggers revoke
+safety and fence late jobs atomically. A download already authorized and copied before erasure may finish; deletion
+cannot recall bytes already delivered to a caller. Backups, object-store administrators and business caches retain their
+own lifecycle responsibilities. This task has performed no production deployment, scanner setup, migration or real send.

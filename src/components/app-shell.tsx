@@ -55,6 +55,7 @@ const navigation = [
   {
     label: "Infrastructure",
     items: [
+      { href: "/attachments", label: "Attachment Safety", icon: IconFile },
       { href: "/providers", label: "Provider Accounts", icon: IconCloud },
       { href: "/domains", label: "Domains", icon: IconPublic },
       { href: "/routing", label: "Routing", icon: IconBranch },

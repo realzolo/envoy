@@ -457,7 +457,7 @@ CREATE TABLE inbound_attachments
     size_bytes         bigint      NOT NULL,
     object_key         text        NOT NULL,
     content_id         text,
-    scan_status        text        NOT NULL CHECK (scan_status IN ('clean', 'skipped')),
+    sha256             text        NOT NULL,
     created_at         timestamptz NOT NULL DEFAULT now()
 );
 
@@ -624,3 +624,39 @@ CREATE INDEX inbound_evidence ON inbound_messages(service_id,provider_account_id
 CREATE INDEX submission_events_evidence ON submission_events(submission_id,event_type,occurred_at DESC);
 
 CREATE INDEX inbound_messages_service_stored_cursor ON inbound_messages(service_id,created_at DESC,id DESC);
+
+-- Attachment safety jobs are byte-bound private facts, never cross-service deduplication.
+CREATE TABLE attachment_scan_scopes (
+  scope text PRIMARY KEY,
+  last_dispatched_at timestamptz NOT NULL DEFAULT '-infinity'
+);
+CREATE TABLE attachment_safety (
+  resource_id text PRIMARY KEY,
+  kind text NOT NULL CHECK(kind IN ('outbound','inbound')),
+  service_id text REFERENCES services(id) ON DELETE CASCADE,
+  scope text NOT NULL REFERENCES attachment_scan_scopes(scope),
+  expected_sha256 text NOT NULL,
+  scanned_sha256 text,
+  policy_version text,
+  status text NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','scanning','clean','malicious','unavailable','blocked','purged')),
+  reason text,
+  attempt_count integer NOT NULL DEFAULT 0,
+  next_attempt_at timestamptz NOT NULL DEFAULT now(),
+  queued_until timestamptz,
+  outbox_id text,
+  lease_token text,
+  lease_expires_at timestamptz,
+  checked_at timestamptz,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX attachment_safety_due ON attachment_safety(scope,next_attempt_at,resource_id) WHERE status NOT IN ('malicious','blocked','purged');
+CREATE FUNCTION fence_purged_attachment() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW.content_purged_at IS NOT NULL AND OLD.content_purged_at IS NULL THEN
+    UPDATE attachment_safety SET status='purged',reason='FILE_CONTENT_PURGED',lease_token=NULL,lease_expires_at=NULL,
+      queued_until=NULL,updated_at=now() WHERE resource_id=NEW.id;
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER outbound_attachment_purge AFTER UPDATE ON outbound_files FOR EACH ROW EXECUTE FUNCTION fence_purged_attachment();
+CREATE TRIGGER inbound_attachment_purge AFTER UPDATE ON inbound_attachments FOR EACH ROW EXECUTE FUNCTION fence_purged_attachment();

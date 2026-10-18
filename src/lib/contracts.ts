@@ -125,8 +125,13 @@ export const submissionAttemptSchema = z.object({
   startedAt: iso, finishedAt: iso.nullable(),
   recipients: z.array(z.object({ deliveryId: z.string(), email: z.string(), role: z.enum(["to", "cc", "bcc"]) })),
 });
-export const attachmentSchema = z.object({ id: z.string(), fileName: z.string(), contentType: z.string(), size: z.number(), contentId: nullableText, scanStatus: z.enum(["clean", "skipped"]), contentAvailable: z.boolean().describe("Whether attachment bytes are retained; download also requires ready state and scan approval.") });
-export const outboundFileSchema = z.object({ id: z.string(), fileName: z.string(), contentType: z.string(), size: z.number(), sha256: z.string(), contentAvailable: z.boolean(), createdAt: iso });
+export const attachmentUsageSchema = z.object({
+  state:z.enum(["processing","usable","unavailable"]),safetyState:z.enum(["pending","scanning","clean","malicious","unavailable","unscanned","purged","blocked"]),processing:z.boolean(),canSend:z.boolean(),canDownload:z.boolean(),
+  reasonCode:z.string().nullable(),retryable:z.boolean(),recovery:z.enum(["poll","retry","none"]),
+});
+export const attachmentSchema = z.object({ id: z.string(), fileName: z.string(), contentType: z.string(), size: z.number(), contentId: nullableText,
+  contentAvailable:z.boolean().describe("Whether content is retained, independent of use permission."),usage:attachmentUsageSchema });
+export const outboundFileSchema = z.object({ id: z.string(), fileName: z.string(), contentType: z.string(), size: z.number(), sha256: z.string(), contentAvailable: z.boolean(),usage:attachmentUsageSchema, createdAt: iso });
 export const outboundAttachmentSchema = z.object({ fileId: z.string(), fileName: z.string(), contentType: z.string(), size: z.number(), sha256: z.string(), disposition: z.enum(["attachment", "inline"]), contentId: nullableText });
 export const inboundSummarySchema = z.object({ id: z.string(), from: z.string(), to: z.array(z.string()), subject: z.string(), status: z.enum(["scanning", "ready", "rejected"]), attachmentCount: z.number(), authorDate: iso.nullable(), ingressReceivedAt: iso.nullable(), readyAt: iso.nullable(), receivedAt: iso });
 export const inboundDetailSchema = inboundSummarySchema.omit({ attachmentCount: true }).extend({ messageId: nullableText, envelopeRecipients: z.array(z.string()), replyTo: z.array(z.string()), inReplyTo: nullableText, references: z.array(z.string()), cc: z.array(z.string()), bcc: z.array(z.string()), html: nullableText, text: nullableText, contentPurgedAt: iso.nullable(), rejectionReason: nullableText, attachments: z.array(attachmentSchema) });

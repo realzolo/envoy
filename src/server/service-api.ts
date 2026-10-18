@@ -1,3 +1,4 @@
+import { AttachmentUseError } from "@/modules/attachments/safety";
 import { FileValidationError } from "@/modules/files/service";
 import type { ZodError } from "zod";
 import { decodeCursor, DuplicateRiskError, IdempotencyConflictError, MessageValidationError } from "@/modules/core/message/service";
@@ -60,7 +61,8 @@ export function serviceRoute<T = unknown>(handler: (request: Request, identity: 
         else response = await handler(request, identity, context as T);
       }
     } catch (error) {
-      if (error instanceof BodyTooLargeError) response = apiProblem("Payload too large", 413, error.message);
+      if (error instanceof AttachmentUseError) response = apiProblem("Attachment unavailable",409,error.reasonCode,undefined,error.code);
+      else if (error instanceof BodyTooLargeError) response = apiProblem("Payload too large", 413, error.message);
       else if (error instanceof FileValidationError) response = apiProblem("Invalid attachment", 422, error.message);
       else if (error instanceof RequestBodyError) response = apiProblem(error.status === 413 ? "Payload too large" : error.status === 415 ? "Unsupported media type" : "Invalid JSON", error.status, error.message);
       else if (error instanceof DuplicateRiskError || error instanceof IdempotencyConflictError) response = apiProblem("Conflict", 409, error.message, undefined, error instanceof DuplicateRiskError ? "DUPLICATE_RISK_ACKNOWLEDGEMENT_REQUIRED" : "IDEMPOTENCY_CONFLICT");

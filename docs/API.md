@@ -81,8 +81,10 @@ curl --request POST http://localhost:6178/api/v1/files \
   --data-binary @invoice.pdf
 ```
 
-The `201` result contains `id`, filename, media type, byte size, SHA-256, availability, and creation time. Reference that
-`id` as `fileId` in a send request. A file belongs to the uploading service; expired or inaccessible files cannot be sent.
+The `201` result confirms durable private storage and a pending safety job; it does **not** mean the file can be sent.
+It contains `id`, filename, media type, byte size, SHA-256, `contentAvailable`, `usage`, and creation time.
+Wait until `usage.canSend` is true before referencing its `id` as `fileId`. Unapproved references fail with 409
+`FILE_NOT_READY` or `FILE_UNAVAILABLE` before message acceptance; the same business idempotency key remains reusable.
 `GET /files/{id}` retrieves owned file metadata. Attachment items accept optional `fileName` and default disposition
 `attachment`; `inline` requires a unique `contentId`, referenced in HTML as `cid:contentId`.
 
@@ -245,20 +247,11 @@ Provider contracts and current adapter behavior are documented in [Architecture]
 In particular, Resend's current adapter deliberately quarantines incoming messages because the retrieved contract does
 not unambiguously identify SMTP recipients. Its outbound sending support is unchanged.
 
-## Adopting the business connection contract
+## Business connection
 
-Sending requests and credential wire formats are unchanged. New capability/detail/callback fields are additive; corrected inbound time semantics, browse cursors, rotation lifecycle and schema adoption require the changes described below. Existing `senderGrants` is retained as a legacy active-grant view; new integrations use `mail` for explicit
-ranges and status. `providerCapabilities` is retained but deprecated in OpenAPI; business logic should stop depending
-on its provider names. Strict response/callback decoders need to allow the new fields or regenerate from OpenAPI.
-
-Consumers must switch ownership assumptions from visible `to` to `envelopeRecipients`, handle multiple private inbound
-IDs across services, and treat missing RFC fields and evidence as unknown. Do not implement domain/DNS screens, cache
-capabilities as permanent authorization, or assume send authorization grants inbound access. Existing Resend inbound
-consumers must arrange a supported trusted ingress in Envoy before relying on delivery. Historical mail whose ownership
-was previously guessed is not automatically redistributed or relabeled as verified; operators must review it separately.
-
-The final initial schema now stores per-service inbound copies and RFC fields; see the schema adoption notes in
-[Operations](OPERATIONS.md#mail-access-operations). No production data or external configuration is changed by this patch.
+Use provider-neutral `mail` discovery for explicit permissions and states. Ownership comes from `envelopeRecipients`,
+never visible To. Multiple services receive private resources; null RFC fields/evidence remain unknown. Domain/DNS and
+provider configuration stay in Envoy. Send grants do not authorize receiving data.
 
 A runnable minimal connection example is [examples/service-mail.mjs](../examples/service-mail.mjs):
 
@@ -289,12 +282,12 @@ no provider or DNS setting is supplied by this business process.
 | Field | Meaning |
 |---|---|
 | `authorDate` | Nullable, untrusted author-declared RFC Date. Old/future dates remain content facts; missing/invalid values are null |
-| `ingressReceivedAt` | Time Envoy durably accepted the verified provider receipt. It is not the upstream SMTP server's clock. Legacy unverified history is null |
-| `receivedAt` | Compatibility field now meaning the private copy's system storage/observation time (`created_at`). Browse pages use its PostgreSQL microsecond precision plus ID |
-| `readyAt` | Nullable system time the sanitized/scanned content became business-readable. Legacy completion times remain unknown |
+| `ingressReceivedAt` | Time Envoy durably accepted the verified provider receipt. It is not the upstream SMTP server's clock. Unknown values are null |
+| `receivedAt` | The private copy’s system storage/observation time (`created_at`). Browse pages use its PostgreSQL microsecond precision plus ID |
+| `readyAt` | Nullable system time the sanitized body became business-readable. Unknown completion times remain null |
 | Change `recordedAt` | System observation of an atomic availability/purge change, never the mail Date or business processing time |
 
-Inbound callback `occurredAt` now records readable completion (the same `readyAt`), rather than the former provider-dependent receive/author Date. Existing pending historical callback payloads retain their original facts; they are not rewritten during adoption. Delayed normalization and attachment scanning may separate all these clocks. Content retention starts at the later of
+Inbound callback `occurredAt` records readable body completion (`readyAt`); attachment usability is independent. Delayed normalization separates these clocks. Attachment scanning continues independently after content storage. Content retention starts at the later of
 copy storage and processing completion, so a just-readable old email is not immediately expired. Browse snapshots can
 include scanning/rejected copies; `readyAt` is not proof that content is still retained. Check `contentPurgedAt`.
 
@@ -329,8 +322,7 @@ cursors return **400 `INVALID_INBOUND_CURSOR`**. Do not silently reset: reconcil
 own durable state, record/alert the irrecoverable gap, then explicitly adopt the reset cursor. Already expired content
 cannot be reconstructed by Envoy. Run recovery within your retention window even when callbacks work.
 
-The stored-time list uses new `inb2.` browse cursors; old time cursors fail with **400 `INBOUND_LIST_CURSOR_CHANGED`**.
-Discard old browse checkpoints and initialize the change stream. `/events` keeps its outbound scope and existing cursors.
+The stored-time list uses `inbound.` browse cursors. Malformed cursors return 400; `/inbound-changes` has independent recovery cursors. `/events` is the outbound feed.
 
 ## Receiver notifications and key rotation
 
@@ -419,3 +411,24 @@ preserving/reapplying tombstones and external deletion records before replay.
 Verification-code delivery deadlines remain an explicit contract gap: `scheduling:false`, no business expiry/deadline
 parameter or deadline-enforced send guarantee exists. The worker's transport timeout is not a code expiry guarantee.
 No general scheduling system is added here.
+
+## Unified attachment availability
+
+[Attachment Safety](ATTACHMENT-SAFETY.md) defines the full contract, reasons and upload → poll → send example.
+Outbound files and inbound attachments both return `contentAvailable` (retention only) and `usage`:
+`state` (`processing`, `usable`, `unavailable`), `safetyState`, `processing`, `canSend`, `canDownload`, nullable `reasonCode`,
+`retryable`, and `recovery` (`poll`, `retry`, `none`). Inbound `canSend` is always false; sending a downloaded inbound file
+requires a new service-owned outbound upload. No engine address/response, object key or permanent public URL is returned.
+
+- `GET /files/{id}`: query current file availability; upload is 201, usable is an independent result.
+- `GET /files/{id}/download`: authenticated safety-approved outbound download.
+- `POST /files/{id}/reprocess`: audited, bounded retry of retained recoverable content; 202 `{id,processing:true}`.
+- `POST /inbound-messages/{id}/attachments/{attachmentId}/reprocess`: the same recovery for an owned inbound attachment.
+- Existing inbound attachment download and content DELETE resources enforce the same policy and ownership.
+
+`FILE_NOT_READY` is retryable after polling; `FILE_UNAVAILABLE` requires inspecting the current owned resource and its
+recovery instruction. Foreign resources return 404 on resource APIs. Reprocessing cannot release malicious, integrity-
+blocked or purged content. The actual sender rechecks every attachment, current proof and actual bytes before any
+provider call; queue-time changes can cause a determinate preparation failure, never a partial provider submission.
+Inbound body availability/callbacks do not assert that attachments are already safe. Poll detail for attachment changes;
+the inbound change feed records body availability and content erasure, not per-attachment scan completion.

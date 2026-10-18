@@ -1,11 +1,12 @@
-import { mkdir, readFile, writeFile, rm } from "node:fs/promises";
+import { mkdir, writeFile, rm } from "node:fs/promises";
+import { createReadStream } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 
 export interface ObjectStore {
   put(key: string, data: Uint8Array, contentType: string): Promise<void>;
 
-  get(key: string): Promise<Uint8Array>;
+  get(key: string, maximum?: number): Promise<Uint8Array>;
 
   delete(key: string): Promise<void>
 }
@@ -20,6 +21,19 @@ export function objectStorageKey(key: string, configuredPrefix = process.env.OBJ
   return `${prefix}/${logicalKey}`
 }
 
+
+async function boundedBytes(stream: AsyncIterable<Uint8Array> & {destroy?:()=>void},maximum=30_000_000) {
+  const chunks:Buffer[]=[];let length=0;
+  try {
+    for await (const chunk of stream) {
+      length+=chunk.byteLength;
+      if(length>maximum) throw new Error("Object exceeds the permitted size");
+      chunks.push(Buffer.from(chunk));
+    }
+    return new Uint8Array(Buffer.concat(chunks));
+  } finally { stream.destroy?.(); }
+}
+
 class LocalObjectStore implements ObjectStore {
   private root = resolve(join(process.cwd(), "var", "objects"));
 
@@ -29,8 +43,8 @@ class LocalObjectStore implements ObjectStore {
     await writeFile(path, data)
   }
 
-  async get(key: string) {
-    return new Uint8Array(await readFile(this.path(key)))
+  async get(key: string, maximum?: number) {
+    return boundedBytes(createReadStream(this.path(key)),maximum);
   }
 
   async delete(key: string) {
@@ -81,10 +95,10 @@ class S3ObjectStore implements ObjectStore {
     await this.client.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: objectStorageKey(key) }))
   }
 
-  async get(key: string) {
+  async get(key: string, maximum?: number) {
     const result = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: objectStorageKey(key) }));
     if (!result.Body) throw new Error("Object body is empty");
-    return result.Body.transformToByteArray()
+    return boundedBytes(result.Body as AsyncIterable<Uint8Array> & {destroy?:()=>void},maximum);
   }
 }
 
