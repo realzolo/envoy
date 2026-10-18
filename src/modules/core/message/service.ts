@@ -1,3 +1,4 @@
+import { outboundDomainAccess } from "@/modules/core/resources/authorization";
 import { createHash } from "node:crypto";
 import type { PoolClient } from "pg";
 import { createMessageSchema, type AcceptedMessage, type CreateMessageInput, deliveryStatuses } from "@/lib/contracts";
@@ -88,7 +89,7 @@ export async function acceptMessage(args: { identity: ServiceIdentity; idempoten
     }
     const domainId = await authorizedDomain(client, args.identity, input.from.email);
     if (!domainId) throw new MessageValidationError(["This service is not authorized to send from the supplied address."], "SENDER_NOT_AUTHORIZED");
-    const attachments = await resolveOutboundAttachments(args.identity.serviceId, input.attachments, client);
+    const attachments = await resolveOutboundAttachments(args.identity.serviceId, input.attachments, client, domainId);
     const id = createId("msg");
     const content: MessageContent = {
       id, product_id: args.identity.productId, service_id: args.identity.serviceId, sending_domain_id: domainId,
@@ -145,7 +146,7 @@ export type MessageRow = MessageContent & {
   outcome: "pending" | "succeeded" | "partially_failed" | "failed" | "canceled" | "unknown"; cursor_at: string;
 };
 export async function listMessages(serviceId: string, options: { limit: number; cursor?: { at: Date | string; id: string } | null; processingState?: string | null; outcome?: string | null; referenceId?: string | null }) {
-  const rows = (await query<MessageRow>(`SELECT * FROM (${projection} WHERE m.service_id=$1
+  const rows = (await query<MessageRow>(`SELECT * FROM (${projection} WHERE m.service_id=$1 AND ${outboundDomainAccess('m')}
     AND ($2::text IS NULL OR m.reference_id=$2) AND ($3::timestamptz IS NULL OR (m.accepted_at,m.id)<($3,$4))) result
     WHERE ($5::text IS NULL OR processing_state=$5) AND ($6::text IS NULL OR outcome=$6)
     ORDER BY accepted_at DESC,id DESC LIMIT $7`, [serviceId, options.referenceId ?? null, options.cursor?.at ?? null, options.cursor?.id ?? null, options.processingState ?? null, options.outcome ?? null, options.limit + 1])).rows;
@@ -158,7 +159,7 @@ export async function listMessages(serviceId: string, options: { limit: number; 
   return { data, nextCursor: more ? encodeCursor(rows[options.limit - 1]) : null };
 }
 export async function getMessage(id: string, serviceId: string) {
-  const message = (await query<MessageRow>(`${projection} WHERE m.id=$1 AND m.service_id=$2`, [id, serviceId])).rows[0];
+  const message = (await query<MessageRow>(`${projection} WHERE m.id=$1 AND m.service_id=$2 AND ${outboundDomainAccess('m')}`, [id, serviceId])).rows[0];
   if (!message) return null;
   const deliveries = (await query<{ id: string; recipient_email: string; recipient_name: string | null; recipient_role: "to" | "cc" | "bcc"; lifecycle_status: string; engagement_status: string; compliance_status: string; last_error: unknown; updated_at: Date }>("SELECT id,recipient_email,recipient_name,recipient_role,lifecycle_status,engagement_status,compliance_status,last_error,updated_at FROM deliveries WHERE message_id=$1 ORDER BY queued_at,id", [id])).rows;
   return { ...message, deliveries };
@@ -166,7 +167,7 @@ export async function getMessage(id: string, serviceId: string) {
 
 export async function cancelMessage(id: string, serviceId: string) {
   return transaction(async client => {
-    if (!(await client.query("SELECT id FROM messages WHERE id=$1 AND service_id=$2 FOR UPDATE", [id, serviceId])).rowCount) return null;
+    if (!(await client.query(`SELECT id FROM messages m WHERE id=$1 AND service_id=$2 AND ${outboundDomainAccess('m')} FOR UPDATE`, [id, serviceId])).rowCount) return null;
     await client.query("SELECT id FROM submissions WHERE message_id=$1 ORDER BY id FOR UPDATE", [id]);
     const rows = (await client.query<{ id: string }>(`SELECT d.id FROM deliveries d LEFT JOIN submission_attempts a ON a.id=d.current_attempt_id
       WHERE d.message_id=$1 AND d.lifecycle_status IN ('queued','deferred')
@@ -182,9 +183,7 @@ export type RetryOptions = { acknowledgeUnknown: boolean; actor: string };
 async function retryState(client: PoolClient, deliveryId: string) {
   return (await client.query<{ id: string; message_id: string; service_id: string; lifecycle_status: string; compliance_status: string; current_attempt_id: string | null; uncertain: boolean; live: boolean; provider_pending: boolean; content_expired: boolean; enabled: boolean; blocked: boolean }>(`SELECT d.id,d.message_id,m.service_id,d.lifecycle_status,d.compliance_status,d.current_attempt_id,
     COALESCE(NOT a.outcome_determinate,false) AS uncertain,(a.status='submitting') IS TRUE AS live,(a.status IN ('accepted','reconciled') AND d.lifecycle_status='deferred') IS TRUE AS provider_pending,m.content_purged_at IS NOT NULL AS content_expired,
-    EXISTS(SELECT 1 FROM sender_grants g JOIN sending_domains sd ON sd.id=g.sending_domain_id JOIN products p ON p.id=g.product_id
-      WHERE sd.id=m.sending_domain_id AND sd.status='active' AND p.status='active' AND g.status='active' AND g.product_id=m.product_id
-        AND (g.service_id IS NULL OR g.service_id=m.service_id) AND (g.from_local_part IS NULL OR g.from_local_part=split_part(m.sender_snapshot->>'fromEmail','@',1))) AS enabled,
+    ${outboundDomainAccess('m')} AS enabled,
     EXISTS(SELECT 1 FROM suppressions su WHERE su.active AND su.email_normalized=lower(d.recipient_email) AND (su.expires_at IS NULL OR su.expires_at>now())
       AND (su.scope_type='global' OR (su.product_id=m.product_id AND (su.scope_type='product' OR su.list_id=m.metadata->>'listId')))) AS blocked
     FROM deliveries d JOIN messages m ON m.id=d.message_id LEFT JOIN submission_attempts a ON a.id=d.current_attempt_id WHERE d.id=$1 FOR UPDATE OF d`, [deliveryId])).rows[0];
@@ -204,7 +203,7 @@ export async function retryMessage(id: string, serviceId: string, input: { deliv
   if (!idempotencyKey?.trim() || idempotencyKey.length > 256) throw new MessageValidationError(["Idempotency-Key is required for retry."]);
   const payloadHash = hashPayload(input);
   return transaction(async client => {
-    const message = (await client.query<MessageContent>("SELECT * FROM messages WHERE id=$1 AND service_id=$2 FOR UPDATE", [id, serviceId])).rows[0];
+    const message = (await client.query<MessageContent>(`SELECT * FROM messages m WHERE id=$1 AND service_id=$2 AND ${outboundDomainAccess('m')} FOR UPDATE`, [id, serviceId])).rows[0];
     if (!message) return null;
     const prior = (await client.query<{ payload_hash: string; result: { messageId: string; submissionId: string | null; queued: number; skipped: { deliveryId: string; reason: string | null }[] } }>("SELECT payload_hash,result FROM message_retries WHERE message_id=$1 AND idempotency_key=$2", [id, idempotencyKey])).rows[0];
     if (prior) { if (prior.payload_hash !== payloadHash) throw new IdempotencyConflictError(); return prior.result; }

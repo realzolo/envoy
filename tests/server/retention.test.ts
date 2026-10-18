@@ -30,8 +30,8 @@ afterEach(async () => {
 async function outboundFile() {
   const id = createId("retentionfile");
   created.files.push(id);
-  await query(`INSERT INTO outbound_files(id,service_id,file_name,content_type,size_bytes,sha256,object_key,created_at)
-    VALUES ($1,'svc_atlas_auth','private.txt','text/plain',12,'retained-hash',$2,now()-interval '4000 days')`, [id, `retention/${id}`]);
+  await query(`INSERT INTO outbound_files(id,service_id,sending_domain_id,file_name,content_type,size_bytes,sha256,object_key,created_at)
+    VALUES ($1,'svc_atlas_auth','sd_atlas','private.txt','text/plain',12,'retained-hash',$2,now()-interval '4000 days')`, [id, `retention/${id}`]);
   return { id, key: `retention/${id}` };
 }
 

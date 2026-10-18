@@ -95,7 +95,7 @@ export function MessageComposer({ services }: { services: Service[] }) {
       const uploaded: Array<{ fileId: string; fileName: string }> = [];
       for (const file of Array.from(files)) {
         const response = await fetch(`/api/admin/files?serviceId=${encodeURIComponent(serviceId)}`, {
-          method: "POST", headers: { "x-file-name": encodeURIComponent(file.name), "content-type": file.type || "application/octet-stream" }, body: file,
+          method: "POST", headers: { "x-sending-domain":String(form.getFieldValue("fromEmail")??"").split("@").at(-1)??"", "x-file-name": encodeURIComponent(file.name), "content-type": file.type || "application/octet-stream" }, body: file,
         });
         const payload = await response.json() as { id: string; fileName: string; error?: string };
         if (!response.ok) throw new Error(payload.error ?? "Unable to upload attachment");

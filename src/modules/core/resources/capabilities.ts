@@ -5,14 +5,13 @@ import { query } from "@/server/database";
 
 const iso = (value: Date | null) => value?.toISOString() ?? null;
 
-/** Public configuration facts and observed evidence; never a reservation or a send authorization cache. */
+/** Discovery separates permission, configured transport and historical evidence. */
 export async function discoverMail(identity: ServiceIdentity) {
-  const senders = (await query<{
-    id: string; domain: string; from_local_part: string | null; service_id: string | null;
-    status: string; domain_status: string;
-    categories: (string | null)[]; last_accepted_at: Date | null; last_delivered_at: Date | null;
-  }>(`SELECT g.id,d.domain,g.from_local_part,g.service_id,g.status,d.status AS domain_status,
-    ARRAY(SELECT DISTINCT rp.message_category FROM routing_policies rp JOIN routing_targets rt ON rt.policy_id=rp.id
+  const grants = (await query<{
+    id:string;domain:string;status:string;domain_status:string;send_allowed:boolean;receive_allowed:boolean;revision:number;
+    sending_configured:boolean;last_accepted_at:Date|null;last_delivered_at:Date|null;last_received_at:Date|null;
+  }>(`SELECT d.id,d.domain,g.status,d.status AS domain_status,g.send_allowed,g.receive_allowed,g.revision,
+    EXISTS(SELECT 1 FROM routing_policies rp JOIN routing_targets rt ON rt.policy_id=rp.id
       JOIN provider_accounts a ON a.id=rt.provider_account_id JOIN provider_identities pi ON pi.id=rt.provider_identity_id
       WHERE rp.sending_domain_id=d.id AND rp.status='active' AND (rp.product_id IS NULL OR rp.product_id=$1)
         AND (rp.service_id IS NULL OR rp.service_id=$2) AND a.status='active' AND pi.status='verified'
@@ -20,72 +19,41 @@ export async function discoverMail(identity: ServiceIdentity) {
         AND COALESCE(a.health->>'status','unknown') NOT IN ('unhealthy','offline')
         AND (rt.status='active' OR rt.circuit_open_until<=now())
         AND EXISTS(SELECT 1 FROM provider_credentials c WHERE c.provider_account_id=a.id AND c.status='active'
-          AND c.valid_from<=now() AND (c.valid_to IS NULL OR c.valid_to>now()))) AS categories,
-    facts.last_accepted_at,facts.last_delivered_at
-    FROM sender_grants g JOIN sending_domains d ON d.id=g.sending_domain_id
-    LEFT JOIN LATERAL (
-      SELECT max(f.occurred_at) FILTER (WHERE f.event_type='accepted') AS last_accepted_at,
-        max(f.occurred_at) FILTER (WHERE f.event_type='delivered') AS last_delivered_at
-      FROM (
-        SELECT e.occurred_at,e.event_type FROM delivery_events e JOIN deliveries dl ON dl.id=e.delivery_id JOIN messages m ON m.id=dl.message_id
-        WHERE m.service_id=$2 AND m.sending_domain_id=d.id AND e.event_type IN ('accepted','delivered')
-          AND (g.from_local_part IS NULL OR split_part(m.sender_snapshot->>'fromEmail','@',1)=g.from_local_part)
-        UNION ALL
-        SELECT e.occurred_at,e.event_type FROM submission_events e JOIN submissions s ON s.id=e.submission_id JOIN messages m ON m.id=s.message_id
-        WHERE m.service_id=$2 AND m.sending_domain_id=d.id AND e.event_type IN ('accepted','delivered')
-          AND (g.from_local_part IS NULL OR split_part(m.sender_snapshot->>'fromEmail','@',1)=g.from_local_part)
-      ) f
-    ) facts ON true
-    WHERE g.product_id=$1 AND (g.service_id IS NULL OR g.service_id=$2) ORDER BY d.domain,g.id`, [identity.productId,identity.serviceId])).rows;
-  const receivers = (await query<{
-    id: string; domain: string; local_part_pattern: string; status: string; domain_status: string;
-    callback_endpoint_id: string | null; callback_owner: string | null; callback_status: string | null; subscribed_events: string[] | null;
-    endpoint_status: string; security_configured: boolean; provider_type: ProviderType; last_received_at: Date | null;
-  }>(`SELECT r.id,d.domain,r.local_part_pattern,r.status,d.status AS domain_status,e.status AS endpoint_status,e.security_configured,a.type AS provider_type,r.callback_endpoint_id,cb.service_id AS callback_owner,cb.status AS callback_status,cb.subscribed_events,
-      (SELECT max(i.created_at) FROM inbound_messages i WHERE i.service_id=$2 AND i.provider_account_id=e.provider_account_id AND i.status='ready'
-        AND EXISTS(SELECT 1 FROM unnest(i.envelope_recipients) recipient WHERE split_part(recipient,'@',2)=d.domain
-          AND split_part(recipient,'@',1) LIKE replace(replace(replace(r.local_part_pattern,'~','~~'),'_','~_'),'*','%') ESCAPE '~')) AS last_received_at
-    FROM inbound_routes r JOIN sending_domains d ON d.id=r.sending_domain_id
-    JOIN provider_webhook_endpoints e ON e.id=r.provider_webhook_endpoint_id JOIN provider_accounts a ON a.id=e.provider_account_id
-    LEFT JOIN callback_endpoints cb ON cb.id=r.callback_endpoint_id
-    WHERE r.product_id=$1 AND r.service_id=$2 ORDER BY d.domain,r.id`, [identity.productId,identity.serviceId])).rows;
-  const callbacks = (await query<{ configured: boolean; last_delivered_at: Date | null; latest: { status: string; attemptCount: number; deliveredAt: string | null } | null }>(`SELECT
-    EXISTS(SELECT 1 FROM callback_endpoints WHERE service_id=$1 AND status='active') AS configured,
-    (SELECT max(c.delivered_at) FROM callback_deliveries c JOIN callback_endpoints e ON e.id=c.endpoint_id WHERE e.service_id=$1) AS last_delivered_at,
-    (SELECT jsonb_build_object('status',c.status,'attemptCount',c.attempt_count,'deliveredAt',c.delivered_at)
-      FROM callback_deliveries c JOIN callback_endpoints e ON e.id=c.endpoint_id WHERE e.service_id=$1 ORDER BY c.created_at DESC,c.id DESC LIMIT 1) AS latest`, [identity.serviceId])).rows[0];
+          AND c.valid_from<=now() AND (c.valid_to IS NULL OR c.valid_to>now()))) AS sending_configured,
+    (SELECT max(f.occurred_at) FROM (
+      SELECT e.occurred_at FROM delivery_events e JOIN deliveries dl ON dl.id=e.delivery_id JOIN messages m ON m.id=dl.message_id WHERE m.service_id=$2 AND m.sending_domain_id=d.id AND e.event_type='accepted'
+      UNION ALL SELECT e.occurred_at FROM submission_events e JOIN submissions s ON s.id=e.submission_id JOIN messages m ON m.id=s.message_id WHERE m.service_id=$2 AND m.sending_domain_id=d.id AND e.event_type='accepted'
+    ) f) AS last_accepted_at,
+    (SELECT max(f.occurred_at) FROM (
+      SELECT e.occurred_at FROM delivery_events e JOIN deliveries dl ON dl.id=e.delivery_id JOIN messages m ON m.id=dl.message_id WHERE m.service_id=$2 AND m.sending_domain_id=d.id AND e.event_type='delivered'
+      UNION ALL SELECT e.occurred_at FROM submission_events e JOIN submissions s ON s.id=e.submission_id JOIN messages m ON m.id=s.message_id WHERE m.service_id=$2 AND m.sending_domain_id=d.id AND e.event_type='delivered'
+    ) f) AS last_delivered_at,
+    (SELECT max(i.created_at) FROM inbound_messages i WHERE i.service_id=$2 AND i.status='ready' AND EXISTS(SELECT 1 FROM unnest(i.envelope_recipients) er WHERE split_part(er,'@',2)=d.domain)) AS last_received_at
+    FROM service_domain_grants g JOIN sending_domains d ON d.id=g.sending_domain_id
+    WHERE g.service_id=$2 ORDER BY d.domain`,[identity.productId,identity.serviceId])).rows;
+  const routes = (await query<{domain_id:string;status:string;endpoint_status:string;security_configured:boolean;provider_type:ProviderType}>(`SELECT r.sending_domain_id AS domain_id,r.status,e.status AS endpoint_status,e.security_configured,a.type AS provider_type
+    FROM inbound_routes r JOIN provider_webhook_endpoints e ON e.id=r.provider_webhook_endpoint_id
+    JOIN provider_accounts a ON a.id=e.provider_account_id WHERE r.service_id=$1`,[identity.serviceId])).rows;
+  const callback = (await query<{id:string;status:string;subscribed_events:string[];last_delivered_at:Date|null;latest:{status:string;attemptCount:number;deliveredAt:string|null}|null}>(`SELECT e.id,e.status,e.subscribed_events,
+    (SELECT max(c.delivered_at) FROM callback_deliveries c WHERE c.endpoint_id=e.id) AS last_delivered_at,
+    (SELECT jsonb_build_object('status',c.status,'attemptCount',c.attempt_count,'deliveredAt',c.delivered_at) FROM callback_deliveries c WHERE c.endpoint_id=e.id ORDER BY c.created_at DESC,c.id DESC LIMIT 1) AS latest
+    FROM callback_endpoints e WHERE e.service_id=$1`,[identity.serviceId])).rows[0];
   return {
-    kind: "address_permissions" as const, mailboxLogin: false as const,
-    senders: senders.map(row => {
-      const reasons = [...(row.status !== "active" ? ["SENDER_NOT_AUTHORIZED"] : []), ...(row.domain_status !== "active" ? ["SENDING_DOMAIN_DISABLED"] : []), ...(!row.categories.length ? ["NO_ELIGIBLE_ROUTE"] : [])];
-      const exact = row.from_local_part !== null;
-      return { id: row.id, kind: exact ? "exact_address" as const : "domain" as const, domain: row.domain,
-        address: exact ? `${row.from_local_part}@${row.domain}` : null,
-        scope: row.service_id ? "service" as const : "product" as const,
-        authorization: row.status === "active" ? "granted" as const : "revoked" as const,
-        sending: { state: reasons.length ? "unavailable" as const : "configured" as const, reasonCodes: reasons, categories: row.categories, runtimeAvailability: "unknown" as const },
-        evidence: { lastAcceptedAt: iso(row.last_accepted_at), lastDeliveredAt: iso(row.last_delivered_at) } };
+    kind:"domain_permissions" as const,
+    domains:grants.map(row=>{
+      const active=row.status==='active';
+      const sendingReasons=[...(!active||!row.send_allowed?['DOMAIN_SEND_NOT_AUTHORIZED']:[]),...(row.domain_status!=='active'?['SENDING_DOMAIN_DISABLED']:[]),...(!row.sending_configured?['NO_ELIGIBLE_ROUTE']:[])];
+      const ownRoutes=routes.filter(route=>route.domain_id===row.id);
+      const ingress=ownRoutes.some(route=>route.status==='active'&&route.endpoint_status==='active'&&route.security_configured&&providerRegistry(route.provider_type).descriptor.capabilities.inboundEnvelopeRecipients);
+      const receivingReasons=[...(!active||!row.receive_allowed?['DOMAIN_RECEIVE_NOT_AUTHORIZED']:[]),...(row.domain_status!=='active'?['INBOUND_DOMAIN_DISABLED']:[]),...(!ingress?['INBOUND_INGRESS_UNAVAILABLE']:[])];
+      const notificationReasons=callback?[...(callback.status!=='active'?['CALLBACK_DISABLED']:[]),...(!callback.subscribed_events.includes('inbound.received')?['CALLBACK_EVENT_NOT_SUBSCRIBED']:[])]:[];
+      return {id:row.id,domain:row.domain,authorization:active?'granted' as const:'revoked' as const,revision:row.revision,
+        permissions:{send:active&&row.send_allowed,receive:active&&row.receive_allowed},
+        sending:{state:sendingReasons.length?'unavailable' as const:'configured' as const,reasonCodes:sendingReasons},
+        receiving:{state:receivingReasons.length?'unavailable' as const:'configured' as const,reasonCodes:receivingReasons},
+        notification:{mode:callback?'callback_and_polling' as const:'polling' as const,state:notificationReasons.length?'unavailable' as const:'configured' as const,reasonCodes:notificationReasons},
+        evidence:{lastAcceptedAt:iso(row.last_accepted_at),lastDeliveredAt:iso(row.last_delivered_at),lastReceivedAt:iso(row.last_received_at)}};
     }),
-    receivers: receivers.map(row => {
-      const reasons = [...(row.status !== "active" ? ["INBOUND_ROUTE_DISABLED"] : []), ...(row.domain_status !== "active" ? ["INBOUND_DOMAIN_DISABLED"] : []), ...(row.endpoint_status !== "active" || !row.security_configured ? ["INBOUND_INGRESS_UNAVAILABLE"] : [])];
-      const unsupported = !providerRegistry(row.provider_type).descriptor.capabilities.inboundEnvelopeRecipients;
-      if (unsupported) reasons.push("ENVELOPE_RECIPIENT_UNAVAILABLE");
-      const notificationReasons = row.callback_endpoint_id ? [
-        ...(row.callback_owner !== identity.serviceId ? ["CALLBACK_BINDING_INVALID"] : []),
-        ...(row.callback_status !== "active" ? ["CALLBACK_DISABLED"] : []),
-        ...(!row.subscribed_events?.includes("inbound.received") ? ["CALLBACK_EVENT_NOT_SUBSCRIBED"] : []),
-      ] : [];
-      return { id: row.id, kind: row.local_part_pattern.includes("*") ? "local_part_pattern" as const : "exact_address" as const,
-        address: row.local_part_pattern.includes("*") ? null : `${row.local_part_pattern}@${row.domain}`,
-        domain: row.domain, localPartPattern: row.local_part_pattern,
-        receiving: { state: reasons.length ? "unavailable" as const : "configured" as const, reasonCodes: reasons, externalReadiness: "unknown" as const },
-        notification: { mode: row.callback_endpoint_id ? "callback_and_polling" as const : "polling" as const,
-          state: notificationReasons.length ? "unavailable" as const : "configured" as const,
-          callbackEndpointId: row.callback_owner === identity.serviceId ? row.callback_endpoint_id : null,
-          reasonCodes: notificationReasons, recoveryResource: "/api/v1/inbound-changes" as const },
-        evidence: { lastReceivedAt: iso(row.last_received_at) } };
-    }),
-    callbacks: { configuration: callbacks.configured ? "configured" as const : "unavailable" as const,
-      latest: callbacks.latest, lastDeliveredAt: iso(callbacks.last_delivered_at), businessProcessing: "unknown" as const },
+    callbacks:{configuration:callback?.status==='active'?'configured' as const:'unavailable' as const,latest:callback?.latest??null,lastDeliveredAt:iso(callback?.last_delivered_at??null),businessProcessing:'unknown' as const},
   };
 }

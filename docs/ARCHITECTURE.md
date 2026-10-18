@@ -27,14 +27,13 @@ Raw MIME, large native payloads, and attachments are written to the configured o
 metadata and object keys. Local object storage is development-only; production should use an encrypted S3-compatible
 bucket.
 
-## Sender authorization
+## Business domain authorization
 
-An active sender grant authorizes a product or one of its services to use an active sending domain, optionally restricted
-to one exact local part. Domain verification and caller authorization are independent controls. Acceptance, submission,
-and manual retry enforce the current product, domain, and grant state. Removing a grant blocks future submissions.
+`service_domain_grants` is the sole domain permission authority: one Service/domain row with sending and receiving flags, status and revision. It replaces `sender_grants` without compatibility reads or Product-wide inheritance. Service credentials prove the stable business identity and inherit its grants across rotation. Envoy has no business APP or mailbox model.
 
-Manage sender grants alongside products and service credentials under **Service Credentials**. Console composition and
-API requests supply From, Reply-To, and category directly. Accepted messages retain immutable sender and content snapshots.
+Service Credentials issues a business key with selected sending/receiving domains and an optional unified callback. Domain infrastructure, provider verification and caller authorization remain independent. Native mail supplies the exact From address; its domain is authorized at acceptance, submission and manual retry. Protected resource reads, attachment operations, events, change streams, content erasure and callback execution recheck frozen transport domain ownership. Unavailable or foreign resources are not exposed through known IDs. Files freeze an explicit sending domain and cannot be reused across From domains.
+
+There is at most one callback endpoint per Service; ingress routes select a provider, domain and target Service, never a business address pattern or per-route callback. Grant changes create signed `service.permissions_changed` notifications atomically with a durable outbox command. Product suppression management is a separate explicit Service permission, false by default.
 
 ## Routing
 
@@ -131,7 +130,7 @@ persistence and persists the verified receipt and security version. Workers pars
 4. For SendGrid, Mailgun, and Postmark, complete the provider's domain-verification workflow first; Sending Domains
    records the operator-confirmed association and does not invent DNS records or a verification API. A Mailgun
    association must exactly match that account's configured sending domain.
-5. Grant the product or service permission to use the domain or exact sender address, and create routing policies for that domain. Runtime routing rejects disabled domains,
+5. Grant the business Service explicit domain sending permission, and create routing policies for that domain. Runtime routing rejects disabled domains,
    mismatched policy/account/identity domains, mismatched account/identity pairs, and unverified identities.
 
 SES inbound requires a Receipt Rule that stores MIME in S3 and publishes the receipt event to the configured SNS topic.
@@ -145,13 +144,9 @@ without delivering a probe email or requiring unrelated profile permissions.
 
 ## Inbound safety
 
-Inbound routes match a verified provider endpoint and trusted SMTP envelope recipients by exact domain and local-part
-pattern. Sender grants and outbound identity verification are separate from receiving-route configuration. Every matching
-route participates; overlapping routes merge into one service-owned copy, and multiple services receive private copies.
-The deduplication key is provider account + external transport message identity + service (or administrator-only product
-scope). Identical patterns may explicitly target different services. Bcc/envelope recipient data are filtered per copy;
-visible To/Cc remain content headers. Raw MIME is administrator infrastructure data and has no service download API.
-Callback endpoints are checked against the copy's service and subscription at enqueue and delivery time, even if route configuration is inconsistent. Each route exposes its own notification status separately from ingress configuration; an unbound route is polling-only.
+Inbound routes match a secured provider endpoint and trusted SMTP envelope recipients by exact domain. Receiving requires the target Service's active receiving grant. Every matching technical route participates; routes merge into one private Service copy, and different Services receive independent IDs, attachments and Bcc/envelope projections. The first durable dispatch decision is frozen; retries never gain newly configured recipients or expand to new Services. Current domain grants are checked again before unfinished copies are persisted and before any callback leaves Envoy.
+
+A multi-domain private copy becomes wholly unavailable if any envelope domain loses receiving permission. Raw MIME remains administrator-only. Visible To/Cc are email content headers and never determine ownership. There are no APP IDs or business mailbox purposes in these routes.
 
 Trusted sources in the adapters are:
 
@@ -170,8 +165,8 @@ Authoritative references: [SES receiving contents](https://docs.aws.amazon.com/s
 [Resend received-email retrieval](https://resend.com/docs/api-reference/emails/retrieve-received-email).
 The last contract does not establish that its To/Bcc fields are SMTP envelope facts, so the adapter does not infer ownership.
 Missing or invalid envelopes and unmatched mail remain administrator-only with stable rejection codes. Old Date headers
-are content, not the database observation time reported as receiving evidence. Routes without a service remain
-administrator-only and cannot leak into a product's services.
+are content, not the database observation time reported as receiving evidence. Every business ingress route requires
+an explicitly authorized Service; quarantine records are not assigned to an arbitrary Product or Service.
 
 Raw MIME and attachments are size-limited and stored privately outside PostgreSQL; HTML is sanitized before persistence.
 Both directions register byte-bound persistent safety tasks. Inbound body readiness is separate from attachment usability.
@@ -289,13 +284,13 @@ Server processes and database sessions use UTC; API timestamps are UTC ISO 8601 
 
 ## Business connection boundary
 
-Envoy alone manages domains, provider identities/credentials, DNS instructions, sender grants and inbound routes.
+Envoy alone manages domains, provider identities/credentials, DNS instructions, Service domain grants and inbound routes.
 The domain administrator publishes records in the real DNS platform; Envoy detects/presents provider results. A business
 service binds its service key and chosen addresses, supplies native mail content, retrieves owned resources and consumes
 signed canonical events. It never holds administrator credentials or manages domain verification.
 
-The `mail` discovery object describes address permissions, not physical mailboxes. Domain grants are never expanded to
-invented mailbox lists. Inbound patterns describe only configured routes and do not prove all addresses can receive.
+The `mail` discovery object describes domain permissions, not physical mailboxes. Domain grants are never expanded to
+invented mailbox lists. Receiving configuration does not prove external delivery works.
 Configuration readiness, actual canonical send/receive facts, and callback HTTP delivery are independent dimensions.
 Runtime capacity and external receiving reachability remain unknown at discovery; no missing evidence is synthesized.
 An HTTP-success callback says nothing about the caller's conversation or ticket processing. See the exact status/error
@@ -309,7 +304,7 @@ Public `receivedAt` records copy storage time. Lists preserve PostgreSQL microse
 Retention uses the later of storage and ready time, protecting delayed scans and recently received old mail. Unknown timestamps remain null; no history is guessed.
 
 `inbound_receipts` persists the first normalization decision, keyed by provider account plus transport receipt identity.
-Its content-free route snapshot fixes service scopes, matched recipients and selected callback IDs. Subsequent retries
+Its content-free route snapshot fixes Service scopes and matched recipients. The current unified callback is resolved by Service when each copy becomes ready. Subsequent retries
 ignore newly added routes; retained original scopes never expand implicitly. Each service group processes in a separate
 transaction/claim, and processing continues after another group's transient failure before requesting a raw-event retry.
 Ready/purged copies are deduplication tombstones; retries do not upload them again. Runtime callback checks remain live,
@@ -332,9 +327,12 @@ This feed is independent of the outbound `/events`, callback delivery, and busin
 
 Service rotation inserts a new credential under the same service and bounds the old credential's overlap to 24 hours
 (or its earlier expiry). A once-shown key, separate IDs, approximate usage timestamps and rotation/revocation audit support
-a staged caller switch; immediate revoke remains available. Callback retries use the current endpoint signing version;
-`x-envoy-key-version` identifies the signing secret version independently of payload API versions/algorithm versions.
-Consumers preinstall both secrets, switch the endpoint, then drain old requests before removing old verification.
+a staged caller switch; immediate revoke remains available. Each Service callback instead has one current signing secret.
+It is replaced manually only while the endpoint is paused and all in-flight attempts have finished or recovered. Pausing
+fences new claims but keeps live attempts visible. The worker signs `timestamp + "." + raw UTF-8 body` using HMAC-SHA256;
+retries preserve event identity/body and use the attempt's current Unix seconds. Consumers enforce a fixed 300-second
+window and constant-time verification before durable event-ID deduplication. The `v1=` algorithm prefix and payload API
+version are not secret selectors. Internal envelope `key_version` still selects the encryption KEK only.
 
 Submission attempts store a nullable confirmed `rfc_message_id`, separate from the Envoy resource/submission ID and
 provider `external_message_id`. Postmark sends an attempt-specific documented custom RFC header and confirms it after
@@ -378,5 +376,5 @@ current policy is checked again after I/O. A read-only guard commit failure cann
 Downloads apply the same proof/digest checks while erasure/reprocessing waits on resource locks. These locks authorize
 an in-flight read; they cannot recall a previously downloaded copy. Retention semantics of `contentAvailable` are unchanged.
 
-This new project retains only its authoritative initial schema and final contract. There are no legacy scan adapters,
+This development project preserves executed migration checksums and advances directly to the final schema with `002_service_domain_permissions.sql`; no data conversion layer exists. There are no legacy scan adapters,
 unchecked-content bypasses, migration-adoption patches, provider capability compatibility views or automatic historical resends.

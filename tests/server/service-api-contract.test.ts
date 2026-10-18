@@ -87,7 +87,7 @@ describe("public API boundary", () => {
     expect(result).toContain("Recipient rejected");
     expect(result).toContain("a@example.net");
   });
-  it("requires ready state, scan policy and service ownership before reading an attachment", async () => {
+  it.each([true,false])("requires ready state, scan policy and current domain permission before returning attachment bytes (%s)", async authorized => {
     vi.stubEnv("CLAMAV_HOST", "clamav");
     expect(await getInboundAttachment("inb", "att", "other-service")).toBeNull();
     const [sql, parameters] = vi.mocked(query).mock.calls[0];
@@ -97,8 +97,10 @@ describe("public API boundary", () => {
     const sha256=digest(Buffer.from("safe-attachment"));
     const file={file_name:'汉字\r\n".html',sha256,content_type:"text/html",object_key:"private/path",size_bytes:"15",content_purged_at:null};
     vi.mocked(query).mockResolvedValueOnce({rows:[file]} as never).mockResolvedValueOnce({rows:[]} as never)
-      .mockResolvedValueOnce({rows:[file]} as never).mockResolvedValueOnce({rows:[{status:"clean",expected_sha256:sha256,scanned_sha256:sha256,policy_version:"1",attempt_count:1,reason:null}]} as never);
+      .mockResolvedValueOnce({rows:[file]} as never).mockResolvedValueOnce({rows:[{status:"clean",expected_sha256:sha256,scanned_sha256:sha256,policy_version:"1",attempt_count:1,reason:null}]} as never)
+      .mockResolvedValueOnce({rows:authorized?[{id:"inb"}]:[],rowCount:authorized?1:0} as never);
     const response = await getInboundAttachment("inb", "att", "svc");
+    if(!authorized){expect(response).toBeNull();return;}
     expect(response?.headers.get("content-type")).toBe("application/octet-stream");
     expect(response?.headers.get("content-disposition")).toContain("attachment;");
     expect(response?.headers.get("content-disposition")).not.toMatch(/[\r\n]/);
@@ -122,14 +124,15 @@ describe("public API boundary", () => {
   });
   it("publishes response schemas, filters, errors and attachment authorization in OpenAPI", async () => {
     const document = await openapi(new Request("https://envoy.test/api/v1/openapi.json")).json();
-    expect(document.components.schemas.MailDiscovery.properties.mailboxLogin.const).toBe(false);
+    expect(document.components.schemas.MailDiscovery.properties.kind.const).toBe("domain_permissions");
+    expect(document.components.schemas.MailDiscovery.properties.domains.items.properties.permissions.required).toEqual(["send","receive"]);
     expect(document.components.schemas.InboundDetail.required).toContain("envelopeRecipients");
     expect(document.components.schemas.InboundDetail.required).toEqual(expect.arrayContaining(["messageId","authorDate","ingressReceivedAt","readyAt"]));
     expect(document.components.schemas.SubmissionAttempt.required).toEqual(expect.arrayContaining(["rfcMessageId","rfcMessageIdStatus"]));
     expect(document.paths["/inbound-changes"].get.responses["410"]).toBeDefined();
     expect(document.components.schemas.InboundChangePage.required).toEqual(expect.arrayContaining(["data","nextCursor","hasMore","watermark","retention"]));
     for(const resource of ["messages","inbound-messages","files"]) expect(document.paths[`/${resource}/{id}/content`].delete.responses["202"]).toBeDefined();
-    expect(document.webhooks.inboundReceived.post.parameters.some((header:{name:string})=>header.name==="x-envoy-key-version")).toBe(true);
+    expect(document.webhooks.inboundReceived.post.parameters.map((header:{name:string})=>header.name)).toEqual(["x-envoy-id","x-envoy-timestamp","x-envoy-signature"]);
     expect(document.paths["/capabilities"].get.responses["200"].content["application/json"].schema.required).toContain("mail");
     expect(document.paths["/capabilities"].get.responses["200"].content["application/json"].schema.properties.attachmentSafety).toBeDefined();
     const capabilities=document.paths["/capabilities"].get.responses["200"].content["application/json"].schema.properties;

@@ -151,31 +151,15 @@ export const requestDiagnosticSchema = z.object({ requestId: z.string(), method:
 export const suppressionSchema = z.object({ id: z.string(), scope: z.enum(["global", "product", "list"]), listId: nullableText, email: z.string(), reason: z.string(), source: z.string(), expiresAt: iso.nullable(), createdAt: iso });
 
 // Public discovery contains configuration facts separately from transport evidence.
-const mailReasonSchema = z.enum(["SENDER_NOT_AUTHORIZED", "SENDING_DOMAIN_DISABLED", "NO_ELIGIBLE_ROUTE", "INBOUND_ROUTE_DISABLED", "INBOUND_DOMAIN_DISABLED", "INBOUND_INGRESS_UNAVAILABLE", "ENVELOPE_RECIPIENT_UNAVAILABLE"]);
-const mailPermissionBase = { id: z.string(), domain: z.string() };
-const senderPermissionSchema = z.object({ ...mailPermissionBase, scope: z.enum(["product", "service"]), authorization: z.enum(["granted", "revoked"]),
-  sending: z.object({ state: z.enum(["configured", "unavailable"]), reasonCodes: z.array(mailReasonSchema), categories: z.array(nullableText), runtimeAvailability: z.literal("unknown") }),
-  evidence: z.object({ lastAcceptedAt: iso.nullable(), lastDeliveredAt: iso.nullable() }),
-});
-const receiverPermissionSchema = z.object({ ...mailPermissionBase, localPartPattern: z.string(),
-  receiving: z.object({ state: z.enum(["configured", "unavailable"]), reasonCodes: z.array(mailReasonSchema), externalReadiness: z.literal("unknown") }),
-  notification: z.object({ mode:z.enum(["polling","callback_and_polling"]),state:z.enum(["configured","unavailable"]),
-    callbackEndpointId:nullableText,reasonCodes:z.array(z.enum(["CALLBACK_BINDING_INVALID","CALLBACK_DISABLED","CALLBACK_EVENT_NOT_SUBSCRIBED"])),recoveryResource:z.literal("/api/v1/inbound-changes") }),
-  evidence: z.object({ lastReceivedAt: iso.nullable() }),
-});
-export const mailDiscoverySchema = z.object({
-  kind: z.literal("address_permissions"), mailboxLogin: z.literal(false),
-  senders: z.array(z.discriminatedUnion("kind", [
-    senderPermissionSchema.extend({ kind: z.literal("exact_address"), address: z.email() }),
-    senderPermissionSchema.extend({ kind: z.literal("domain"), address: z.null() }),
-  ])),
-  receivers: z.array(z.discriminatedUnion("kind", [
-    receiverPermissionSchema.extend({ kind: z.literal("exact_address"), address: z.email() }),
-    receiverPermissionSchema.extend({ kind: z.literal("local_part_pattern"), address: z.null() }),
-  ])),
-  callbacks: z.object({ configuration: z.enum(["configured", "unavailable"]), businessProcessing: z.literal("unknown"), lastDeliveredAt: iso.nullable(),
-    latest: z.object({ status: z.enum(["pending", "delivering", "delivered", "retrying", "dead_letter", "terminated"]), attemptCount: z.number().int(), deliveredAt: iso.nullable() }).nullable(),
-  }),
+const mailStateSchema=z.object({state:z.enum(["configured","unavailable"]),reasonCodes:z.array(z.string())});
+export const mailDiscoverySchema=z.object({
+  kind:z.literal("domain_permissions"),
+  domains:z.array(z.object({id:z.string(),domain:z.string(),authorization:z.enum(["granted","revoked"]),revision:z.number().int().optional(),
+    permissions:z.object({send:z.boolean(),receive:z.boolean()}),sending:mailStateSchema,receiving:mailStateSchema,
+    notification:mailStateSchema.extend({mode:z.enum(["polling","callback_and_polling"])}),
+    evidence:z.object({lastAcceptedAt:iso.nullable(),lastDeliveredAt:iso.nullable(),lastReceivedAt:iso.nullable()})})),
+  callbacks:z.object({configuration:z.enum(["configured","unavailable"]),businessProcessing:z.literal("unknown"),lastDeliveredAt:iso.nullable(),
+    latest:z.object({status:z.enum(["pending","delivering","delivered","retrying","dead_letter","terminated"]),attemptCount:z.number().int(),deliveredAt:iso.nullable()}).nullable()})
 });
 
 export const inboundReceivedEventSchema = z.object({

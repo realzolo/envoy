@@ -9,7 +9,7 @@ const pageParameters = [query("limit", { type: "integer", minimum: 1, maximum: 1
 const id = { name: "id", in: "path", required: true, schema: { type: "string" } };
 const headers = { "X-Request-ID": { schema: { type: "string" } }, "RateLimit-Limit": { schema: { type: "integer" } }, "RateLimit-Remaining": { schema: { type: "integer" } }, "RateLimit-Reset": { description: "Seconds until the current fixed window resets", schema: { type: "integer" } } };
 const error = (description: string) => ({ description, content: { "application/problem+json": { schema: ref("Problem") } }, headers });
-const errors = { "400": error("Invalid syntax, cursor or filter"), "401": { ...error("Missing or invalid bearer credential"), headers: { ...headers, "WWW-Authenticate": { schema: { type: "string" } } } }, "410": error("Inbound cursor expired; history gap requires reconciliation"), "404": error("Resource unavailable or not owned by this service"), "409": error("Idempotency conflict, duplicate risk acknowledgement, CONTENT_BUSY, CONTENT_SHARED, FILE_NOT_READY or FILE_UNAVAILABLE"), "413": error("Request byte limit exceeded"), "415": error("Unsupported content type"), "422": error("Contract or business validation failed"), "429": { ...error("Service request limit exceeded"), headers: { ...headers, "Retry-After": { schema: { type: "integer" } } } }, "503": error("Dependency temporarily unavailable; retry writes using the same idempotency key") };
+const errors = { "400": error("Invalid syntax, cursor or filter"), "401": { ...error("Missing or invalid bearer credential"), headers: { ...headers, "WWW-Authenticate": { schema: { type: "string" } } } }, "403": error("Independent Service permission is required for this operation"), "410": error("Inbound cursor expired; history gap requires reconciliation"), "404": error("Resource unavailable or not owned by this service"), "409": error("Idempotency conflict, duplicate risk acknowledgement, CONTENT_BUSY, CONTENT_SHARED, FILE_NOT_READY or FILE_UNAVAILABLE"), "413": error("Request byte limit exceeded"), "415": error("Unsupported content type"), "422": error("Contract or business validation failed"), "429": { ...error("Service request limit exceeded"), headers: { ...headers, "Retry-After": { schema: { type: "integer" } } } }, "503": error("Dependency temporarily unavailable; retry writes using the same idempotency key") };
 function operation(summary: string, schema: object, parameters: object[] = [], status = "200") { return { summary, parameters, responses: { [status]: { description: "Success", headers, content: json(schema) }, ...errors } }; }
 const body = (name: string, required = true) => ({ requestBody: { required, content: json(ref(name)) } });
 
@@ -18,7 +18,7 @@ export function GET(request: Request) {
   // Cross-field and UTF-8 byte constraints cannot be inferred from Zod refinements.
   const create = schemas.CreateMessage;
   create.anyOf = [{ required: ["html"], properties: { html: { minLength: 1 } } }, { required: ["text"], properties: { text: { minLength: 1 } } }];
-  create.description = "From is supplied directly and must be authorized by a sender grant. To, Cc and Bcc together contain 1–50 unique recipients. Recipient roles and visible headers are preserved. Inline attachments require unique contentId. Header names are case-insensitive and may not repeat; system, routing and authentication headers are reserved. Attachments belong to this service, are retained and currently safety-approved, total at most 20 MB and each file is at most 10 MB. Only supported eligible routes are used; unsupported features fail explicitly.";
+  create.description = "From is supplied directly and must be authorized by an active Service domain sending grant. To, Cc and Bcc together contain 1–50 unique recipients. Recipient roles and visible headers are preserved. Inline attachments require unique contentId. Header names are case-insensitive and may not repeat; system, routing and authentication headers are reserved. Attachments belong to this service, are retained and currently safety-approved, total at most 20 MB and each file is at most 10 MB. Only supported eligible routes are used; unsupported features fail explicitly.";
   create["x-totalRecipientMinimum"] = 1;
   create["x-totalRecipientMaximum"] = 50;
   if (create.properties) {
@@ -53,21 +53,21 @@ export function GET(request: Request) {
       "/messages/{id}/attempts": { get: operation("Read service-scoped submission attempts and associated recipients", page("SubmissionAttempt"), [id, ...pageParameters]) },
       "/requests/{requestId}": { get: operation("Read an authenticated request, including rejection before message acceptance", ref("RequestDiagnostic"), [{ ...id, name: "requestId" }]) },
       "/files": { post: {
-        ...operation("Reliably receive private bytes and schedule safety processing; 201 does not mean usable", ref("File"), [{ name: "X-File-Name", in: "header", required: true, description: "URI-encoded UTF-8 plain file name, max 255 decoded characters", schema: { type: "string" } }], "201"),
+        ...operation("Reliably receive private bytes and schedule safety processing; 201 does not mean usable", ref("File"), [{name:"X-Sending-Domain",in:"header",required:true,description:"Actual From domain; file ownership freezes this domain",schema:{type:"string"}}, { name: "X-File-Name", in: "header", required: true, description: "URI-encoded UTF-8 plain file name, max 255 decoded characters", schema: { type: "string" } }], "201"),
         requestBody: { required: true, content: { "application/octet-stream": { schema: { type: "string", contentEncoding: "binary", "x-maxBytes": 10_000_000 } } }, description: "Raw nonempty file bytes, max 10,000,000 bytes; Content-Type can be any valid media type without parameters." },
       } },
       "/files/{id}/download": {get:{summary:"Download retained, safety-approved service-owned bytes",parameters:[id],responses:{"200":{description:"Private download",content:{"application/octet-stream":{schema:{type:"string",contentEncoding:"binary"}}}},...errors}}},
       "/files/{id}/reprocess": {post:operation("Request audited reprocessing; malicious, integrity-blocked or purged resources cannot be retried",{type:"object",properties:{id:{type:"string"},processing:{const:true}}},[id],"202")},
       "/inbound-messages/{id}/attachments/{attachmentId}/reprocess": {post:operation("Request audited reprocessing of this service attachment",{type:"object",properties:{id:{type:"string"},processing:{const:true}}},[id,{...id,name:"attachmentId"}],"202")},
       "/files/{id}": { get: operation("Read attachment metadata owned by this service; storage keys are private", ref("File"), [id]) },
-      "/capabilities": { get: operation("Discover product/service, address permissions, inbound routes, configuration readiness and transport evidence", { type: "object", required: ["apiVersion", "service", "product", "limits", "content", "features", "mail", "attachmentSafety", "routing", "resources"], properties: {
+      "/capabilities": { get: operation("Discover business identity, domain permissions, configuration readiness and transport evidence", { type: "object", required: ["apiVersion", "service", "product", "limits", "content", "features", "mail", "attachmentSafety", "routing", "resources"], properties: {
         apiVersion: { const: "v1" },
         service: { type: "object", required: ["id", "name"], properties: { id: { type: "string" }, name: { type: "string" } } },
         product: { type: "object", required: ["id", "name"], properties: { id: { type: "string" }, name: { type: "string" } } },
         limits: { type: "object", properties: { recipientsPerMessage: { const: 50 }, contentBytesPerPart: { const: 2_000_000 }, requestBytes: { const: 4_200_000 }, fileBytes: { const: 10_000_000 }, attachmentsPerMessage: { const: 20 }, attachmentBytesPerMessage: { const: 20_000_000 }, metadataEntries: { const: 20 }, requestsPerMinute: { type: "integer" } } },
         content: { type: "object", properties: { ownership: { const: "caller" }, formats: { type: "array", items: { enum: ["text/plain", "text/html"] } }, requiresRenderedContent: { const: true } } },
         features: { type: "object", additionalProperties: { type: ["boolean", "string"] } },
-        mail: { ...ref("MailDiscovery"), description: "Service-scoped address permissions, never mailbox login credentials. Configuration and historical evidence do not guarantee current delivery." },
+        mail: { ...ref("MailDiscovery"), description: "Service-scoped domain sending/receiving permissions; no APP or mailbox entities. Configuration and historical evidence do not guarantee current delivery." },
         attachmentSafety: {type:"object",required:["processing","mode","policyVersion","runtimeAvailability"],properties:{processing:{const:"asynchronous"},mode:{const:"require_clean"},policyVersion:{type:"string"},runtimeAvailability:{const:"unknown"}}},
         routing: { type: "string" }, resources: { type: "array", items: { type: "string" } },
       } }) },
@@ -75,9 +75,8 @@ export function GET(request: Request) {
     webhooks: {
       inboundReceived: { post: {
         summary: "Signed inbound receipt; HTTP success acknowledges durable receipt, not completed business processing",
-        description: "At least once. Reject timestamps outside your replay window; verify HMAC-SHA256(timestamp + '.' + raw body) in constant time. Deduplicate on x-envoy-id, which equals payload.id. Use the service key to fetch content and attachments. Only this service's matched SMTP recipients are included.",
+        description: "At least once. Accept at most 300 seconds of absolute clock skew; verify HMAC-SHA256(timestamp + '.' + the raw UTF-8 body) with the single current callback secret in constant time. Each retry signs the same event ID/body using its current attempt timestamp. Deduplicate on x-envoy-id, which equals payload.id. Use the service key to fetch content and attachments. Only this service's matched SMTP recipients are included.",
         security: [], parameters: [
-          { name: "x-envoy-key-version", in:"header", required:true, description:"Signing key version; unrelated to payload apiVersion or signature algorithm v1", schema:{type:"string"} },
           { name: "x-envoy-id", in: "header", required: true, schema: { type: "string" } },
           { name: "x-envoy-timestamp", in: "header", required: true, schema: { type: "string", pattern: "^[0-9]+$" } },
           { name: "x-envoy-signature", in: "header", required: true, schema: { type: "string", pattern: "^v1=[a-f0-9]{64}$" } },

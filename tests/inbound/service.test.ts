@@ -24,8 +24,7 @@ import { persistInbound } from "@/modules/inbound/service";
 const route = {
   id: "ir_test",
   product_id: "prd_test",
-  service_id: null,
-  callback_endpoint_id: null,
+  service_id: "svc_test",
   recipients: ["support@example.test"]
 };
 
@@ -45,7 +44,7 @@ const message = {
 function configureTransactions() {
   mocks.transaction.mockImplementation(async (callback: (client: { query: ReturnType<typeof vi.fn> }) => Promise<unknown>) => {
     const client = {
-      query: vi.fn().mockImplementation(async (sql: string) => sql.includes("FROM inbound_routes") ? { rows: [route], rowCount: 1 } : sql.includes("FROM inbound_receipts") ? { rows:[{ routes:[route],ingress_received_at:new Date() }],rowCount:1 } : { rows: [{ id: "inb_test",ready_at:new Date() }], rowCount: 1 })
+      query: vi.fn().mockImplementation(async (sql: string) => sql.includes("FROM inbound_routes") ? { rows: [route], rowCount: 1 } : sql.includes("FROM inbound_receipts") ? { rows:[{ routes:[route],ingress_received_at:new Date() }],rowCount:1 } : { rows: [{ id: "inb_test", domain:"example.test",ready_at:new Date() }], rowCount: 1 })
     };
     return callback(client);
   });
@@ -63,7 +62,7 @@ describe("inbound attachment scanning", () => {
 
   it("keeps a scanning message retryable after an object-store failure", async () => {
     configureTransactions();
-    mocks.query.mockImplementation(async (sql:string) => sql.startsWith("SELECT id,status,content_purged_at") ? {rows:[],rowCount:0} : {rows:[{id:"inb_test",status:"scanning",received_at:new Date()}],rowCount:1});
+    mocks.query.mockImplementation(async (sql:string) => sql.startsWith("SELECT id,status,content_purged_at") ? {rows:[],rowCount:0} : {rows:[{id:"inb_test",domain:"example.test",status:"scanning",received_at:new Date()}],rowCount:1});
     mocks.put.mockRejectedValueOnce(new Error("S3 temporarily unavailable")).mockResolvedValueOnce(undefined);
 
     await expect(persistInbound({
@@ -74,7 +73,7 @@ describe("inbound attachment scanning", () => {
     })).rejects.toThrow("S3 temporarily unavailable");
     expect(mocks.query.mock.calls.some(([sql]) => (String(sql).includes("status='rejected'") || String(sql).includes("'rejected',$13")) && !String(sql).includes("delivery_scope<>ALL"))).toBe(false);
 
-    mocks.query.mockResolvedValue({ rows: [{ id: "inb_test", status: "scanning" }], rowCount: 1 });
+    mocks.query.mockResolvedValue({ rows: [{ id: "inb_test", domain:"example.test", status: "scanning" }], rowCount: 1 });
     await expect(persistInbound({
       providerAccountId: "pa_test",
       webhookEndpointId: "pwe_test",
@@ -86,7 +85,7 @@ describe("inbound attachment scanning", () => {
 
   it("rejects message-size violations without retrying the processing failure", async () => {
     configureTransactions();
-    mocks.query.mockImplementation(async (sql:string) => sql.startsWith("SELECT id,status,content_purged_at") ? {rows:[],rowCount:0} : {rows:[{id:"inb_test",status:"scanning",received_at:new Date()}],rowCount:1});
+    mocks.query.mockImplementation(async (sql:string) => sql.startsWith("SELECT id,status,content_purged_at") ? {rows:[],rowCount:0} : {rows:[{id:"inb_test",domain:"example.test",status:"scanning",received_at:new Date()}],rowCount:1});
 
     await expect(persistInbound({
       providerAccountId: "pa_test",

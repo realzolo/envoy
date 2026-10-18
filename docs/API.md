@@ -7,9 +7,9 @@ Envoy exposes one native-mail service API at `/api/v1`. `GET /api/v1` lists reso
 
 Use `Authorization: Bearer <service-key>`. Each key belongs to one service and product. Resource ownership is checked
 on every request, including files, events, and request diagnostics; another service's identifiers are not accessible.
-`GET /capabilities` returns product/service identity, current limits, native mail features, explicit sender/receiver scopes, configuration status and observed evidence. See the business connection contract below.
+`GET /capabilities` returns product/service identity, current limits, native mail features, explicit domain sending/receiving permissions, configuration status and observed evidence. See the business connection contract below.
 
-An administrator grants the product or service an active domain or exact sender address under **Service Credentials**. Verification
+An administrator grants each business Service explicit domain sending/receiving permissions under **Service Credentials**. Product-wide inheritance and exact-address grants are not supported. Verification
 of a domain on a provider is a separate prerequisite. A caller may directly specify any authorized From address and name.
 Both API submissions and console test messages supply From, Reply-To, and category directly.
 
@@ -38,7 +38,7 @@ Both API submissions and console test messages supply From, Reply-To, and catego
 
 | Field | Contract |
 |---|---|
-| `from` | Required `{email,name?}`; address must match a current sender grant |
+| `from` | Required `{email,name?}`; the From domain must have current Service sending permission |
 | `to`, `cc`, `bcc` | Arrays of `{email,name?}`, default empty; 1–50 recipients combined, unique across roles |
 | `replyTo` | Array of `{email,name?}`, default empty, at most 10 addresses |
 | `subject` | Header-safe string, defaults to empty, at most 998 characters |
@@ -144,8 +144,9 @@ Callbacks use the same canonical event and diagnostic model as polling. For life
 expresses the event fact; `data.currentLifecycle` is the current recipient projection. A late historical event can therefore
 report `delivered` while a separately authorized newer submission is still `submitting`. Events may be repeated or arrive out of order;
 deduplicate by stable event ID and query the current resource when necessary. Submission-scoped provider events remain
-submission-scoped rather than inventing recipient attribution. Verify HMAC-SHA256 over `timestamp + "." + body`, reject
-stale timestamps, and deduplicate `x-envoy-id`. Configure callback URLs and signing secrets through administrator settings.
+submission-scoped rather than inventing recipient attribution. Verify HMAC-SHA256 over `timestamp + "." + original UTF-8 body`
+with one current secret, enforce at most 300 seconds of absolute clock skew, and durably deduplicate `x-envoy-id`.
+Configure the unified callback URL and secret through administrator settings.
 
 ## Retention and time
 
@@ -156,58 +157,30 @@ content cleanup; identifiers, state, errors, and idempotency summaries remain us
 
 ## Business mail connection and discovery
 
-Business configuration consists of the Envoy base URL, one service key and the chosen authorized From/receiving address(es). Callback integrations additionally configure their HTTPS URL and signing secret issued by Envoy; polling-only integrations use the same durable inbound change feed. Business services never need administrator
-credentials, provider accounts, DNS records, or domain verification APIs. Each APP can bind its own
-service key; APP identity, mailbox purposes, conversations, assignees and ticket links belong to the caller.
+Business configuration consists of one Envoy URL, a Service Key, and optionally one unified business callback URL and signing secret. A Service can use multiple explicitly authorized domains. Business APPs, exact address purposes, templates and APP routing belong entirely to the caller; Envoy never needs APP identifiers or a mailbox entity.
 
-`GET /capabilities` still returns `product`, `service`, limits and native features. Its new `mail` object is the
-provider-neutral integration contract. These are address permissions, **not IMAP/SMTP login accounts** (`mailboxLogin:false`).
-All entries and evidence are scoped to this credential's service; product sender grants apply to each service, but
-never grant access to another service's mail or inbound routes.
+`GET /capabilities` returns `product`, `service`, limits and native features plus:
 
-| Field | Meaning |
-|---|---|
-| `mail.senders[].kind` | `exact_address` has a complete `address`; `domain` has `address:null` and authorizes From addresses only on that exact `domain`, not subdomains |
-| `scope`, `authorization` | Grant applies to `product` or `service`; current state is `granted` or `revoked`. Disabled grants remain discoverable here for diagnosis |
-| `sending.state` | `configured` means an active grant/domain and a currently configured eligible target with a verified identity and usable credential exist; otherwise `unavailable` |
-| `sending.categories` | Categories with an eligible configured target; a `null` entry means the policy has no category restriction |
-| `sending.runtimeAvailability` | Always `unknown`: discovery does not reserve capacity, evaluate the eventual content, guarantee provider availability, or override live authorization checks |
-| `evidence.lastAcceptedAt` / `lastDeliveredAt` | Latest actual canonical acceptance/delivery fact for this service and sender range, or `null` (unverified). Includes recipient and submission facts; a submission delivery fact does not prove every recipient succeeded |
-| `mail.receivers[].kind` | `exact_address` has a complete `address`; `local_part_pattern` has `address:null`, an exact `domain`, and `localPartPattern`. `*` matches zero or more local-part characters; no implicit plus-address expansion |
-| `receiving.state` | `configured` means an active Envoy route/domain and secured active ingress with a supported envelope-recipient contract; otherwise `unavailable`. It says nothing about MX or external provider receiving setup |
-| `receiving.externalReadiness` | `unknown`: domain verification never establishes inbound reachability. A pattern describes configured routing, not an enumeration of real mailboxes |
-| `evidence.lastReceivedAt` | Envoy database observation time of the latest ready inbound copy for this service matching that route, or `null` (unverified). Does not use the sender-controlled Date header; historical evidence does not guarantee future receipt |
-| `mail.callbacks.configuration` | `configured` if this service has an active callback endpoint, else `unavailable`; subscriptions and per-route callback choices still determine which events are delivered |
-| `mail.callbacks.latest` | Most recently created callback delivery's `status`, `attemptCount`, `deliveredAt`; `null` when none exists. Pending with zero attempts is not successful delivery |
-| `mail.callbacks.lastDeliveredAt` | Latest successful callback HTTP delivery across this service's endpoints, or `null`. Historical success does not establish that another endpoint/event works |
-| `mail.callbacks.businessProcessing` | Always `unknown`; an HTTP 2xx acknowledges receipt, not a completed conversation or business transaction |
+```json
+{"kind":"domain_permissions","domains":[{"id":"sd_example","domain":"mail.example.com","authorization":"granted","revision":1,"permissions":{"send":true,"receive":true},"sending":{"state":"configured","reasonCodes":[]},"receiving":{"state":"configured","reasonCodes":[]},"notification":{"mode":"callback_and_polling","state":"configured","reasonCodes":[]},"evidence":{"lastAcceptedAt":null,"lastDeliveredAt":null,"lastReceivedAt":null}}],"callbacks":{"configuration":"configured","latest":null,"lastDeliveredAt":null,"businessProcessing":"unknown"}}
+```
 
-`reasonCodes` are stable machine values; callers should handle unknown future codes with a generic operator-action message:
+The example is the `mail` object, not the entire response. Domain IDs are stable `sending_domains` IDs. Permission is independent of DNS and transport readiness. `configured` never guarantees external delivery or receiving; evidence is an actual retained fact or null. No mailbox list is invented. An exact domain grant does not include subdomains. Disabled grants remain discoverable with `authorization:"revoked"` and false effective permissions.
 
-| Code | Business action |
-|---|---|
-| `SENDER_NOT_AUTHORIZED` | Stop using that From address; ask the Envoy operator to review the grant |
-| `SENDING_DOMAIN_DISABLED` | Ask the Envoy operator to restore sending infrastructure |
-| `NO_ELIGIBLE_ROUTE` | Ask the Envoy operator to configure a usable outbound route/category |
-| `INBOUND_ROUTE_DISABLED` | Choose another configured receiving address or ask the operator |
-| `INBOUND_DOMAIN_DISABLED` | Ask the operator to review the inbound domain |
-| `INBOUND_INGRESS_UNAVAILABLE` | Ask the operator to restore secured provider ingress |
-| `ENVELOPE_RECIPIENT_UNAVAILABLE` | Ownership cannot be established safely; the operator must use an ingress with a documented trusted envelope contract |
+Reason codes include `DOMAIN_SEND_NOT_AUTHORIZED`, `DOMAIN_RECEIVE_NOT_AUTHORIZED`, `SENDING_DOMAIN_DISABLED`, `INBOUND_DOMAIN_DISABLED`, `NO_ELIGIBLE_ROUTE`, `INBOUND_INGRESS_UNAVAILABLE`, `CALLBACK_DISABLED` and `CALLBACK_EVENT_NOT_SUBSCRIBED`. Handle unknown future codes generically. The send API retains `SENDER_NOT_AUTHORIZED` and `NO_ELIGIBLE_ROUTE` problem codes.
 
-DNS records, credential failures and provider setup details remain in Envoy's administrator console. The sender grant
-and From/domain/product state are rechecked during acceptance, submission and retry. A prior `configured` response
-cannot bypass revocation. The send API continues to return problem codes such as `SENDER_NOT_AUTHORIZED` and
-`NO_ELIGIBLE_ROUTE`, with a service-owned `requestId`. An idempotent replay returns the original durable acceptance
-receipt; it does not send again or bypass the worker's current checks.
+Every protected API rechecks Service ownership and current corresponding domain permission, including files, events, changes, retries, content purge and background callbacks. Sending-only callers can query their own authorized outgoing message/status resources but obtain no incoming resources. Revocation hides known resource IDs as well as list results. A single inbound copy spanning several private envelope domains is indivisible: if any domain loses receiving permission, the complete resource is unavailable rather than exposing a partial unsafe projection.
+
+`POST /files` requires `X-Sending-Domain: mail.example.com` in addition to `X-File-Name`. Files freeze this sending domain, and a message can only attach files from its own From domain. Credentials do not create a domain-independent file pool. Suppression list API calls require the independently enabled `suppression_management_allowed` Service permission, default false; ordinary domain credentials cannot manage product-wide suppression policy.
+
+Key rotation keeps the same Service, domain grants, resource ownership, cursors and idempotency. An idempotent acceptance replay returns the original receipt and never resends the mail; background execution rechecks current permission.
 
 ## Inbound ownership, standard fields and callbacks
 
 Routing uses provider-authenticated SMTP recipients, never visible To/Cc/Bcc, `Delivered-To`, `X-Original-To`, arbitrary
-MIME headers, or a provider's outbound domain verification status. A matching sender grant does not confer receiving
-permission. Routes without a service are administrator-only; they are not inherited by every service in the product.
+MIME headers, or a provider's outbound domain verification status. Sending permission does not confer receiving permission. Domain ingress routes require an explicitly authorized target Service; no Product inheritance or per-address business routing exists.
 
-Every matching route participates. Identical exact patterns can explicitly target different services. Overlapping
-routes for the same service merge into one copy with the union of matched envelope addresses; each distinct active
+Every matching route participates. A domain may explicitly target different services. Routes for the same service merge into one copy with the union of matched envelope addresses; each distinct active
 callback endpoint selected by those routes receives one event. Other services receive separate IDs and private
 attachment ownership. Repeated provider message receipts do not create new copies, attachments or callbacks within
 the same service. A retry after a partial fanout resumes unfinished copies and retains successful ones. Mailgun uses
@@ -325,14 +298,11 @@ The stored-time list uses `inbound.` browse cursors. Malformed cursors return 40
 
 ## Receiver notifications and key rotation
 
-`mail.receivers[].receiving` describes ingress routing. Its independent `notification` contains `mode` (`polling` or
-`callback_and_polling`), `state`, a service-owned `callbackEndpointId` or null, `reasonCodes`, and
-`recoveryResource:"/api/v1/inbound-changes"`. No callback is valid polling-only configuration. A selected callback must
-belong to the service, be active and subscribe to `inbound.received`; violations report `CALLBACK_BINDING_INVALID`,
-`CALLBACK_DISABLED`, or `CALLBACK_EVENT_NOT_SUBSCRIBED`. A healthy unrelated callback cannot make a route's notification
-configured. Discovery recalculates configuration immediately; sending/receipt/callback execution still checks current
-permissions and subscriptions. Subscription removal dead-letters pending/retrying affected callbacks. Already in-flight
-HTTP requests may finish. HTTP 2xx acknowledges receipt only; business processing stays unknown.
+`mail.domains[].receiving` describes domain ingress readiness. Each Service has at most one callback endpoint. Its `notification` reports `polling` or `callback_and_polling` and current subscription/configuration errors. No callback is valid polling-only configuration. Receiving uses that unified callback automatically; ingress routes never select their own signing secrets or callback endpoints.
+
+Subscribe to `service.permissions_changed` to invalidate cached authorization. This signed event has `{id,apiVersion:"v1",type:"service.permissions_changed",occurredAt,data:{serviceId,productId}}`; it is committed atomically with grant updates/revocation and a durable outbox command. Refresh capabilities to observe the new truth. This notification is independent of now-revoked domain mail access. A bounded cache expiry is still needed if notification delivery fails.
+
+Subscription removal dead-letters affected pending/retrying callbacks; already in-flight HTTP requests may finish. A 2xx acknowledges receipt, not completion of the caller's business processing.
 
 Administrator `credential.rotate` creates a **new credential ID for the same service**, returns the plaintext once,
 `previousCredentialId`, `serviceId` and `overlapUntil`. The old key remains valid until its existing expiry or at most
@@ -341,13 +311,21 @@ usage observations), then explicitly revoke the old ID. `credential.revoke` is i
 History, file ownership, rate limits, stream cursors and idempotency are service-scoped, not credential-scoped.
 Never distribute administrator keys or provider credentials to perform this switch.
 
-Callbacks add `x-envoy-key-version`, the endpoint signing secret version used for that attempt. Neither payload
-`apiVersion` nor signature prefix `v1=` is a secret version. Install the new secret in the receiver alongside the old
-secret first; call administrator `callback.rotate_secret` with that preinstalled value; verify new-version deliveries;
-retain old verification until all in-flight requests plus the timestamp replay window have drained (at least seven
-minutes with the current two-minute lease/five-minute consumer window), then remove the old secret. Retries sign with
-the current secret. Accept only locally configured secrets, never a key supplied by the request. The example supports
-`ENVOY_CALLBACK_SECRET_NEXT` during this overlap.
+Each Service has one callback endpoint and one current signing secret. Envoy sends exactly three authentication headers:
+`x-envoy-id` (stable event ID), `x-envoy-timestamp` (current Unix seconds), and
+`x-envoy-signature: v1=<lowercase hex HMAC-SHA256>`. Sign the exact UTF-8 bytes of
+`timestamp + "." + rawBody`; `v1=` names the signature algorithm. Verify with the single locally configured secret,
+use a constant-time digest comparison, and accept at most 300 seconds of absolute clock skew before parsing the JSON.
+Check that `x-envoy-id` equals the authenticated body's ID and deduplicate it durably. Each retry keeps the same event
+ID and body and generates a fresh timestamp/signature. Payload `apiVersion` is independent of authentication.
+
+To replace a callback secret, pause the endpoint, wait until its in-flight count reaches zero, replace the single secret
+in both Envoy and the consumer, then resume and replay failed callbacks. Administrator `callback.replace_secret` rejects
+active endpoints and endpoints with in-flight attempts; it accepts a supplied 16–512 character secret or generates one
+shown once. Pausing prevents new dispatches without hiding already in-flight HTTP attempts. Expired attempts are closed
+by recovery while paused. Failed callbacks remain replayable after resuming, and `/inbound-changes` provides receive
+compensation. Callers must reconcile outgoing message/event resources when notification delivery was paused. The example
+uses only `ENVOY_CALLBACK_SECRET`. This operation never changes the Service Key or its Service identity.
 
 ## Outbound RFC Message-ID and standard replies
 

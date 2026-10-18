@@ -9,7 +9,7 @@ const identity = { serviceId: `svc_deferred_${crypto.randomUUID()}`, serviceName
 const created: string[] = [];
 beforeAll(async () => {
   await query("INSERT INTO services(id,product_id,name) VALUES ($1,'prd_atlas',$2)", [identity.serviceId, identity.serviceName]);
-  await query("INSERT INTO sender_grants(id,product_id,service_id,sending_domain_id) VALUES ($1,'prd_atlas',$2,'sd_atlas')", [`grant_${identity.serviceId}`,identity.serviceId]);
+  await query("INSERT INTO service_domain_grants(id,service_id,sending_domain_id,send_allowed,receive_allowed) VALUES ($1,$2,'sd_atlas',true,true)", [`grant_${identity.serviceId}`,identity.serviceId]);
 });
 afterAll(async () => {
   for (const id of created) {

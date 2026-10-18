@@ -32,7 +32,7 @@ describe("service-owned outbound files", () => {
     expect(vi.mocked(query).mock.calls[0][1]).toEqual(["file_1", "svc_1"]);
   });
   it.each(["../secret", "a/b.pdf", "a\\b.pdf", "a\nInjected"])("rejects unsafe upload filename %s before storage", async fileName => {
-    await expect(uploadOutboundFile("svc_1", fileName, "application/pdf", new Uint8Array([1]))).rejects.toThrow("plain file name");
+    await expect(uploadOutboundFile("svc_1", fileName, "application/pdf", new Uint8Array([1]),"mail.example.test")).rejects.toThrow("plain file name");
     expect(query).not.toHaveBeenCalled();
     expect(objectStore).not.toHaveBeenCalled();
   });
@@ -40,8 +40,9 @@ describe("service-owned outbound files", () => {
     const put = vi.fn().mockResolvedValue(undefined);
     const remove = vi.fn();
     vi.mocked(objectStore).mockReturnValue({ put, delete: remove, get: vi.fn() });
+    vi.mocked(query).mockResolvedValue({rows:[{id:"domain_1"}],rowCount:1} as never);
     vi.mocked(transaction).mockRejectedValue(new Error("commit response lost"));
-    await expect(uploadOutboundFile("svc_1", "invoice.pdf", "application/pdf", new Uint8Array([1,2,3]))).rejects.toThrow("commit response lost");
+    await expect(uploadOutboundFile("svc_1", "invoice.pdf", "application/pdf", new Uint8Array([1,2,3]),"mail.example.test")).rejects.toThrow("commit response lost");
     expect(query).toHaveBeenCalledWith(expect.stringContaining("pending_object_deletions"), [expect.stringContaining("outbound/svc_1/file_")]);
     expect(put).toHaveBeenCalled();
     expect(remove).not.toHaveBeenCalled();

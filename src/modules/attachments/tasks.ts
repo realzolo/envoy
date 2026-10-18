@@ -1,3 +1,4 @@
+import {inboundDomainAccess,outboundDomainAccess} from "@/modules/core/resources/authorization";
 import { MAX_FILE_BYTES } from "@/lib/contracts";
 import type { PoolClient } from "pg";
 import { transaction } from "@/server/database";
@@ -87,7 +88,7 @@ export async function processAttachmentScan(resourceId: string) {
 export async function retryAttachmentScan(id:string,kind:Task["kind"],serviceId:string|null,actor:string) {
   return transaction(async client => {
     if (serviceId !== null) {
-      const owned = await client.query(kind === "outbound" ? "SELECT id FROM outbound_files WHERE id=$1 AND service_id=$2" : "SELECT a.id FROM inbound_attachments a JOIN inbound_messages i ON i.id=a.inbound_message_id WHERE a.id=$1 AND i.service_id=$2",[id,serviceId]);
+      const owned = await client.query(kind === "outbound" ? `SELECT id FROM outbound_files f WHERE id=$1 AND service_id=$2 AND ${outboundDomainAccess('f')}` : `SELECT a.id FROM inbound_attachments a JOIN inbound_messages i ON i.id=a.inbound_message_id WHERE a.id=$1 AND i.service_id=$2 AND ${inboundDomainAccess('i')}`,[id,serviceId]);
       if (!owned.rowCount) return null;
     }
     const file = await lockAttachment(client,id,kind);

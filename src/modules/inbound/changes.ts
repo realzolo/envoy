@@ -1,3 +1,4 @@
+import { inboundDomainAccess } from "@/modules/core/resources/authorization";
 import { transaction } from "@/server/database";
 
 export class InboundCursorError extends Error {
@@ -24,10 +25,10 @@ export async function listInboundChanges(serviceId: string, limit: number, curso
       after = parsed.position;
     }
     const rows = (await client.query<{ id: string; position: string; inbound_message_id: string; type: string; recorded_at: Date }>(
-      "SELECT id,position::text,inbound_message_id,type,recorded_at FROM inbound_changes WHERE service_id=$1 AND position>$2 AND position<=$3 ORDER BY inbound_changes.position LIMIT $4",[serviceId,after,head.position,limit+1])).rows;
+      `SELECT c.id,c.position::text,c.inbound_message_id,c.type,c.recorded_at FROM inbound_changes c JOIN inbound_messages i ON i.id=c.inbound_message_id WHERE c.service_id=$1 AND c.position>$2 AND c.position<=$3 AND ${inboundDomainAccess('i')} ORDER BY c.position LIMIT $4`,[serviceId,after,head.position,limit+1])).rows;
     const hasMore = rows.length > limit;
     const data = rows.slice(0,limit);
-    const end = data.at(-1)?.position ?? after;
+    const end = hasMore ? data.at(-1)!.position : head.position;
     return { data: data.map(row => ({ id: row.id, inboundMessageId: row.inbound_message_id,type: row.type,recordedAt: row.recorded_at.toISOString(),cursor: encode(serviceId,head.generation,row.position) })),
       nextCursor: encode(serviceId,head.generation,end),hasMore, watermark: encode(serviceId,head.generation,head.position),
       retention: { earliestCursor: reset, historyTruncated: head.floor !== "0", days: 90 },

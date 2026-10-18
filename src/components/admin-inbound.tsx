@@ -2,11 +2,11 @@
 
 import styles from "@/components/admin-views.module.css";
 
-import { Alert, Button, Collapse, Card, Descriptions, Grid, Input, Select, Space, Typography } from "@arco-design/web-react";
+import { Alert, Button, Collapse, Card, Descriptions, Grid, Select, Space, Typography } from "@arco-design/web-react";
 
 import { useState } from "react";
 
-import { ActionForm, type Data, type FormValues, requiredRule, rows, record, value, formValue, date, StatusTag, useAction, Field, Panel, Submit, Notice, ActionButton, EmptyState, Prerequisite, DataTable, TableCard, CopyableValue } from "@/components/admin-console-shared";
+import { ActionForm, type Data, rows, record, value, date, StatusTag, useAction, Field, Panel, Submit, Notice, ActionButton, EmptyState, Prerequisite, DataTable, TableCard, CopyableValue } from "@/components/admin-console-shared";
 import { ResourceDetail } from "@/components/admin-resource-detail";
 
 export function Inbound({ data }: { data: Data }) {
@@ -20,12 +20,11 @@ export function Inbound({ data }: { data: Data }) {
   const [webhookEndpointId, setWebhookEndpointId] = useState(value(endpoints[0] ?? {}, "id"));
   const [productId, setProductId] = useState(value(products[0] ?? {}, "id"));
   const [serviceId, setServiceId] = useState("");
-  const [callbackId, setCallbackId] = useState("");
   const domains = availableDomains;
   const [domainId, setDomainId] = useState(value(domains[0] ?? {}, "id"));
   const selectedDomainId = domains.some(domain => value(domain, "id") === domainId) ? domainId : value(domains[0] ?? {}, "id");
   const services = rows(data.services).filter(service => service.product_status === "active" && service.product_id === productId);
-  const callbacks = rows(data.callbacks).filter(callback => callback.product_id === productId && callback.service_id === serviceId && callback.status === "active" && Array.isArray(callback.subscribed_events) && callback.subscribed_events.includes("inbound.received"));
+
 
   function selectEndpoint(next: string | number) {
     const nextId = String(next);
@@ -36,24 +35,20 @@ export function Inbound({ data }: { data: Data }) {
   function selectProduct(next: string | number) {
     setProductId(String(next));
     setServiceId("");
-    setCallbackId("");
   }
 
   function selectService(next: string | number) {
     setServiceId(String(next));
-    setCallbackId("");
   }
 
-  async function submit(values: FormValues) {
+  async function submit() {
     try {
       await action.run({
         action: "inbound_route.create",
         webhookEndpointId,
         domainId: selectedDomainId,
         productId,
-        serviceId: serviceId || undefined,
-        callbackId: serviceId ? callbackId : undefined,
-        localPartPattern: formValue(values, "localPartPattern"),
+        serviceId,
       });
     } catch {
       // Inline notice owns failures from this request.
@@ -66,20 +61,18 @@ export function Inbound({ data }: { data: Data }) {
 
   return (
     <Space direction="vertical" size="large" className={styles.stack}>
-      <Alert type="info" content="Inbound routes use authenticated SMTP recipients. Domain verification does not prove receiving works. Overlapping routes merge within each service and distribute private copies across services. Routes without a service remain administrator-only. Check actual received mail and callback delivery separately; Resend currently quarantines mail without a documented envelope recipient." />
+      <Alert type="info" content="Inbound routes use authenticated envelope recipients and require domain receiving permission. Each business service receives one private copy and uses its unified callback. Domain verification does not prove receiving works; providers without a trustworthy envelope remain unavailable." />
       <Panel
         title="Create inbound route"
-        description="Route provider ingress by domain and local part"
+        description="Route the entire authorized domain to a business service; its unified callback is used automatically"
         defaultExpanded={inboundRoutes.length === 0}
       >
-        <ActionForm fieldErrors={action.fields} layout="vertical" onSubmit={values => void submit(values as FormValues)}>
+        <ActionForm fieldErrors={action.fields} layout="vertical" onSubmit={() => void submit()}>
           <Grid.Row gutter={[16, 0]}>
             <Grid.Col md={8} xs={24}><Field label="Provider endpoint" required><Select value={webhookEndpointId} options={endpoints.map(endpoint => ({ value: value(endpoint, "id"), label: `${value(endpoint, "account")} / ${value(endpoint, "type")}` }))} onChange={selectEndpoint} /></Field></Grid.Col>
             <Grid.Col md={8} xs={24}><Field label="Inbound domain" required><Select value={selectedDomainId} options={domains.map(domain => ({ value: value(domain, "id"), label: value(domain, "domain") }))} onChange={next => setDomainId(String(next))} /></Field></Grid.Col>
-            <Grid.Col md={8} xs={24}><Field field="localPartPattern" label="Local-part pattern" initialValue="*" required rules={requiredRule}><Input /></Field></Grid.Col>
             <Grid.Col md={8} xs={24}><Field label="Product" required><Select value={productId} options={products.map(product => ({ value: value(product, "id"), label: value(product, "name") }))} onChange={selectProduct} /></Field></Grid.Col>
-            <Grid.Col md={8} xs={24}><Field label="Service"><Select value={serviceId} options={[{ value: "", label: "None" }, ...services.map(service => ({ value: value(service, "id"), label: value(service, "name") }))]} onChange={selectService} /></Field></Grid.Col>
-            <Grid.Col md={8} xs={24}><Field label="Callback"><Select disabled={!serviceId} value={callbackId} options={[{ value: "", label: serviceId ? "None" : "Choose a service first" }, ...callbacks.map(callback => ({ value: value(callback, "id"), label: value(callback, "name") }))]} onChange={next => setCallbackId(String(next))} /></Field></Grid.Col>
+            <Grid.Col md={8} xs={24}><Field label="Service"><Select value={serviceId} options={services.map(service => ({ value: value(service, "id"), label: value(service, "name") }))} onChange={selectService} /></Field></Grid.Col>
             <Grid.Col xs={24}><Space><Submit pending={action.pending} labelText="Create route" /></Space></Grid.Col>
           </Grid.Row>
         </ActionForm>
@@ -89,7 +82,6 @@ export function Inbound({ data }: { data: Data }) {
         <DataTable
           data={inboundRoutes}
           columns={[
-            { title: "Pattern", render: (_, route) => <Typography.Text code>{value(route, "local_part_pattern")}@{value(route, "domain")}</Typography.Text> },
             { title: "Domain", render: (_, route) => value(route, "domain") },
             { title: "Product", render: (_, route) => value(route, "product") },
             { title: "Service", render: (_, route) => value(route, "service") || "None" },

@@ -106,19 +106,19 @@ export async function dashboardData() {
       (SELECT count(*) FROM deliveries WHERE lifecycle_status='unknown') AS unknown,
       (SELECT count(*) FROM raw_provider_events WHERE processed_at IS NULL AND terminated_at IS NULL AND processing_error IS NOT NULL) AS raw_errors`),
     query<{id:string;product:string;service:string;category:string;sender:string;grant:boolean;credential:boolean;provider:boolean;identity:boolean;route:boolean;tested:boolean;observable:boolean;event_seen:boolean}>(`SELECT sg.id||':'||s.id||':'||cat.category AS id,p.name AS product,s.name AS service,cat.category AS category,
-      coalesce(sg.from_local_part,'*')||'@'||sd.domain AS sender,sg.status='active' AS grant,
+      '*'||'@'||sd.domain AS sender,sg.status='active' AND sg.send_allowed AS grant,
       EXISTS(SELECT 1 FROM service_credentials c WHERE c.service_id=s.id AND c.status='active' AND c.valid_from<=now() AND (c.valid_to IS NULL OR c.valid_to>now())) AS credential,
       EXISTS(SELECT 1 FROM provider_identities pi JOIN provider_accounts pa ON pa.id=pi.provider_account_id WHERE pi.sending_domain_id=sd.id AND pa.status='active') AS provider,
       EXISTS(SELECT 1 FROM provider_identities pi JOIN provider_accounts pa ON pa.id=pi.provider_account_id WHERE pi.sending_domain_id=sd.id AND pi.status='verified' AND pa.status='active') AS identity,
       EXISTS(SELECT 1 FROM routing_policies rp JOIN routing_targets rt ON rt.policy_id=rp.id JOIN provider_identities pi ON pi.id=rt.provider_identity_id JOIN provider_accounts pa ON pa.id=rt.provider_account_id
         WHERE rp.status='active' AND rp.sending_domain_id=sd.id AND (rp.product_id IS NULL OR rp.product_id=p.id) AND (rp.service_id IS NULL OR rp.service_id=s.id) AND (rp.message_category IS NULL OR rp.message_category=cat.category)
         AND pi.sending_domain_id=sd.id AND pi.status='verified' AND pa.status='active' AND (rt.status='active' OR rt.circuit_open_until<=now())) AS route,
-      EXISTS(SELECT 1 FROM messages m JOIN deliveries d ON d.message_id=m.id WHERE m.service_id=s.id AND m.sending_domain_id=sd.id AND m.message_category=cat.category AND (sg.from_local_part IS NULL OR split_part(m.sender_snapshot->>'fromEmail','@',1)=sg.from_local_part) AND d.lifecycle_status IN ('accepted','delivered')) AS tested,
+      EXISTS(SELECT 1 FROM messages m JOIN deliveries d ON d.message_id=m.id WHERE m.service_id=s.id AND m.sending_domain_id=sd.id AND m.message_category=cat.category AND d.lifecycle_status IN ('accepted','delivered')) AS tested,
       EXISTS(SELECT 1 FROM routing_policies rp JOIN routing_targets rt ON rt.policy_id=rp.id JOIN provider_identities pi ON pi.id=rt.provider_identity_id JOIN provider_accounts pa ON pa.id=rt.provider_account_id JOIN provider_webhook_endpoints we ON we.provider_account_id=pa.id
         WHERE rp.status='active' AND rp.sending_domain_id=sd.id AND (rp.product_id IS NULL OR rp.product_id=p.id) AND (rp.service_id IS NULL OR rp.service_id=s.id) AND (rp.message_category IS NULL OR rp.message_category=cat.category)
         AND pi.status='verified' AND pa.status='active' AND rt.status='active' AND we.status='active' AND we.security_configured) AS observable,
-      EXISTS(SELECT 1 FROM messages m JOIN deliveries d ON d.message_id=m.id JOIN delivery_events e ON e.delivery_id=d.id WHERE m.service_id=s.id AND m.sending_domain_id=sd.id AND m.message_category=cat.category AND (sg.from_local_part IS NULL OR split_part(m.sender_snapshot->>'fromEmail','@',1)=sg.from_local_part) AND e.raw_provider_event_id IS NOT NULL) AS event_seen
-      FROM sender_grants sg JOIN products p ON p.id=sg.product_id JOIN services s ON s.product_id=p.id AND (sg.service_id IS NULL OR sg.service_id=s.id) JOIN sending_domains sd ON sd.id=sg.sending_domain_id
+      EXISTS(SELECT 1 FROM messages m JOIN deliveries d ON d.message_id=m.id JOIN delivery_events e ON e.delivery_id=d.id WHERE m.service_id=s.id AND m.sending_domain_id=sd.id AND m.message_category=cat.category AND e.raw_provider_event_id IS NOT NULL) AS event_seen
+      FROM service_domain_grants sg JOIN services s ON s.id=sg.service_id JOIN products p ON p.id=s.product_id JOIN sending_domains sd ON sd.id=sg.sending_domain_id
       CROSS JOIN LATERAL (SELECT 'transactional'::text AS category UNION SELECT rp.message_category FROM routing_policies rp WHERE rp.sending_domain_id=sd.id AND (rp.product_id IS NULL OR rp.product_id=p.id) AND (rp.service_id IS NULL OR rp.service_id=s.id) AND rp.message_category IS NOT NULL) cat
       WHERE p.status='active' AND sd.status='active' ORDER BY p.name,s.name,sd.domain LIMIT 100`),
     workerHeartbeatAlive()
@@ -166,8 +166,7 @@ const adminQueries = {
     LEFT JOIN provider_identities pi ON pi.sending_domain_id=sd.id
     LEFT JOIN provider_accounts pa ON pa.id=pi.provider_account_id
     GROUP BY sd.id ORDER BY sd.domain`),
-  grants: () => query(`SELECT sg.id,sg.product_id,sg.service_id,sg.sending_domain_id,sg.from_local_part,sg.status,p.name AS product,s.name AS service,sd.domain
-    FROM sender_grants sg JOIN products p ON p.id=sg.product_id LEFT JOIN services s ON s.id=sg.service_id JOIN sending_domains sd ON sd.id=sg.sending_domain_id ORDER BY p.name,s.name,sd.domain`),
+  grants:()=>query(`SELECT g.*,s.product_id,p.name AS product,s.name AS service,d.domain FROM service_domain_grants g JOIN services s ON s.id=g.service_id JOIN products p ON p.id=s.product_id JOIN sending_domains d ON d.id=g.sending_domain_id ORDER BY p.name,s.name,d.domain`),
   policies: () => query(`SELECT rp.id,rp.name,rp.priority,rp.status,rp.product_id,rp.service_id,rp.sending_domain_id,p.name AS product,s.name AS service,sd_policy.domain AS sending_domain,rp.message_category,
     json_agg(json_build_object('id',rt.id,'accountId',pa.id,'account',pa.name,'type',pa.type,'identityId',pi.id,'domain',sd.domain,'priority',rt.priority,'weight',rt.weight,'rateLimit',rt.rate_limit_per_minute,'status',rt.status,'circuitOpenUntil',rt.circuit_open_until) ORDER BY rt.priority)
       FILTER(WHERE rt.id IS NOT NULL) AS targets
@@ -185,7 +184,8 @@ const adminQueries = {
   webhooks: () => query(`SELECT e.id,e.opaque_token,e.status,e.security_configured,e.expected_topic_arn,e.ip_allowlist,e.created_at,pa.id AS provider_account_id,pa.name AS account,pa.type
     FROM provider_webhook_endpoints e JOIN provider_accounts pa ON pa.id=e.provider_account_id ORDER BY e.created_at DESC`),
   callbacks: () => query(`SELECT e.id,e.name,e.url,e.status,e.subscribed_events,s.id AS service_id,s.name AS service,p.name AS product,p.id AS product_id,
-    count(d.id) FILTER(WHERE d.status='dead_letter') AS dead_letters
+    count(d.id) FILTER(WHERE d.status='dead_letter') AS dead_letters,
+    count(d.id) FILTER(WHERE d.status='delivering') AS in_flight
     FROM callback_endpoints e
     JOIN services s ON s.id=e.service_id
     JOIN products p ON p.id=s.product_id
@@ -206,8 +206,8 @@ const adminQueries = {
     LEFT JOIN products p ON p.id=i.product_id
     LEFT JOIN inbound_attachments a ON a.inbound_message_id=i.id
     GROUP BY i.id,p.name ORDER BY i.created_at DESC LIMIT 200`),
-  inboundRoutes: () => query(`SELECT r.id,r.local_part_pattern,r.status,sd.domain,p.name AS product,s.name AS service,e.opaque_token,pa.type AS provider_type,ce.name AS callback,
-      CASE WHEN r.callback_endpoint_id IS NULL THEN 'Polling only'
+  inboundRoutes: () => query(`SELECT r.id,r.status,sd.domain,p.name AS product,s.name AS service,e.opaque_token,pa.type AS provider_type,ce.name AS callback,
+      CASE WHEN ce.id IS NULL THEN 'Polling only'
         WHEN ce.service_id IS DISTINCT FROM r.service_id THEN 'CALLBACK_BINDING_INVALID'
         WHEN ce.status<>'active' THEN 'CALLBACK_DISABLED'
         WHEN NOT('inbound.received'=ANY(ce.subscribed_events)) THEN 'CALLBACK_EVENT_NOT_SUBSCRIBED'
@@ -218,7 +218,7 @@ const adminQueries = {
     LEFT JOIN services s ON s.id=r.service_id
     JOIN provider_webhook_endpoints e ON e.id=r.provider_webhook_endpoint_id
     JOIN provider_accounts pa ON pa.id=e.provider_account_id
-    LEFT JOIN callback_endpoints ce ON ce.id=r.callback_endpoint_id
+    LEFT JOIN callback_endpoints ce ON ce.service_id=r.service_id
     ORDER BY r.created_at DESC`),
   failedWork: () => query("SELECT id,aggregate_type,aggregate_id,event_type,status,attempt_count,available_at,created_at FROM outbox_events WHERE status='failed' OR (status='pending' AND available_at<now()-interval '1 minute') ORDER BY available_at LIMIT 200"),
   audit: () => query("SELECT id,actor,action,resource_type,resource_id,details,created_at FROM audit_logs ORDER BY created_at DESC LIMIT 300")

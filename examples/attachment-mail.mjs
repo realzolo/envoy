@@ -10,7 +10,7 @@ if(command==="upload") {
   if(info.size<1 || info.size>10_000_000) throw new Error("Business input must fit Envoy's 10 MB limit");
   if(!process.env.ENVOY_URL || !process.env.ENVOY_SERVICE_KEY) throw new Error("Envoy connection is required");
   const response=await fetch(`${process.env.ENVOY_URL.replace(/\/$/,"")}/api/v1/files`,{method:"POST",headers:{
-    authorization:`Bearer ${process.env.ENVOY_SERVICE_KEY}`,"content-type":"application/octet-stream","x-file-name":encodeURIComponent(basename(id))
+    authorization:`Bearer ${process.env.ENVOY_SERVICE_KEY}`,"x-sending-domain":process.env.ENVOY_SENDING_DOMAIN??"","content-type":"application/octet-stream","x-file-name":encodeURIComponent(basename(id))
   },body:await readFile(id)});
   const result=await response.json();if(!response.ok) throw new Error(result.code);
   console.log(result); // 201 confirms durable receipt. It does not approve sending.

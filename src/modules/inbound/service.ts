@@ -7,6 +7,7 @@ import { objectStore } from "@/modules/config/object-store";
 import { createId } from "@/server/ids";
 import { completeObjectUploads, registerObjectUpload } from "@/server/services/object-cleanup";
 import { query, transaction } from "@/server/database";
+import { inboundDomainAccess } from "@/modules/core/resources/authorization";
 
 const MAX_MESSAGE_BYTES = 25 * 1024 * 1024;
 
@@ -37,7 +38,7 @@ type InboundInput = {
   ingressReceivedAt?: Date;
 };
 type InboundRoute = {
-  id: string; product_id: string; service_id: string | null; callback_endpoint_id: string | null;
+  id: string; product_id: string; service_id: string;
   recipients: string[];
 };
 
@@ -47,16 +48,15 @@ export async function persistInbound(input: InboundInput) {
   const recipients = supplied?.length && supplied.every(item => /^[^\s<>@,]+@[^\s<>@,]+$/.test(item))
     ? [...new Set(supplied.map(address))] : [];
   const proposed = recipients.length ? await transaction(async client => (await client.query<InboundRoute>(`
-    SELECT r.id,r.product_id,r.service_id,r.callback_endpoint_id,array_agg(DISTINCT recipient) AS recipients
+    SELECT r.id,r.product_id,r.service_id,array_agg(DISTINCT recipient) AS recipients
     FROM inbound_routes r JOIN sending_domains d ON d.id=r.sending_domain_id
     JOIN products p ON p.id=r.product_id AND p.status='active'
+    JOIN service_domain_grants dg ON dg.service_id=r.service_id AND dg.sending_domain_id=d.id AND dg.status='active' AND dg.receive_allowed
     JOIN provider_webhook_endpoints e ON e.id=r.provider_webhook_endpoint_id
     CROSS JOIN unnest($2::text[]) recipient
     WHERE e.id=$1 AND e.provider_account_id=$3 AND e.status='active' AND e.security_configured
       AND r.status='active' AND d.status='active'
       AND split_part(recipient,'@',2)=d.domain
-      AND (r.local_part_pattern='*' OR split_part(recipient,'@',1) LIKE
-        replace(replace(replace(r.local_part_pattern,'~','~~'),'_','~_'),'*','%') ESCAPE '~')
     GROUP BY r.id ORDER BY r.id`, [input.webhookEndpointId, recipients, input.providerAccountId])).rows) : [];
   // Freeze the complete dispatch plan at the first durable processing decision.
   // Concurrent retries read the winner; later route changes never expand historical access.
@@ -81,10 +81,10 @@ export async function persistInbound(input: InboundInput) {
       [createId("inb"),input.providerAccountId,input.rawEventId,input.message.externalMessageId,input.message.messageId??null,address(input.message.from),input.message.to,input.message.cc,input.message.bcc,input.message.subject,input.message.html?sanitizeHtml(input.message.html):null,input.message.text??null,reason,input.ingressReceivedAt,recipients,input.message.replyTo??[],input.message.inReplyTo??null,input.message.references??[],authorDate(input.message.authorDate)]);
     return stored.rows[0].id;
   }
-  // One private projection per service (or admin-only product scope), even for overlapping routes.
+  // One private projection per Service, even for overlapping domain routes.
   const groups = new Map<string, InboundRoute[]>();
   for (const route of routes) {
-    const scope = route.service_id ?? `product:${route.product_id}`;
+    const scope = route.service_id;
     groups.set(scope, [...(groups.get(scope) ?? []), route]);
   }
   let firstId = "";
@@ -104,8 +104,11 @@ export async function persistInbound(input: InboundInput) {
 }
 
 async function persistRoutedInbound(input: InboundInput, scope: string, routes: InboundRoute[]) {
-  const message = input.message;
   const route = routes[0];
+  const allowed=(await query<{domain:string}>(`SELECT d.domain FROM service_domain_grants g JOIN sending_domains d ON d.id=g.sending_domain_id JOIN services s ON s.id=g.service_id JOIN products p ON p.id=s.product_id WHERE g.service_id=$1 AND g.status='active' AND g.receive_allowed AND d.status='active' AND p.status='active'`,[route.service_id])).rows.map(row=>row.domain);
+  const envelopeRecipients=input.message.envelopeRecipients?.filter(recipient=>allowed.includes(recipient.split('@')[1]))??[];
+  if(!envelopeRecipients.length) throw new InboundTerminalError("Domain receiving permission was revoked","DOMAIN_RECEIVE_NOT_AUTHORIZED");
+  const message = {...input.message,envelopeRecipients,bcc:input.message.bcc.filter(item=>envelopeRecipients.includes(address(item)))};
   const duplicate = (await query<{ id: string; status: string; content_purged_at: Date | null }>(
     "SELECT id,status,content_purged_at FROM inbound_messages WHERE provider_account_id=$1 AND external_message_id=$2 AND delivery_scope=$3",
     [input.providerAccountId,message.externalMessageId,scope])).rows[0];
@@ -169,6 +172,9 @@ async function persistRoutedInbound(input: InboundInput, scope: string, routes: 
       await objectStore().put(file.objectKey, file.content, file.contentType);
     }
     await transaction(async client => {
+      if (!(await client.query(`SELECT id FROM inbound_messages i WHERE id=$1 AND ${inboundDomainAccess('i')}`, [id])).rowCount) {
+        throw new InboundTerminalError("Domain receiving permission was revoked", "DOMAIN_RECEIVE_NOT_AUTHORIZED");
+      }
       const completed = await client.query("UPDATE inbound_messages SET raw_mime_object_key=$2,status='ready',ready_at=clock_timestamp(),rejection_reason=NULL,processing_token=NULL,processing_deadline_at=NULL WHERE id=$1 AND processing_token=$3 AND status='scanning' AND content_purged_at IS NULL RETURNING id,ready_at", [id, rawKey, token]);
       if (!completed.rowCount) throw new Error("Inbound processing ownership expired");
       for (const file of attachments) {
@@ -177,9 +183,8 @@ async function persistRoutedInbound(input: InboundInput, scope: string, routes: 
         await registerAttachment(client,attachmentId,"inbound",route.service_id,file.sha256);
       }
       await completeObjectUploads(client, writtenKeys);
-      for (const callbackEndpointId of new Set(routes.map(item => item.callback_endpoint_id).filter(Boolean))) {
-        const callback = await client.query<{ id: string }>("SELECT id FROM callback_endpoints WHERE id=$1 AND service_id=$2 AND status='active' AND 'inbound.received'=ANY(subscribed_events)", [callbackEndpointId,route.service_id]);
-        if (!callback.rows[0]) continue;
+      const callback = await client.query<{ id: string }>("SELECT id FROM callback_endpoints WHERE service_id=$1 AND status='active' AND 'inbound.received'=ANY(subscribed_events)", [route.service_id]);
+      for (const {id:callbackEndpointId} of callback.rows) {
         const callbackId = createId("cbx");
         const payload = {
           id: `inbound:${id}:received`,

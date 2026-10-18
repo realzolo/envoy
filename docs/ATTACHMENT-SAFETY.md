@@ -153,3 +153,5 @@ provider transmission. A successful send acceptance still means queued, not actu
    path. Remove scanner infrastructure from the business deployment only after those safety gates are proven.
 
 This repository changes Envoy only; no Morph or Sonaops source/configuration has been modified.
+
+Outbound uploads require `X-Sending-Domain`, freezing the Service-authorized From domain. Files cannot be attached across domains. Revoked sending/receiving grants block file metadata, reprocessing, downloads and erasure through the service API. `examples/attachment-mail.mjs` takes `ENVOY_SENDING_DOMAIN`.

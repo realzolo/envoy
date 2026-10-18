@@ -10,29 +10,34 @@ import { useState } from "react";
 import { ActionForm, type Row, type Data, type FormValues, requiredRule, rows, value, formValue, StatusTag, useAction, Field, Panel, Submit, Notice, ActionButton, Prerequisite, DataTable, TableCard, Secret, date, record, CopyableValue } from "@/components/admin-console-shared";
 import { ResourceDetail } from "@/components/admin-resource-detail";
 
-function RotateCallback({ id }: { id: string }) {
+function ReplaceCallback({ callback }: { callback: Row }) {
   const action = useAction();
   const [secret, setSecret] = useState("");
+  const [requestedSecret, setRequestedSecret] = useState("");
+  const canReplace = callback.status === "disabled" && Number(callback.in_flight ?? 0) === 0;
   return (
     <Collapse bordered={false}>
-      <Collapse.Item name="rotate" header="Rotate secret">
+      <Collapse.Item name="replace" header="Replace callback secret">
         <Space direction="vertical" size="small" className={styles.stack}>
-          <Typography.Text type="secondary">Rotating invalidates the previous signing secret immediately.</Typography.Text>
+          <Typography.Text type="secondary">Pause delivery and wait for all in-flight requests to finish. Replace the single secret here and in the consumer, then resume and replay failed callbacks. Each Service has one current secret.</Typography.Text>
+          {!canReplace && <Alert type="info" content={`Pause this endpoint and wait for in-flight requests to reach zero before replacing its secret. Current in-flight requests: ${Number(callback.in_flight ?? 0)}.`} />}
+          <Input.Password value={requestedSecret} onChange={setRequestedSecret} autoComplete="new-password" placeholder="New secret, or leave blank to generate one" disabled={!canReplace} />
           <Button
             size="small"
-            icon={<IconRotateLeft />}
+            disabled={!canReplace}
             loading={action.pending}
             onClick={async () => {
               try {
-                const result = await action.run({ action: "callback.rotate_secret", id }) as { secret?: string };
+                const result = await action.run({ action: "callback.replace_secret", id: callback.id, secret: requestedSecret }) as { secret?: string };
                 setSecret(result.secret ?? "");
-                action.setNotice("A new signing secret was generated.");
+                setRequestedSecret("");
+                action.setNotice("Secret replaced. Update the consumer with this same secret before resuming delivery.");
               } catch {
                 // Inline notice owns failures from this request.
               }
             }}
           >
-            Rotate secret
+            Replace secret while paused
           </Button>
           {secret && <Secret value={secret} />}
           <Notice notice={action.notice} />
@@ -46,10 +51,11 @@ export function Callbacks({ data }: { data: Data }) {
   const action = useAction();
   const services = rows(data.services).filter(service => service.product_status === "active");
   const callbacks = rows(data.callbacks);
+  const unconfiguredServices = services.filter(service => !callbacks.some(callback => value(callback, "service_id") === value(service, "id")));
   const deliveries = rows(data.callbackDeliveries);
   const [selectedDeliveryId, setSelectedDeliveryId] = useState<string | null>(null);
   const [editing, setEditing] = useState<Row | null>(null);
-  const [events, setEvents] = useState(["email.delivered", "email.bounced", "email.failed"]);
+  const [events, setEvents] = useState(["email.delivered", "email.bounced", "email.failed", "inbound.received", "service.permissions_changed"]);
   const [secret, setSecret] = useState("");
   const eventOptions = [
     ["email.accepted", "Accepted"],
@@ -58,6 +64,7 @@ export function Callbacks({ data }: { data: Data }) {
     ["email.failed", "Failed"],
     ["email.suppressed", "Suppressed"],
     ["inbound.received", "Inbound received"],
+    ["service.permissions_changed", "Domain permissions changed"],
   ] as const;
 
   async function submit(values: FormValues) {
@@ -78,18 +85,18 @@ export function Callbacks({ data }: { data: Data }) {
     <Space direction="vertical" size="large" className={styles.stack}>
       <Panel
         title="Add callback endpoint"
-        description="Canonical events with HMAC signatures"
+        description="One unified callback per business Service, with canonical events and HMAC signatures"
         defaultExpanded={callbacks.length === 0}
       >
-        <ActionForm fieldErrors={action.fields} layout="vertical" onSubmit={values => void submit(values as FormValues)}>
+        {unconfiguredServices.length ? <ActionForm fieldErrors={action.fields} layout="vertical" onSubmit={values => void submit(values as FormValues)}>
           <Grid.Row gutter={[16, 0]}>
-            <Grid.Col md={12} xs={24}><Field field="serviceId" label="Service" initialValue={value(services[0], "id")} required rules={requiredRule}><Select options={services.map(service => ({ value: value(service, "id"), label: `${value(service, "product")} / ${value(service, "name")}` }))} /></Field></Grid.Col>
+            <Grid.Col md={12} xs={24}><Field field="serviceId" label="Service" initialValue={value(unconfiguredServices[0], "id")} required rules={requiredRule}><Select options={unconfiguredServices.map(service => ({ value: value(service, "id"), label: `${value(service, "product")} / ${value(service, "name")}` }))} /></Field></Grid.Col>
             <Grid.Col md={12} xs={24}><Field field="name" label="Name" required rules={requiredRule}><Input /></Field></Grid.Col>
             <Grid.Col md={12} xs={24}><Field field="url" label="URL" required rules={requiredRule}><Input type="url" placeholder="https://api.example.com/envoy/events" /></Field></Grid.Col>
             <Grid.Col md={12} xs={24}><Field label="Events" required><Checkbox.Group value={events} options={eventOptions.map(([event, title]) => ({ value: event, label: title }))} onChange={next => setEvents(next.map(String))} /></Field></Grid.Col>
             <Grid.Col xs={24}><Space><Submit pending={action.pending} disabled={!events.length} labelText="Add endpoint" /></Space></Grid.Col>
           </Grid.Row>
-        </ActionForm>
+        </ActionForm> : <Typography.Text type="secondary">All active Services already have a unified callback. Manage their endpoint and subscriptions below.</Typography.Text>}
         <Notice notice={action.notice} />
         {secret && <Secret value={secret} label="Generated signing secret. Store it in the callback consumer now." />}
       </Panel>
@@ -113,6 +120,7 @@ export function Callbacks({ data }: { data: Data }) {
             { title: "URL", width: 260, render: (_, callback) => <Typography.Text ellipsis={{ showTooltip: true }}>{value(callback, "url")}</Typography.Text> },
             { title: "Events", width: 240, render: (_, callback) => Array.isArray(callback.subscribed_events) ? callback.subscribed_events.join(", ") : "" },
             { title: "DLQ", width: 72, render: (_, callback) => value(callback, "dead_letters") },
+            { title: "In flight", width: 80, render: (_, callback) => value(callback, "in_flight") },
             {
               title: "Actions",
               width: 260,
@@ -121,7 +129,7 @@ export function Callbacks({ data }: { data: Data }) {
                   {callback.status === "active" && <Button size="small" loading={action.pending} onClick={async () => { try { const result = record(await action.run({ action: "callback.test", id: callback.id })); if (typeof result.deliveryId === "string") setSelectedDeliveryId(result.deliveryId); } catch { /* Inline notice handles the error. */ } }}><IconSend />Test</Button>}
                   <Button size="small" onClick={() => setEditing(callback)}>Edit</Button>
                   {Number(callback.dead_letters ?? 0) > 0 && <ActionButton body={{ action: "callback.replay_dlq", endpointId: callback.id }} confirmTitle="Replay endpoint dead letters?" confirmText={`Queue ${value(callback, "dead_letters")} failed callbacks for ${value(callback, "name")}?`}><IconRotateLeft />Replay endpoint</ActionButton>}
-                  <ActionButton body={{ action: "callback.toggle", id: callback.id, enabled: callback.status !== "active" }}>{callback.status === "active" ? "Disable" : "Enable"}</ActionButton>
+                  <ActionButton body={{ action: "callback.toggle", id: callback.id, enabled: callback.status !== "active" }}>{callback.status === "active" ? "Pause" : "Resume"}</ActionButton>
                 </div>
               ),
             },
@@ -140,7 +148,7 @@ export function Callbacks({ data }: { data: Data }) {
           { title: "Action", render: (_, item) => item.status === "dead_letter" && !item.payload_purged_at ? <ActionButton body={{ action: "callback.replay_dlq", deliveryId: item.id }} confirmText="Queue this callback delivery again?">Replay</ActionButton> : <Button size="small" onClick={() => setSelectedDeliveryId(value(item, "id"))}>Details</Button> },
         ]} />
       </TableCard>
-      {editing && <EditCallback key={value(editing, "id")} callback={editing} onClose={() => setEditing(null)} />}
+      {editing && <EditCallback key={value(editing, "id")} callback={callbacks.find(item => item.id === editing.id) ?? editing} onClose={() => setEditing(null)} />}
       {selectedDeliveryId && <ResourceDetail key={selectedDeliveryId} title="Callback delivery" path={`/api/admin/callback-deliveries/${encodeURIComponent(selectedDeliveryId)}`} onClose={() => setSelectedDeliveryId(null)}>{item => <>
         <Descriptions column={1} labelStyle={{ width: 112 }} data={[
           { label: "Status", value: <StatusTag>{value(item, "status")}</StatusTag> },
@@ -174,8 +182,8 @@ function EditCallback({ callback, onClose }: { callback: Row; onClose: () => voi
     <ActionForm fieldErrors={action.fields} form={form} layout="vertical" initialValues={{ name: callback.name, url: callback.url }}>
       <Field field="name" label="Name" required rules={requiredRule}><Input /></Field>
       <Field field="url" label="URL" required rules={requiredRule}><Input type="url" /></Field>
-      <Field label="Subscribed events" required><Checkbox.Group value={events} onChange={next => setEvents(next.map(String))} options={["email.accepted", "email.delivered", "email.bounced", "email.failed", "email.suppressed", "inbound.received"]} /></Field>
+      <Field label="Subscribed events" required><Checkbox.Group value={events} onChange={next => setEvents(next.map(String))} options={["email.accepted", "email.delivered", "email.bounced", "email.failed", "email.suppressed", "inbound.received", "service.permissions_changed"]} /></Field>
     </ActionForm><Notice notice={action.notice} />
-    <RotateCallback id={value(callback, "id")} />
+    <ReplaceCallback callback={callback} />
   </Modal>;
 }

@@ -32,7 +32,7 @@ const input=(files:string[])=>createMessageSchema.parse({category:"security",fro
   attachments:files.map((fileId,index)=>({fileId,disposition:index ? "inline" : "attachment",...(index ? {contentId:`cid-${index}`} : {})}))});
 const request=(path:string,method="GET",body?:unknown,operation=createId("op"))=>new Request(`https://envoy.test/api/v1${path}`,{method,
   headers:{authorization:`Bearer ${key}`,"content-type":"application/json","idempotency-key":operation},...(body ? {body:JSON.stringify(body)} : {})});
-const file=()=>uploadOutboundFile(a,"private.bin","application/octet-stream",bytes);
+const file=()=>uploadOutboundFile(a,"private.bin","application/octet-stream",bytes,"mail.atlas.test");
 const row=async(id:string)=>(await query("SELECT * FROM attachment_safety WHERE resource_id=$1",[id])).rows[0];
 const job=(submissionId:string)=>({data:{submissionId}} as Job<{submissionId:string}>);
 const submission=async(messageId:string)=>(await query<{id:string}>("SELECT id FROM submissions WHERE message_id=$1",[messageId])).rows[0].id;
@@ -40,8 +40,9 @@ const submission=async(messageId:string)=>(await query<{id:string}>("SELECT id F
 beforeAll(async()=>{
  await query("INSERT INTO services(id,product_id,name) VALUES($1,'prd_atlas',$1),($2,'prd_atlas',$2)",[a,b]);
  await query("INSERT INTO service_credentials(id,service_id,key_prefix,key_hash) VALUES($1,$2,'fixture',$3)",[`cred_${tag}`,a,hashApiKey(key)]);
- await query("INSERT INTO sender_grants(id,product_id,service_id,sending_domain_id) VALUES($1,'prd_atlas',$2,'sd_atlas')",[`grant_${tag}`,a]);
- await query("INSERT INTO inbound_routes(id,provider_webhook_endpoint_id,sending_domain_id,product_id,service_id,local_part_pattern) VALUES($1,'pwe_mock','sd_atlas','prd_atlas',$2,$3)",[`route_${tag}`,a,tag]);
+ await query("INSERT INTO service_domain_grants(id,service_id,sending_domain_id,send_allowed,receive_allowed) VALUES($1,$2,'sd_atlas',true,true)",[`grant_${tag}`,a]);
+ await query("INSERT INTO service_domain_grants(id,service_id,sending_domain_id,send_allowed) VALUES($1,$2,'sd_atlas',true)",[`grant_${tag}_b`,b]);
+ await query("INSERT INTO inbound_routes(id,provider_webhook_endpoint_id,sending_domain_id,product_id,service_id) VALUES($1,'pwe_mock','sd_atlas','prd_atlas',$2)",[`route_${tag}`,a]);
 });
 afterAll(async()=>{
  const objects=(await query<{object_key:string}>(`SELECT object_key FROM outbound_files WHERE service_id=ANY($1)
@@ -85,7 +86,7 @@ describe("private attachment safety lifecycle",()=>{
   const count=(await row(other.id)).attempt_count;await processAttachmentScan(other.id);expect((await row(other.id)).attempt_count).toBe(count);
  });
  it("enforces service ownership on query, reprocessing, download, send and deletion without exposing task facts",async()=>{
-  const foreign=await uploadOutboundFile(b,"private.txt","text/plain",bytes);
+  const foreign=await uploadOutboundFile(b,"private.txt","text/plain",bytes,"mail.atlas.test");
   const context={params:Promise.resolve({id:foreign.id})};
   for(const response of [await fileAPI(request(`/files/${foreign.id}`),context),await reprocessAPI(request(`/files/${foreign.id}/reprocess`,"POST"),context),
    await downloadAPI(request(`/files/${foreign.id}/download`),context),await eraseAPI(request(`/files/${foreign.id}/content`,"DELETE"),context)]) expect(response.status).toBe(404);
@@ -149,7 +150,7 @@ describe("private attachment safety lifecycle",()=>{
  });
  it("rotates service scan dispatch fairly instead of putting one owner's batch ahead of others",async()=>{
   for(let i=0;i<12;i++) await file();
-  const other=await uploadOutboundFile(b,"other.bin","application/octet-stream",bytes);
+  const other=await uploadOutboundFile(b,"other.bin","application/octet-stream",bytes,"mail.atlas.test");
   await Promise.all([scheduleAttachmentScans(1),scheduleAttachmentScans(1)]);
   const scopes=Number((await query("SELECT count(*) AS count FROM attachment_scan_scopes")).rows[0].count);
   for(let i=0;i<scopes+2;i++) await scheduleAttachmentScans(1);

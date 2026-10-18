@@ -1,3 +1,4 @@
+import { inboundDomainAccess,outboundDomainAccess } from "./authorization";
 import type { PoolClient } from "pg";
 import { transaction } from "@/server/database";
 
@@ -26,7 +27,7 @@ async function purgeUnsharedRaw(client:PoolClient,id:string) {
 export async function purgeContent(kind: "inbound" | "message" | "file", id: string, serviceId: string) {
   return transaction(async client => {
     const table = kind === "inbound" ? "inbound_messages" : kind === "message" ? "messages" : "outbound_files";
-    const row = (await client.query<{ content_purged_at: Date | null; status?: string; attachment_snapshot?: { fileId: string }[]; raw_provider_event_id?: string; raw_mime_object_key?: string; object_key?: string }>(`SELECT * FROM ${table} WHERE id=$1 AND service_id=$2 FOR UPDATE`,[id,serviceId])).rows[0];
+    const row = (await client.query<{ content_purged_at: Date | null; status?: string; attachment_snapshot?: { fileId: string }[]; raw_provider_event_id?: string; raw_mime_object_key?: string; object_key?: string }>(`SELECT * FROM ${table} WHERE id=$1 AND service_id=$2 AND ${kind==='inbound'?inboundDomainAccess(table):outboundDomainAccess(table)} FOR UPDATE`,[id,serviceId])).rows[0];
     if (!row) return null;
     if (row.content_purged_at) return { id,contentPurgedAt:row.content_purged_at.toISOString(),objectDeletion:"pending_or_complete" };
     if (kind === "file") {

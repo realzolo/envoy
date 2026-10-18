@@ -10,7 +10,7 @@ import styles from "@/components/admin-views.module.css";
 
 export type Row = Record<string, unknown>;
 export type Data = {configuration?:Row} & Partial<Record<"tasks" | "observations" | "grants" | "failedWork" | "audit" | "callbacks" | "callbackDeliveries" | "canonicalEvents" | "credentials" | "descriptors" | "domains" | "inbound" | "inboundRoutes" | "policies" | "products" | "providers" | "rawEvents" | "senders" | "services" | "suppressions" | "webhooks", Row[]>>;
-export type AdminActionName = "attachment.reprocess" | "grant.create" | "grant.toggle" | "domain.create" | "domain.toggle" | "identity.refresh" | "identity.toggle" | "routing.create" | "routing.update" | "routing.simulate" | "routing.toggle" | "product.create" | "product.toggle" | "credential.create" | "credential.rotate" | "credential.revoke" | "callback.create" | "callback.update" | "callback.test" | "callback.toggle" | "callback.rotate_secret" | "callback.replay_dlq" | "callback.terminate" | "event.replay" | "event.terminate" | "suppression.create" | "suppression.remove" | "inbound_route.create" | "inbound_route.toggle" | "delivery.retry" | "outbox.retry";
+export type AdminActionName = "attachment.reprocess" | "domain_grant.set" | "domain_grant.toggle" | "domain.create" | "domain.toggle" | "identity.refresh" | "identity.toggle" | "routing.create" | "routing.update" | "routing.simulate" | "routing.toggle" | "product.create" | "product.toggle" | "credential.create" | "credential.rotate" | "credential.revoke" | "callback.create" | "callback.update" | "callback.test" | "callback.toggle" | "callback.replace_secret" | "callback.replay_dlq" | "callback.terminate" | "event.replay" | "event.terminate" | "suppression.create" | "suppression.remove" | "inbound_route.create" | "inbound_route.toggle" | "delivery.retry" | "outbox.retry";
 export type AdminAction = { action: AdminActionName } & Row;
 export type FormValues = Record<string, unknown>;
 export type ActionNotice = { kind: "success" | "error"; text: string } | null;
@@ -130,7 +130,9 @@ export function Field({
   initialValue,
   rules,
   children,
+  triggerPropName,
 }: {
+  triggerPropName?: "checked";
   label: ReactNode;
   field?: string;
   required?: boolean;
@@ -146,6 +148,7 @@ export function Field({
       help={serverError}
       label={label}
       field={field}
+      triggerPropName={triggerPropName}
       required={required}
       initialValue={initialValue}
       rules={rules}

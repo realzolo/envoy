@@ -97,11 +97,9 @@ The service API is self-describing at `GET /api/v1` and `GET /api/v1/openapi.jso
 | `/files` | Receive private files, query asynchronous safety, retry recoverable processing and download approved bytes |
 | `/messages/{id}/events` | Inspect the complete delivery timeline |
 | `/messages/{id}/attempts` | Inspect submission attempts and structured diagnostics |
-| `/capabilities`         | Discover product/service, sender/receiver ranges, limits, configuration status and evidence                            |
+| `/capabilities`         | Discover product/service, domain sending/receiving permissions, limits, configuration status and evidence                            |
 
-Sender authorization is configured under **Service Credentials** for a product or service: either every address in a verified
-domain, or one exact local part. Domain verification proves control; the grant authorizes a caller. Enter From, Reply-To,
-and category directly when composing a console test message or submitting an API request.
+Business Service Keys are issued under **Service Credentials** with explicit domain sending/receiving permissions and one optional unified callback. A Service can use several domains; keys rotate without changing its identity or grants. Envoy does not configure business APPs or their mailbox purposes. The caller selects its complete From/Reply-To addresses within authorized domains and performs internal APP routing from trustworthy envelope recipients.
 
 See [the final service API contract](docs/API.md) for full request fields, file upload, result semantics, and failure diagnosis.
 
@@ -170,7 +168,12 @@ and delivery diagnostics; Inbound provides private downloads only for ready mess
 
 Server processes and database sessions use UTC; API timestamps are UTC ISO 8601 (`Z`). The console formats timestamps in the current browser timezone and labels that zone. Cohort/rate/quota windows are UTC and labeled explicitly.
 
-This new project uses only the authoritative initial schema (`pnpm db:setup`). An existing checksum mismatch is refused; no adoption patch, data reset or ledger bypass is provided.
+Each Service callback has one current encrypted secret. Consumers verify HMAC-SHA256 over the current Unix timestamp,
+a dot and the original UTF-8 body within a fixed 300-second window, then durably deduplicate the event ID. Replace the
+secret only by pausing delivery, waiting for in-flight requests to finish, updating both sides and resuming; replay and
+incremental recovery remain available. See [callback operations](docs/OPERATIONS.md).
+
+Run versioned checksummed schema migrations with `pnpm db:setup`. The user-authorized pre-launch `001_initial.sql` directly defines the single-secret callback schema. The development final-model migration `002_service_domain_permissions.sql` directly removes old address grants and per-route callback/pattern fields; empty business tables are required. An existing checksum mismatch is refused; no adoption patch, data reset or ledger bypass is provided.
 
 Attachment safety belongs entirely to Envoy. Upload success means durable receipt; callers wait for `usage.canSend`
 before sending. All outbound/inline attachments and inbound downloads require a byte-bound current clean result;

@@ -79,26 +79,12 @@ const adminSuppressionInputSchema = z.object({
   });
 });
 
-const inboundRouteInputSchema = z.object({
-  webhookEndpointId: identifierSchema,
-  domainId: identifierSchema,
-  productId: identifierSchema,
-  serviceId: optionalIdentifierSchema,
-  callbackId: optionalIdentifierSchema,
-  localPartPattern: z.string().trim().min(1).max(64).regex(/^[a-z0-9._+*-]+$/i, "localPartPattern may contain letters, numbers, ., _, +, -, and one * wildcard").refine(
-    value => (value.match(/\*/g) ?? []).length <= 1,
-    "localPartPattern can contain at most one * wildcard",
-  ).transform(value => value.toLowerCase()),
-}).strict().superRefine((input, context) => {
-  if (input.callbackId && !input.serviceId) context.addIssue({
-    code: "custom", path: ["serviceId"], message: "A callback endpoint requires a service",
-  });
-});
-
-const serviceCredentialInputSchema = z.object({
-  productId: identifierSchema,
-  serviceName: z.string().trim().min(2).max(120),
-}).strict();
+const inboundRouteInputSchema=z.object({webhookEndpointId:identifierSchema,domainId:identifierSchema,productId:identifierSchema,serviceId:identifierSchema}).strict();
+const domainGrantInputSchema=z.object({serviceId:identifierSchema,domainId:identifierSchema,send:z.boolean(),receive:z.boolean()}).strict().refine(v=>v.send||v.receive,{message:"Select sending or receiving"});
+const serviceCredentialInputSchema=z.object({productId:identifierSchema,serviceName:z.string().trim().min(2).max(120),
+  domains:z.array(z.object({domainId:identifierSchema,send:z.boolean(),receive:z.boolean()}).strict().refine(v=>v.send||v.receive,{message:"Select sending or receiving"})).min(1).max(100),
+  callbackUrl:z.string().trim().url().max(2048).optional(),suppressionManagement:z.boolean().default(false),
+}).strict().refine(v=>new Set(v.domains.map(d=>d.domainId)).size===v.domains.length,{message:"Duplicate authorized domain"});
 
 const callbackEventSchema = z.enum([
   "email.accepted",
@@ -107,6 +93,7 @@ const callbackEventSchema = z.enum([
   "email.failed",
   "email.suppressed",
   "inbound.received",
+  "service.permissions_changed",
 ]);
 
 const callbackInputSchema = z.object({
@@ -114,7 +101,7 @@ const callbackInputSchema = z.object({
   name: z.string().trim().min(2).max(120),
   url: z.string().trim().url().max(2_048),
   secret: z.string().min(16).max(512).optional(),
-  events: z.array(callbackEventSchema).min(1, "Select at least one callback event").max(6),
+  events: z.array(callbackEventSchema).min(1, "Select at least one callback event").max(7),
 }).strict();
 
 const domainInputSchema = z.object({
@@ -542,59 +529,50 @@ export async function sendTestMessage(input: {
   return result.message;
 }
 
-const senderGrantInputSchema = z.object({
-  productId: identifierSchema,
-  serviceId: optionalIdentifierSchema,
-  domainId: identifierSchema,
-  fromLocalPart: z.preprocess(value => value === "" ? undefined : value,
-    z.string().trim().min(1).max(64).regex(/^[^@\s]+$/, "Local part cannot contain whitespace or @").optional()),
-}).strict();
-
-export async function createSenderGrant(input: z.input<typeof senderGrantInputSchema>, actor: string) {
-  const validated = senderGrantInputSchema.parse(input);
-  return transaction(async client => {
-    const product = await client.query("SELECT id FROM products WHERE id=$1 AND status='active'", [validated.productId]);
-    if (!product.rows[0]) throw new Error("An active product is required");
-    const domain = await client.query("SELECT id FROM sending_domains WHERE id=$1 AND status='active'", [validated.domainId]);
-    if (!domain.rows[0]) throw new Error("An active sending domain is required");
-    if (validated.serviceId) {
-      const service = await client.query("SELECT id FROM services WHERE id=$1 AND product_id=$2", [validated.serviceId, validated.productId]);
-      if (!service.rows[0]) throw new Error("The selected service does not belong to the product");
-    }
-    const id = createId("sg");
-    await client.query("INSERT INTO sender_grants(id,product_id,service_id,sending_domain_id,from_local_part) VALUES ($1,$2,$3,$4,$5)",
-      [id, validated.productId, validated.serviceId ?? null, validated.domainId, validated.fromLocalPart ?? null]);
-    await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES ($1,'sender_grant.create','sender_grant',$2,$3)", [actor, id, validated]);
-    return id;
+async function queuePermissionsChanged(client:import('pg').PoolClient,serviceId:string){
+  const row=(await client.query<{id:string;product_id:string}>("SELECT e.id,s.product_id FROM callback_endpoints e JOIN services s ON s.id=e.service_id WHERE e.service_id=$1 AND e.status='active' AND 'service.permissions_changed'=ANY(e.subscribed_events)",[serviceId])).rows[0];
+  if(!row)return;
+  const id=createId('cbx'),payload={id:createId('evt'),apiVersion:'v1',type:'service.permissions_changed',occurredAt:new Date().toISOString(),data:{serviceId,productId:row.product_id}};
+  await client.query("INSERT INTO callback_deliveries(id,endpoint_id,event_type,payload) VALUES($1,$2,'service.permissions_changed',$3)",[id,row.id,payload]);
+  await client.query("INSERT INTO outbox_events(id,aggregate_type,aggregate_id,event_type,payload) VALUES($1,'callback',$2,'callback.requested',$3)",[createId('out'),id,{callbackDeliveryId:id}]);
+}
+export async function setDomainGrant(input:z.input<typeof domainGrantInputSchema>,actor:string){
+  const v=domainGrantInputSchema.parse(input);
+  return transaction(async client=>{
+    if(!(await client.query("SELECT s.id FROM services s JOIN products p ON p.id=s.product_id JOIN sending_domains d ON d.id=$2 WHERE s.id=$1 AND p.status='active' AND d.status='active'",[v.serviceId,v.domainId])).rowCount) throw new Error("Select an active business service and domain");
+    const id=(await client.query<{id:string}>(`INSERT INTO service_domain_grants(id,service_id,sending_domain_id,send_allowed,receive_allowed) VALUES($1,$2,$3,$4,$5)
+      ON CONFLICT(service_id,sending_domain_id) DO UPDATE SET send_allowed=EXCLUDED.send_allowed,receive_allowed=EXCLUDED.receive_allowed,status='active',revision=service_domain_grants.revision+1,updated_at=now() RETURNING id`,[createId('dg'),v.serviceId,v.domainId,v.send,v.receive])).rows[0].id;
+    await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES($1,'domain_grant.set','service_domain_grant',$2,$3)",[actor,id,v]);await queuePermissionsChanged(client,v.serviceId);return id;
   });
 }
-
-export async function toggleSenderGrant(id: string, enabled: boolean, actor: string) {
-  await transaction(async client => {
-    const result = await client.query("UPDATE sender_grants SET status=$2,updated_at=now() WHERE id=$1 RETURNING id", [id, enabled ? "active" : "disabled"]);
-    if (!result.rows[0]) throw new Error("Sender grant not found");
-    await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES ($1,'sender_grant.toggle','sender_grant',$2,$3)", [actor, id, { enabled }]);
+export async function toggleDomainGrant(id:string,enabled:boolean,actor:string){
+  await transaction(async client=>{
+    if(!(await client.query("UPDATE service_domain_grants SET status=$2,revision=revision+1,updated_at=now() WHERE id=$1 RETURNING id",[id,enabled?'active':'disabled'])).rowCount) throw new Error("Domain grant not found");
+    await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES($1,'domain_grant.toggle','service_domain_grant',$2,$3)",[actor,id,{enabled}]);
+    const grant=(await client.query<{service_id:string}>("SELECT service_id FROM service_domain_grants WHERE id=$1",[id])).rows[0];await queuePermissionsChanged(client,grant.service_id);
   });
 }
-
-export async function createServiceCredential(input: { productId: string; serviceName: string }, actor: string) {
-  const validated = serviceCredentialInputSchema.parse(input);
-  return transaction(async client => {
-    const product = await client.query<{ id: string }>("SELECT id FROM products WHERE id=$1", [validated.productId]);
-    if (!product.rows[0]) throw new Error("Product not found");
-    let service = (await client.query<{
-      id: string
-    }>("SELECT id FROM services WHERE product_id=$1 AND name=$2", [validated.productId, validated.serviceName])).rows[0];
-    if (!service) {
-      service = { id: createId("svc") };
-      await client.query("INSERT INTO services(id,product_id,name) VALUES ($1,$2,$3)", [service.id, validated.productId, validated.serviceName])
+export async function createServiceCredential(input:z.input<typeof serviceCredentialInputSchema>,actor:string){
+  const v=serviceCredentialInputSchema.parse(input);
+  const callbackTarget=v.callbackUrl?await resolveCallbackTarget(v.callbackUrl):null;
+  return transaction(async client=>{
+    if(!(await client.query("SELECT id FROM products WHERE id=$1 AND status='active'",[v.productId])).rowCount) throw new Error("Active product required");
+    const serviceId=createId('svc');
+    await client.query("INSERT INTO services(id,product_id,name,suppression_management_allowed) VALUES($1,$2,$3,$4)",[serviceId,v.productId,v.serviceName,v.suppressionManagement]);
+    for(const domain of v.domains){
+      if(!(await client.query("SELECT id FROM sending_domains WHERE id=$1 AND status='active'",[domain.domainId])).rowCount) throw new Error("Active domain required");
+      await client.query("INSERT INTO service_domain_grants(id,service_id,sending_domain_id,send_allowed,receive_allowed) VALUES($1,$2,$3,$4,$5)",[createId('dg'),serviceId,domain.domainId,domain.send,domain.receive]);
     }
-    const raw = `ev_live_${randomBytes(24).toString("base64url")}`;
-    const id = createId("cred");
-    await client.query("INSERT INTO service_credentials(id,service_id,key_prefix,key_hash) VALUES ($1,$2,$3,$4)", [id, service.id, raw.slice(0, 12), hashApiKey(raw)]);
-    await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id) VALUES ($1,'service_credential.create','service_credential',$2)", [actor, id]);
-    return { id, key: raw }
-  })
+    let callback: {id:string;secret:string}|undefined;
+    if(callbackTarget){
+      const id=createId('cb'),secret=`ev_cb_${randomBytes(24).toString('base64url')}`,env=sealSecret({secret},id,1);
+      await client.query("INSERT INTO callback_endpoints(id,service_id,name,url,secret_ciphertext,encrypted_dek,key_version,subscribed_events) VALUES($1,$2,$3,$4,$5,$6,$7,$8)",[id,serviceId,v.serviceName,callbackTarget.url.toString(),env.secretCiphertext,env.encryptedDek,env.keyVersion,['email.accepted','email.delivered','email.bounced','email.failed','email.suppressed','inbound.received','service.permissions_changed']]);callback={id,secret};
+    }
+    const key=`ev_live_${randomBytes(24).toString('base64url')}`,id=createId('cred');
+    await client.query("INSERT INTO service_credentials(id,service_id,key_prefix,key_hash) VALUES($1,$2,$3,$4)",[id,serviceId,key.slice(0,12),hashApiKey(key)]);
+    await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES($1,'service_credential.create','service_credential',$2,$3)",[actor,id,{serviceId,domains:v.domains,suppressionManagement:v.suppressionManagement}]);
+    return {id,serviceId,key,callback};
+  });
 }
 
 export async function rotateServiceCredential(id: string, actor: string) {
@@ -642,24 +620,23 @@ export async function toggleCallback(id: string, enabled: boolean, actor: string
     const endpoint = await client.query("UPDATE callback_endpoints SET status=$2,updated_at=now() WHERE id=$1 RETURNING id", [id, enabled ? "active" : "disabled"]);
     if (!endpoint.rows[0]) throw new Error("Callback endpoint not found");
     if (!enabled) await client.query(`UPDATE callback_deliveries SET status='dead_letter',last_error='Callback endpoint disabled by operator',updated_at=now()
-      WHERE endpoint_id=$1 AND status IN ('pending','retrying','delivering')`, [id]);
+      WHERE endpoint_id=$1 AND status IN ('pending','retrying')`, [id]);
     await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES ($1,'callback_endpoint.toggle','callback_endpoint',$2,$3)", [actor, id, { enabled }]);
   })
 }
 
-export async function rotateCallbackSecret(id: string, requestedSecret: string | undefined, actor: string) {
+export async function replaceCallbackSecret(id: string, requestedSecret: string | undefined, actor: string) {
   const secret = requestedSecret?.trim() || `ev_cb_${randomBytes(24).toString("base64url")}`;
   if (secret.length < 16 || secret.length > 512) throw new Error("Callback signing secret must contain 16 to 512 characters");
   return transaction(async client => {
-    const current = (await client.query<{
-      secret_version: number
-    }>("SELECT secret_version FROM callback_endpoints WHERE id=$1 FOR UPDATE", [id])).rows[0];
+    const current = (await client.query<{ status: string }>("SELECT status FROM callback_endpoints WHERE id=$1 FOR UPDATE", [id])).rows[0];
     if (!current) throw new Error("Callback endpoint not found");
-    const version = current.secret_version + 1;
-    const envelope = sealSecret({ secret }, id, version);
-    await client.query("UPDATE callback_endpoints SET secret_ciphertext=$2,encrypted_dek=$3,key_version=$4,secret_version=$5,updated_at=now() WHERE id=$1", [id, envelope.secretCiphertext, envelope.encryptedDek, envelope.keyVersion, version]);
-    await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES ($1,'callback_endpoint.rotate_secret','callback_endpoint',$2,$3)", [actor, id, { secretVersion: version }]);
-    return { version, secret }
+    if (current.status !== "disabled") throw new Error("Disable callback delivery before replacing its secret");
+    if ((await client.query("SELECT id FROM callback_deliveries WHERE endpoint_id=$1 AND status='delivering' LIMIT 1", [id])).rowCount) throw new Error("Wait for in-flight callback deliveries to finish or recover before replacing the secret");
+    const envelope = sealSecret({ secret }, id, 1);
+    await client.query("UPDATE callback_endpoints SET secret_ciphertext=$2,encrypted_dek=$3,key_version=$4,updated_at=now() WHERE id=$1", [id, envelope.secretCiphertext, envelope.encryptedDek, envelope.keyVersion]);
+    await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id) VALUES ($1,'callback_endpoint.replace_secret','callback_endpoint',$2)", [actor, id]);
+    return { secret }
   })
 }
 
@@ -695,48 +672,15 @@ export async function testCallback(id: string, actor: string) {
   return deliveryId
 }
 
-export async function createInboundRoute(input: {
-  webhookEndpointId: string;
-  domainId: string;
-  productId: string;
-  serviceId?: string;
-  callbackId?: string;
-  localPartPattern: string
-}, actor: string) {
-  const validated = inboundRouteInputSchema.parse(input);
-  const id = createId("ir");
-  await transaction(async client => {
-    const endpoint = (await client.query<{ provider_account_id: string; type: ProviderType; status: string; security_configured: boolean }>(`SELECT e.provider_account_id,a.type,e.status,e.security_configured
-      FROM provider_webhook_endpoints e JOIN provider_accounts a ON a.id=e.provider_account_id
-      WHERE e.id=$1`, [validated.webhookEndpointId])).rows[0];
-    if (!endpoint) throw new Error("Provider webhook endpoint not found");
-    if (endpoint.status !== "active") throw new Error("Provider webhook endpoint is disabled");
-    if (!endpoint.security_configured) throw new Error("Provider webhook security must be configured before inbound routing");
-    if (!providerRegistry(endpoint.type).inbound) throw new Error("This provider does not support inbound routes");
-
-    const domain = await client.query<{ id: string; status: string }>("SELECT id,status FROM sending_domains WHERE id=$1", [validated.domainId]);
-    const product = await client.query<{ id: string }>("SELECT id FROM products WHERE id=$1 AND status='active'", [validated.productId]);
-    if (!domain.rows[0]) throw new Error("Inbound domain not found");
-    if (domain.rows[0].status !== "active") throw new Error("Inbound routes require an active sending domain");
-    if (!product.rows[0]) throw new Error("Product not found");
-
-    if (validated.serviceId) {
-      const service = (await client.query<{ product_id: string }>("SELECT product_id FROM services WHERE id=$1", [validated.serviceId])).rows[0];
-      if (!service) throw new Error("Service not found");
-      if (service.product_id !== validated.productId) throw new Error("The selected service does not belong to the selected product");
-    }
-    if (validated.callbackId) {
-      const callback = (await client.query<{ service_id: string; product_id: string; subscribed_events: string[] }>(`SELECT ce.service_id,s.product_id,ce.subscribed_events
-        FROM callback_endpoints ce JOIN services s ON s.id=ce.service_id WHERE ce.id=$1 AND ce.status='active'`, [validated.callbackId])).rows[0];
-      if (!callback) throw new Error("Callback endpoint not found");
-      if (callback.product_id !== validated.productId) throw new Error("The selected callback endpoint does not belong to the selected product");
-      if (callback.service_id !== validated.serviceId) throw new Error("The selected callback endpoint does not belong to the selected service");
-      if (!callback.subscribed_events.includes("inbound.received")) throw new Error("The selected callback endpoint must subscribe to inbound.received");
-    }
-    await client.query("INSERT INTO inbound_routes(id,provider_webhook_endpoint_id,sending_domain_id,local_part_pattern,product_id,service_id,callback_endpoint_id) VALUES ($1,$2,$3,$4,$5,$6,$7)", [id, validated.webhookEndpointId, validated.domainId, validated.localPartPattern, validated.productId, validated.serviceId ?? null, validated.callbackId ?? null]);
-    await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id) VALUES ($1,'inbound_route.create','inbound_route',$2)", [actor, id]);
-  });
-  return id
+export async function createInboundRoute(input:z.input<typeof inboundRouteInputSchema>,actor:string){
+  const v=inboundRouteInputSchema.parse(input),id=createId('ir');
+  await transaction(async client=>{
+    const endpoint=(await client.query<{type:ProviderType;status:string;security_configured:boolean}>("SELECT a.type,e.status,e.security_configured FROM provider_webhook_endpoints e JOIN provider_accounts a ON a.id=e.provider_account_id WHERE e.id=$1",[v.webhookEndpointId])).rows[0];
+    if(!endpoint||endpoint.status!=='active'||!endpoint.security_configured||!providerRegistry(endpoint.type).inbound) throw new Error("A configured inbound provider endpoint is required");
+    if(!(await client.query("SELECT s.id FROM services s JOIN products p ON p.id=s.product_id JOIN service_domain_grants g ON g.service_id=s.id JOIN sending_domains d ON d.id=g.sending_domain_id WHERE s.id=$1 AND s.product_id=$2 AND p.status='active' AND d.id=$3 AND d.status='active' AND g.status='active' AND g.receive_allowed",[v.serviceId,v.productId,v.domainId])).rowCount) throw new Error("The service requires receiving permission for this domain");
+    await client.query("INSERT INTO inbound_routes(id,provider_webhook_endpoint_id,sending_domain_id,product_id,service_id) VALUES($1,$2,$3,$4,$5)",[id,v.webhookEndpointId,v.domainId,v.productId,v.serviceId]);
+    await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES($1,'inbound_route.create','inbound_route',$2,$3)",[actor,id,v]);
+  });return id;
 }
 
 export async function toggleInboundRoute(id: string, enabled: boolean, actor: string) {

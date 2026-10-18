@@ -27,7 +27,7 @@ Use a direct or session-pooled connection and reserve the documented connection 
 |---|---|
 | Health endpoint fails | Check Web container logs, PostgreSQL reachability, business and BullMQ schema readiness, and required environment variables. |
 | API rejects a request before message creation | Save `requestId` and query `/api/v1/requests/{requestId}` with the same service credential. Check field errors and sender authorization. |
-| Messages remain queued or deferred | Check structured delivery errors and submission attempts, Worker heartbeat/logs, overdue work, sender grants, active routing targets, verified provider identities, quotas, and provider account health. |
+| Messages remain queued or deferred | Check structured delivery errors and submission attempts, Worker heartbeat/logs, overdue work, domain grants, active routing targets, verified provider identities, quotas, and provider account health. |
 | Provider webhook is rejected | Verify the provider event URL, provider-specific signature material, allowed source configuration, and server clock. For Postmark, use the credential-bearing URL generated when Basic Auth is saved. |
 | Outbound callback delivery fails | Inspect the business callback endpoint URL, signing secret, consumer response, and dead-letter/replay state in the operations console. |
 | Credentials cannot be read after deployment | Verify that `ENVOY_KEK_BASE64`, `ENVOY_KEK_VERSION`, and any `ENVOY_KEK_KEYRING_JSON` entries match the keys used to encrypt existing envelopes. |
@@ -44,7 +44,7 @@ HTTP result, next attempt and error; replay a single dead letter or one endpoint
 
 Provider connection tests are bound to the credential version tested. After rotation, run a new test before enabling
 routing. For service keys, issue another key for the same service, switch the caller, then revoke the old key. For
-callback signing rotation, deploy consumer verification for the new secret before switching the endpoint secret.
+callback secret replacement, pause delivery, drain in-flight requests, update the single secret on both sides, then resume and replay/reconcile.
 
 Dashboard trend uses seven UTC calendar-day delivery cohorts; completed delivery rate is delivered divided by
 (delivered + bounced + failed), excluding suppressed/canceled and displaying processing work separately. Future
@@ -69,19 +69,19 @@ Configure these resources in Envoy, not in each business system:
 2. **Provider Accounts / Domains**: associate provider identities and retrieve/present available DNS records.
    The domain administrator publishes them on the actual DNS platform. Refresh the result in Envoy. Provider-specific
    workflows stay with Envoy operators; sending-domain verification is not proof that inbound MX/rules work.
-3. **Service Credentials → Sender permissions**: grant a domain range or exact local part to a product/service.
+3. **Service Credentials → Business domain permissions**: grant each Service explicit domain sending/receiving permission.
    Enter the From address and display name directly when sending. Revocation blocks new submissions and retries even
    if a caller discovered the grant earlier.
-4. **Routing**: configure outbound policies and categories. Discovery reports configured categories, not a reserved quota
+4. **Routing**: configure outbound policies and categories. Discovery reports domain readiness, not a reserved quota
    or a guarantee for a particular content/recipient set.
-5. **Domains / Inbound**: register an inbound-only domain with no outbound providers selected, then route the receiving domain and route its exact address or local-part pattern to a service. An active
-   registered domain and secured supported ingress suffice for an Envoy route; no outbound sender grant or verified
+5. **Domains / Inbound**: register an inbound-only domain with no outbound providers selected, then route the entire authorized receiving domain to the Service. An active
+   registered domain and secured supported ingress suffice for an Envoy route; no outbound sending permission or verified
    outbound provider identity is required. Configure receiving MX/provider rules here through the operator workflow.
-   Exact matching is case normalized, `*` is the only wildcard, and plus aliases need an explicit matching pattern.
-   Routes without a service stay administrator-only. Identical patterns on different services intentionally distribute
-   private copies to all of them; review that choice as a receiving-data authorization.
-6. **Callbacks**: configure the business HTTPS URL, subscriptions and signature secret. Select a callback for inbound
-   routes; outbound delivery events use the service's subscribed endpoints. Give the caller its callback connection
+   Domain matching is case normalized and exact; every local part belongs to the authorized domain scope.
+   Every route requires a Service with explicit receiving permission. Multiple authorized Services on the same domain
+   intentionally receive private copies; review that choice as a receiving-data authorization.
+6. **Callbacks**: configure the business HTTPS URL, subscriptions and single signature secret once per Service.
+   Inbound and outbound events use that same unified endpoint automatically. Give the caller its callback connection
    secret. Callback retries/replay acknowledge transport receipt, never completed business work.
 
 Use `/api/v1/capabilities` with the caller's service key to review `mail`: sender configuration, inbound route
@@ -129,9 +129,14 @@ unfinished copies become rejected while successful copies remain. Purged or term
 unknown outbound sends for operator resolution; content deletion cannot bypass them.
 
 For service credential rotation, use **Issue replacement**, deploy its once-shown key, check the new credential ID's
-usage time, then revoke the old ID before `overlapUntil`. For callback secrets, preinstall old+new verification in the
-consumer, rotate Envoy to the preinstalled secret, observe `x-envoy-key-version`, drain old in-flight/replay windows, then
-remove old verification. Signature algorithm `v1=` and payload API versions are not key versions.
+usage time, then revoke the old ID before `overlapUntil`. Callback secrets follow a separate manual procedure:
+**Pause** the endpoint, wait for **In flight** to reach zero, use **Replace callback secret** and update the consumer with
+the same single secret, then **Resume** and replay endpoint dead letters. Active endpoints and endpoints with unfinished
+attempts reject secret replacement. Recovery closes expired paused attempts; a live HTTP attempt is allowed to finish
+and remains visible until then. Reconcile `/inbound-changes` and outgoing status/events after the pause. Retries use their
+current Unix timestamp with the original event ID and UTF-8 body. Consumers use a fixed 300-second replay window and
+constant-time HMAC-SHA256 verification. Keep clocks synchronized. The `v1=` prefix identifies the signature algorithm;
+payload API versions are separate. Envelope `key_version` is private KEK metadata and is never sent to the consumer.
 
 Capability evidence queries remain live configuration reads with indexed historical evidence. Use `EXPLAIN (ANALYZE,
 BUFFERS)` on a staging clone at representative volumes before introducing a projection/cache; small test query plans

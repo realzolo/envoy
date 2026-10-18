@@ -23,13 +23,13 @@ export async function api(path, { body, idempotencyKey, method } = {}) {
 export function verifyCallback(headers, body, secret) {
   const timestamp = headers["x-envoy-timestamp"];
   const signature = headers["x-envoy-signature"];
-  if (typeof timestamp !== "string" || !/^\d+$/.test(timestamp) || Math.abs(Date.now() / 1000 - Number(timestamp)) > 300 || typeof signature !== "string" || !/^v1=[a-f0-9]{64}$/.test(signature)) return false;
+  if (typeof timestamp !== "string" || !/^\d+$/.test(timestamp) || Math.abs(Math.floor(Date.now() / 1000) - Number(timestamp)) > 300 || typeof signature !== "string" || !/^v1=[a-f0-9]{64}$/.test(signature)) return false;
   const expected = createHmac("sha256", secret).update(`${timestamp}.`).update(body).digest();
   return timingSafeEqual(expected, Buffer.from(signature.slice(3), "hex"));
 }
 
 export async function receiveEvents(port = 6180) {
-  const secrets = [required("ENVOY_CALLBACK_SECRET"),process.env.ENVOY_CALLBACK_SECRET_NEXT].filter(Boolean);
+  const secret = required("ENVOY_CALLBACK_SECRET");
   // Mount persistent storage here; a successful callback means only durable receipt.
   const inbox = resolve(process.env.BUSINESS_EVENT_INBOX ?? "var/example-business-inbox");
   await mkdir(inbox, { recursive: true, mode: 0o700 });
@@ -45,7 +45,7 @@ export async function receiveEvents(port = 6180) {
         chunks.push(chunk);
       }
       const body = Buffer.concat(chunks);
-      if (!secrets.map(secret => verifyCallback(request.headers,body,secret)).includes(true)) { response.writeHead(401).end(); return; }
+      if (!verifyCallback(request.headers,body,secret)) { response.writeHead(401).end(); return; }
       const event = JSON.parse(body.toString("utf8"));
       if (typeof event.id !== "string" || request.headers["x-envoy-id"] !== event.id) { response.writeHead(400).end(); return; }
       const destination = resolve(inbox, `${createHash("sha256").update(event.id).digest("hex")}.json`);

@@ -1,3 +1,4 @@
+import { authorizedSendingDomain } from "@/modules/core/resources/authorization";
 import type { PoolClient } from "pg";
 import type { CanonicalMessage, EmailAddress, ProviderCapabilities } from "@/modules/providers/contracts";
 import { assertMessageCapabilities, estimatedMessageBytes } from "@/modules/providers/shared";
@@ -18,17 +19,7 @@ export type MessageContent = {
 };
 
 export async function authorizedDomain(client: PoolClient, identity: Pick<ServiceIdentity, "productId" | "serviceId">, email: string) {
-  const at = email.lastIndexOf("@");
-  const local = email.slice(0, at);
-  const domain = email.slice(at + 1).toLowerCase();
-  return (await client.query<{ id: string }>(`SELECT sd.id FROM sending_domains sd
-    JOIN sender_grants g ON g.sending_domain_id=sd.id AND g.status='active'
-    JOIN products p ON p.id=g.product_id AND p.status='active'
-    JOIN services s ON s.id=$2 AND s.product_id=p.id
-    WHERE sd.domain=$3 AND sd.status='active' AND g.product_id=$1
-      AND (g.service_id IS NULL OR g.service_id=$2)
-      AND (g.from_local_part IS NULL OR g.from_local_part=$4)
-    ORDER BY g.id LIMIT 1`, [identity.productId, identity.serviceId, domain, local])).rows[0]?.id ?? null;
+  return authorizedSendingDomain(identity.serviceId,email.slice(email.lastIndexOf("@")+1),client);
 }
 
 export function canonicalMessage(message: MessageContent, submissionId: string, envelope?: EmailAddress[]): CanonicalMessage {

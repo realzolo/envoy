@@ -1,3 +1,4 @@
+import { outboundDomainAccess, inboundDomainAccess } from "./authorization";
 import { downloadAttachment } from "@/modules/attachments/access";
 import { attachmentUsage, type SafetyRow } from "@/modules/attachments/safety";
 import { diagnosticSchema } from "@/lib/contracts";
@@ -44,7 +45,7 @@ export async function listDeliveries(serviceId: string, options: {
     `SELECT d.id,d.message_id,d.recipient_email,d.recipient_name,d.recipient_role,d.last_error,d.lifecycle_status,d.engagement_status,
        d.compliance_status,d.queued_at,to_char(d.queued_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_at,d.updated_at,m.subject,m.message_category AS category
      FROM deliveries d JOIN messages m ON m.id=d.message_id
-     WHERE m.service_id=$1 AND ($2::text IS NULL OR d.message_id=$2)
+     WHERE m.service_id=$1 AND ${outboundDomainAccess('m')} AND ($2::text IS NULL OR d.message_id=$2)
        AND ($3::text IS NULL OR d.lifecycle_status=$3)
        AND ($4::timestamptz IS NULL OR (d.queued_at,d.id)<($4,$5))
      ORDER BY d.queued_at DESC,d.id DESC LIMIT $6`,
@@ -94,7 +95,7 @@ export async function getDelivery(id: string, serviceId: string) {
        d.compliance_status,d.queued_at,d.accepted_at,d.delivered_at,d.updated_at,m.subject,
        m.message_category AS category,m.reference_id
      FROM deliveries d JOIN messages m ON m.id=d.message_id
-     WHERE d.id=$1 AND m.service_id=$2`,
+     WHERE d.id=$1 AND m.service_id=$2 AND ${outboundDomainAccess('m')}`,
     [id, serviceId],
   )).rows[0];
   if (!delivery) return null;
@@ -143,10 +144,10 @@ export async function listEvents(serviceId: string, options: {
   const rows = (await query<PublicEventRow>(
     `WITH events AS (
       SELECT de.id,de.delivery_id,NULL::text AS submission_id,d.message_id,de.event_type,de.occurred_at,de.canonical_payload
-      FROM delivery_events de JOIN deliveries d ON d.id=de.delivery_id JOIN messages m ON m.id=d.message_id WHERE m.service_id=$1
+      FROM delivery_events de JOIN deliveries d ON d.id=de.delivery_id JOIN messages m ON m.id=d.message_id WHERE m.service_id=$1 AND ${outboundDomainAccess('m')}
       UNION ALL
       SELECT se.id,NULL::text AS delivery_id,se.submission_id,s.message_id,se.event_type,se.occurred_at,se.canonical_payload
-      FROM submission_events se JOIN submissions s ON s.id=se.submission_id JOIN messages m ON m.id=s.message_id WHERE m.service_id=$1
+      FROM submission_events se JOIN submissions s ON s.id=se.submission_id JOIN messages m ON m.id=s.message_id WHERE m.service_id=$1 AND ${outboundDomainAccess('m')}
     ) SELECT *,to_char(occurred_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_at FROM events
     WHERE ($2::text IS NULL OR delivery_id=$2) AND ($3::text IS NULL OR event_type=$3)
       AND ($7::text IS NULL OR message_id=$7) AND ($4::timestamptz IS NULL OR (occurred_at,id)<($4,$5))
@@ -173,7 +174,7 @@ export async function listInboundMessages(serviceId: string, options: { limit: n
   }>(
     `SELECT i.id,i.from_email,i.to_emails,i.subject,i.status,i.created_at AS received_at,i.author_date,i.ingress_received_at,i.ready_at,to_char(i.created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_at,count(a.id)::text AS attachment_count
      FROM inbound_messages i LEFT JOIN inbound_attachments a ON a.inbound_message_id=i.id
-     WHERE i.service_id=$1 AND ($2::timestamptz IS NULL OR (i.created_at,i.id)<($2,$3))
+     WHERE i.service_id=$1 AND ${inboundDomainAccess('i')} AND ($2::timestamptz IS NULL OR (i.created_at,i.id)<($2,$3))
      GROUP BY i.id ORDER BY i.created_at DESC,i.id DESC LIMIT $4`,
     [serviceId, options.cursor?.at ?? null, options.cursor?.id ?? null, options.limit + 1],
   )).rows;
@@ -213,7 +214,7 @@ export async function getInboundMessage(id: string, serviceId: string) {
     rejection_reason: string | null;
     received_at: Date;
     author_date: Date | null; ingress_received_at: Date | null; ready_at: Date | null;
-  }>("SELECT id,external_message_id,message_id,envelope_recipients,reply_to,in_reply_to,references_ids,from_email,to_emails,cc_emails,bcc_emails,subject,sanitized_html,text_body,content_purged_at,status,rejection_reason,created_at AS received_at,author_date,ingress_received_at,ready_at FROM inbound_messages WHERE id=$1 AND service_id=$2", [id, serviceId])).rows[0];
+  }>(`SELECT id,external_message_id,message_id,envelope_recipients,reply_to,in_reply_to,references_ids,from_email,to_emails,cc_emails,bcc_emails,subject,sanitized_html,text_body,content_purged_at,status,rejection_reason,created_at AS received_at,author_date,ingress_received_at,ready_at FROM inbound_messages i WHERE id=$1 AND service_id=$2 AND ${inboundDomainAccess('i')}`, [id, serviceId])).rows[0];
   if (!message) return null;
   const attachments = (await query<{
     id: string;
@@ -363,7 +364,7 @@ function publicAttempt(row: Record<string, unknown>) {
 }
 
 export async function getMessageAttempts(messageId: string, serviceId: string, options: { limit: number; cursor?: Cursor }) {
-  const owned = await query("SELECT id FROM messages WHERE id=$1 AND service_id=$2", [messageId,serviceId]);
+  const owned = await query(`SELECT id FROM messages m WHERE id=$1 AND service_id=$2 AND ${outboundDomainAccess('m')}`, [messageId,serviceId]);
   if (!owned.rowCount) return null;
   const attempts = await query(`SELECT sa.*,to_char(sa.started_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_at,json_agg(json_build_object('deliveryId',d.id,'email',d.recipient_email,'role',d.recipient_role) ORDER BY d.id) AS recipients
     FROM submission_attempts sa JOIN submissions s ON s.id=sa.submission_id
@@ -375,14 +376,14 @@ export async function getMessageAttempts(messageId: string, serviceId: string, o
 }
 
 export async function getMessageEvents(messageId: string, serviceId: string, options: { limit: number; cursor?: Cursor }) {
-  const owned = await query("SELECT id FROM messages WHERE id=$1 AND service_id=$2", [messageId,serviceId]);
+  const owned = await query(`SELECT id FROM messages m WHERE id=$1 AND service_id=$2 AND ${outboundDomainAccess('m')}`, [messageId,serviceId]);
   if (!owned.rowCount) return null;
   return listEvents(serviceId, { ...options, messageId });
 }
 
 export async function getRequestDiagnostic(requestId: string, serviceId: string) {
   const row = (await query<{ request_id: string; method: string; path: string; status_code: number; duration_ms: number; message_id: string | null; created_at: Date; details: Record<string, unknown> }>(
-    "SELECT request_id,method,path,status_code,duration_ms,message_id,created_at,details FROM request_logs WHERE request_id=$1 AND service_id=$2", [requestId,serviceId],
+    `SELECT request_id,method,path,status_code,duration_ms,message_id,created_at,details FROM request_logs r WHERE request_id=$1 AND service_id=$2 AND (message_id IS NULL OR EXISTS(SELECT 1 FROM messages m WHERE m.id=r.message_id AND ${outboundDomainAccess('m')}))`, [requestId,serviceId],
   )).rows[0];
   return row ? { requestId: row.request_id, method: row.method, path: row.path, statusCode: row.status_code, durationMs: row.duration_ms, messageId: row.message_id, createdAt: row.created_at.toISOString(), problem: row.details.problem ?? null } : null;
 }

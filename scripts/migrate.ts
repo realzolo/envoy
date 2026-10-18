@@ -35,7 +35,7 @@ async function main() {
       if (applied.rowCount) {
         const appliedChecksum = applied.rows[0].checksum;
         if (appliedChecksum !== checksum) {
-          throw new Error(`Migration checksum mismatch for ${file}. This project supports only its authoritative initial schema. Refusing an unknown existing schema; never reset data or edit the ledger manually.`);
+          throw new Error(`Migration checksum mismatch for ${file}. Executed migrations are immutable; use a reviewed forward migration. Refusing an unknown existing schema; never reset data or edit the ledger manually.`);
         }
         continue;
       }

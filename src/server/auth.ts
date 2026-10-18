@@ -8,6 +8,7 @@ export type ServiceIdentity = {
   productId: string;
   product: string;
   rateLimitPerMinute: number;
+  suppressionManagement?: boolean;
 };
 
 export async function authenticateService(request: Request): Promise<ServiceIdentity | null> {
@@ -23,8 +24,9 @@ export async function authenticateService(request: Request): Promise<ServiceIden
     name: string;
     product_id: string;
     product_name: string;
+    suppression_management_allowed:boolean;
   }>(
-    `SELECT c.id AS credential_id, s.id, s.name, s.product_id, p.name AS product_name
+    `SELECT c.id AS credential_id, s.id, s.name, s.product_id, p.name AS product_name,s.suppression_management_allowed
      FROM service_credentials c
      JOIN services s ON s.id = c.service_id
      JOIN products p ON p.id = s.product_id
@@ -39,6 +41,7 @@ export async function authenticateService(request: Request): Promise<ServiceIden
   void query("UPDATE service_credentials SET last_used_at = now() WHERE id = $1 AND (last_used_at IS NULL OR last_used_at < now() - interval '5 minutes')", [service.credential_id]).catch(error => console.error("Credential usage update failed", error));
 
   return {
+    suppressionManagement:service.suppression_management_allowed,
     serviceId: service.id,
     serviceName: service.name,
     productId: service.product_id,

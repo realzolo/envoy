@@ -462,20 +462,8 @@ describe("durable message pipeline", () => {
         domainId: "sd_atlas",
         productId: "prd_atlas",
         serviceId: foreignServiceId,
-        localPartPattern: `integrity-${suffix}`
-      }, "test-suite")).rejects.toThrow(/does not belong to the selected product/);
-      inboundRouteId = await createInboundRoute({
-        webhookEndpointId: "pwe_mock",
-        domainId: "sd_atlas",
-        productId: "prd_atlas",
-        serviceId: "svc_atlas_auth",
-        callbackId: "cb_atlas_local",
-        localPartPattern: `integrity-${suffix}`
-      }, "test-suite");
-      expect((await query<{ service_id: string; callback_endpoint_id: string }>("SELECT service_id,callback_endpoint_id FROM inbound_routes WHERE id=$1", [inboundRouteId])).rows[0]).toEqual({
-        service_id: "svc_atlas_auth",
-        callback_endpoint_id: "cb_atlas_local"
-      });
+      }, "test-suite")).rejects.toThrow(/receiving permission/);
+      await expect(createInboundRoute({webhookEndpointId:"pwe_mock",domainId:"sd_atlas",productId:"prd_atlas",serviceId:"svc_atlas_auth"},"test-suite")).rejects.toThrow(/duplicate/);
       await expect(query("INSERT INTO routing_policies(id,name,product_id,service_id,sending_domain_id) VALUES ($1,$2,$3,$4,$5)", [
         `rp_cross_${suffix}`, "Cross-product route", "prd_atlas", foreignServiceId, "sd_atlas"
       ])).rejects.toThrow();

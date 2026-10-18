@@ -372,7 +372,6 @@ CREATE TABLE callback_endpoints
     secret_ciphertext text        NOT NULL,
     encrypted_dek     text        NOT NULL,
     key_version       text        NOT NULL,
-    secret_version    integer     NOT NULL DEFAULT 1,
     subscribed_events text[] NOT NULL,
     status            text        NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
     created_at        timestamptz NOT NULL DEFAULT now(),

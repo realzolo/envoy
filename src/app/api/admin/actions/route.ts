@@ -167,24 +167,15 @@ export async function POST(request: Request) {
         }, session.email);
         status = 202;
         break;
-      case"grant.create":
-        result = { id: await actions.createSenderGrant({
-          productId: text(body, "productId"),
-          serviceId: typeof body.serviceId === "string" ? body.serviceId : undefined,
-          domainId: text(body, "domainId"),
-          fromLocalPart: typeof body.fromLocalPart === "string" ? body.fromLocalPart : undefined,
-        }, session.email) };
-        status = 201;
+      case"domain_grant.set":
+        result={id:await actions.setDomainGrant({serviceId:text(body,"serviceId"),domainId:text(body,"domainId"),send:body.send===true,receive:body.receive===true},session.email)};
         break;
-      case"grant.toggle":
-        await actions.toggleSenderGrant(text(body, "id"), body.enabled === true, session.email);
+      case"domain_grant.toggle":
+        await actions.toggleDomainGrant(text(body,"id"),body.enabled===true,session.email);
         break;
       case"credential.create":
-        result = await actions.createServiceCredential({
-          productId: text(body, "productId"),
-          serviceName: text(body, "serviceName")
-        }, session.email);
-        status = 201;
+        result=await actions.createServiceCredential({productId:text(body,"productId"),serviceName:text(body,"serviceName"),domains:body.domains as Array<{domainId:string;send:boolean;receive:boolean}>,callbackUrl:typeof body.callbackUrl==='string'&&body.callbackUrl.trim()?body.callbackUrl:undefined,suppressionManagement:body.suppressionManagement===true},session.email);
+        status=201;
         break;
       case"credential.rotate":
         result = await actions.rotateServiceCredential(text(body, "id"), session.email);
@@ -208,8 +199,8 @@ export async function POST(request: Request) {
       case"callback.toggle":
         await actions.toggleCallback(text(body, "id"), body.enabled === true, session.email);
         break;
-      case"callback.rotate_secret":
-        result = await actions.rotateCallbackSecret(text(body, "id"), typeof body.secret === "string" && body.secret.trim() ? body.secret : undefined, session.email);
+      case"callback.replace_secret":
+        result = await actions.replaceCallbackSecret(text(body, "id"), typeof body.secret === "string" && body.secret.trim() ? body.secret : undefined, session.email);
         break;
       case"callback.test":
         result = { deliveryId: await actions.testCallback(text(body, "id"), session.email) };
@@ -228,9 +219,7 @@ export async function POST(request: Request) {
             webhookEndpointId: text(body, "webhookEndpointId"),
             domainId: text(body, "domainId"),
             productId: text(body, "productId"),
-            serviceId: typeof body.serviceId === "string" ? body.serviceId : undefined,
-            callbackId: typeof body.callbackId === "string" ? body.callbackId : undefined,
-            localPartPattern: text(body, "localPartPattern")
+            serviceId: text(body,"serviceId"),
           }, session.email)
         };
         status = 201;

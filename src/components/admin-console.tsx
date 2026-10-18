@@ -119,38 +119,26 @@ function Domains({ data }: { data: Data }) {
   );
 }
 
-function SenderGrants({ data }: { data: Data }) {
-  const action = useAction();
-  const products = rows(data.products).filter(item => item.status === "active");
-  const domains = rows(data.domains).filter(item => item.status === "active");
-  const [selectedProductId, setProductId] = useState("");
-  const productId = products.some(item => item.id === selectedProductId) ? selectedProductId : value(products[0] ?? {}, "id");
-  const services = rows(data.services).filter(item => item.product_id === productId);
-  async function submit(values: FormValues) {
-    try {
-      await action.run({ action: "grant.create", productId, serviceId: formValue(values, "serviceId"), domainId: formValue(values, "domainId"), fromLocalPart: formValue(values, "fromLocalPart") });
-    } catch { /* Inline notice owns this request. */ }
-  }
-  return <div id="sender-permissions"><Space direction="vertical" size="large" className={styles.stack}>
-    <Panel title="Authorize sender addresses" description="Grant a product or service permission to use a domain or exact address. Domain verification alone does not grant permission." defaultExpanded={!rows(data.grants).length}>
-      {products.length && domains.length ? <ActionForm key={productId} fieldErrors={action.fields} layout="vertical" onSubmit={values => void submit(values as FormValues)} initialValues={{ serviceId: "", domainId: value(domains[0], "id"), fromLocalPart: "" }}>
-        <Grid.Row gutter={[16, 0]}>
-          <Grid.Col md={12} xs={24}><Field label="Product" required><Select value={productId} onChange={next => setProductId(String(next))} options={products.map(item => ({ value: value(item, "id"), label: value(item, "name") }))} /></Field></Grid.Col>
-          <Grid.Col md={12} xs={24}><Field field="serviceId" label="Service"><Select options={[{ value: "", label: "All services in product" }, ...services.map(item => ({ value: value(item, "id"), label: value(item, "name") }))]} /></Field></Grid.Col>
-          <Grid.Col md={12} xs={24}><Field field="domainId" label="Domain" required rules={requiredRule}><Select options={domains.map(item => ({ value: value(item, "id"), label: value(item, "domain") }))} /></Field></Grid.Col>
-          <Grid.Col md={12} xs={24}><Field field="fromLocalPart" label="Exact local part" hint="Leave empty to authorize any address in the domain"><Input placeholder="orders" /></Field></Grid.Col>
-          <Grid.Col xs={24}><Submit pending={action.pending} labelText="Grant permission" /></Grid.Col>
-        </Grid.Row>
-      </ActionForm> : <Typography.Text>Create a product and sending domain first.</Typography.Text>}
-      <Notice notice={action.notice} />
+function DomainGrants({data}:{data:Data}){
+  const action=useAction(),domains=rows(data.domains).filter(d=>d.status==='active');
+  async function submit(v:FormValues){try{await action.run({action:"domain_grant.set",serviceId:formValue(v,"serviceId"),domainId:formValue(v,"domainId"),send:v.send===true,receive:v.receive===true});}catch{}}
+  return <Space direction="vertical" size="large" className={styles.stack}>
+    <Panel title="Business domain permissions" description="Choose a business service, domain and sending/receiving permissions. All current and rotated keys of this service share these permissions.">
+      <ActionForm fieldErrors={action.fields} layout="vertical" onSubmit={v=>void submit(v as FormValues)}><Grid.Row gutter={[16,0]}>
+        <Grid.Col md={12} xs={24}><Field field="serviceId" label="Business service" required rules={requiredRule}><Select options={rows(data.services).map(s=>({value:value(s,'id'),label:`${value(s,'product')} / ${value(s,'name')}`}))}/></Field></Grid.Col>
+        <Grid.Col md={12} xs={24}><Field field="domainId" label="Domain" required rules={requiredRule}><Select options={domains.map(d=>({value:value(d,'id'),label:value(d,'domain')}))}/></Field></Grid.Col>
+        <Grid.Col md={12} xs={24}><Field field="send" label="Sending" triggerPropName="checked"><Checkbox>Allow sending from this domain</Checkbox></Field></Grid.Col>
+        <Grid.Col md={12} xs={24}><Field field="receive" label="Receiving" triggerPropName="checked"><Checkbox>Allow receiving and forwarding this domain</Checkbox></Field></Grid.Col>
+        <Grid.Col xs={24}><Submit pending={action.pending} labelText="Save domain permissions"/></Grid.Col>
+      </Grid.Row></ActionForm><Notice notice={action.notice}/>
     </Panel>
-    <TableCard title="Sender permissions"><DataTable data={rows(data.grants)} emptyText="No sender permissions. Authorize a domain or address before sending." columns={[
-      { title: "Product / service", render: (_, grant) => `${value(grant, "product")} / ${value(grant, "service") || "All services"}` },
-      { title: "Authorized From", render: (_, grant) => `${value(grant, "from_local_part") || "*"}@${value(grant, "domain")}` },
-      { title: "Status", render: (_, grant) => <StatusTag>{value(grant, "status")}</StatusTag> },
-      { title: "Action", render: (_, grant) => <ActionButton body={{ action: "grant.toggle", id: grant.id, enabled: grant.status !== "active" }} confirmText={grant.status === "active" ? "Revoke this permission? Queued messages using it will be checked again before sending." : undefined}>{grant.status === "active" ? "Revoke" : "Activate"}</ActionButton> },
-    ]} /></TableCard>
-  </Space></div>;
+    <TableCard title="Authorized domains"><DataTable data={rows(data.grants)} columns={[
+      {title:'Business',render:(_,g)=>`${value(g,'product')} / ${value(g,'service')}`},
+      {title:'Domain',render:(_,g)=>value(g,'domain')},{title:'Sending',render:(_,g)=>g.send_allowed?'Allowed':'Disabled'},
+      {title:'Receiving',render:(_,g)=>g.receive_allowed?'Allowed':'Disabled'}, {title:'Status',render:(_,g)=><StatusTag>{value(g,'status')}</StatusTag>},
+      {title:'Action',render:(_,g)=><ActionButton body={{action:'domain_grant.toggle',id:g.id,enabled:g.status!=='active'}} confirmText="Current resource access and queued work will be checked again.">{g.status==='active'?'Revoke':'Activate'}</ActionButton>}
+    ]}/></TableCard>
+  </Space>;
 }
 
 function Routing({ data }: { data: Data }) {
@@ -303,8 +291,9 @@ function Credentials({ data }: { data: Data }) {
   async function submit(values: FormValues) {
     try {
       setKey("");
-      const result = await action.run({ action: "credential.create", productId: formValue(values, "productId"), serviceName: formValue(values, "serviceName") }) as { key?: string };
-      setKey(result?.key ?? "");
+      const sendIds=formValues(values,"sendDomainIds"),receiveIds=formValues(values,"receiveDomainIds");
+      const result=await action.run({action:"credential.create",productId:formValue(values,"productId"),serviceName:formValue(values,"serviceName"),domains:[...new Set([...sendIds,...receiveIds])].map(domainId=>({domainId,send:sendIds.includes(domainId),receive:receiveIds.includes(domainId)})),callbackUrl:formValue(values,"callbackUrl"),suppressionManagement:values.suppressionManagement===true}) as {key?:string;callback?:{secret:string}};
+      setKey([result?.key,result?.callback?.secret?`Callback secret: ${result.callback.secret}`:null].filter(Boolean).join("\n"));
     } catch {
       // Inline notice owns failures from this request.
     }
@@ -360,6 +349,10 @@ function Credentials({ data }: { data: Data }) {
               <Grid.Row gutter={[16, 0]}>
                 <Grid.Col md={12} xs={24}><Field field="productId" label="Product" initialValue={value(activeProducts[0], "id")} required rules={requiredRule}><Select options={activeProducts.map(product => ({ value: value(product, "id"), label: value(product, "name") }))} /></Field></Grid.Col>
                 <Grid.Col md={12} xs={24}><Field field="serviceName" label="Service name" required rules={requiredRule}><Input /></Field></Grid.Col>
+                <Grid.Col md={12} xs={24}><Field field="sendDomainIds" label="Sending domains"><Select mode="multiple" options={rows(data.domains).filter(d=>d.status==='active').map(d=>({value:value(d,'id'),label:value(d,'domain')}))}/></Field></Grid.Col>
+                <Grid.Col md={12} xs={24}><Field field="receiveDomainIds" label="Receiving domains"><Select mode="multiple" options={rows(data.domains).filter(d=>d.status==='active').map(d=>({value:value(d,'id'),label:value(d,'domain')}))}/></Field></Grid.Col>
+                <Grid.Col xs={24}><Field field="callbackUrl" label="Unified business callback URL" hint="Optional for polling-only connections. The callback secret is shown once with the key."><Input placeholder="https://business.example.com/mail/events"/></Field></Grid.Col>
+                <Grid.Col xs={24}><Field field="suppressionManagement" label="Advanced permission" triggerPropName="checked"><Checkbox>Allow product-wide suppression management</Checkbox></Field></Grid.Col>
                 <Grid.Col xs={24}><Space><Submit pending={action.pending} labelText="Issue credential" /></Space></Grid.Col>
               </Grid.Row>
             </ActionForm>
@@ -399,7 +392,7 @@ function Credentials({ data }: { data: Data }) {
           </TableCard>
         </>
       ) : <Prerequisite title="Create an active product first" description="A service credential must be scoped to an active product." href="/api-keys" action="Create product" />}
-      <SenderGrants data={data} />
+      <DomainGrants data={data} />
     </Space>
   );
 }

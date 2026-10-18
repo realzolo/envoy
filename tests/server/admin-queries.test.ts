@@ -43,14 +43,14 @@ describe("historical delivery search", () => {
   });
 });
 
-import { createSenderGrant, sendTestMessage, toggleSenderGrant } from "@/modules/admin/actions";
+import { setDomainGrant, sendTestMessage, toggleDomainGrant } from "@/modules/admin/actions";
 import { createMessageSchema } from "@/lib/contracts";
 import { getDeliveryDetail, messageComposerData } from "@/modules/admin/queries";
 
 describe("native admin mail", () => {
   it("accepts manually entered mail parameters and retains recipient roles in queries", async () => {
-    const grant = await createSenderGrant({ productId: "prd_atlas", serviceId: "svc_atlas_auth", domainId: "sd_atlas", fromLocalPart: `admin-${crypto.randomUUID()}` }, "test-admin");
-    const permission = (await query<{ from_local_part: string }>("SELECT from_local_part FROM sender_grants WHERE id=$1", [grant])).rows[0];
+    const grant=await setDomainGrant({serviceId:"svc_atlas_auth",domainId:"sd_atlas",send:true,receive:true},"test-admin");
+    const permission={from_local_part:`admin-${crypto.randomUUID()}`};
     let messageId: string | undefined;
     try {
       const result = await sendTestMessage({ serviceId: "svc_atlas_auth", idempotencyKey: crypto.randomUUID(), message: createMessageSchema.parse({
@@ -66,24 +66,19 @@ describe("native admin mail", () => {
       expect(detail?.recipientRole).toBe("bcc");
       expect(detail?.content?.reply_to).toEqual([{email:"help@example.test"}]);
       expect(detail?.content?.cc_recipients).toEqual([{email:"admin-cc@example.test"}]);
-      await toggleSenderGrant(grant, false, "test-admin");
-      expect((await query<{ status: string }>("SELECT status FROM sender_grants WHERE id=$1", [grant])).rows[0].status).toBe("disabled");
+      await toggleDomainGrant(grant, false, "test-admin");
+      expect((await query<{ status: string }>("SELECT status FROM service_domain_grants WHERE id=$1", [grant])).rows[0].status).toBe("disabled");
     } finally {
       if (messageId) {
         await query("DELETE FROM outbox_events WHERE payload->>'messageId'=$1 OR payload->>'deliveryId' IN (SELECT id FROM deliveries WHERE message_id=$1) OR payload->>'submissionId' IN (SELECT id FROM submissions WHERE message_id=$1)", [messageId]);
         await query("DELETE FROM messages WHERE id=$1", [messageId]);
       }
-      await query("DELETE FROM sender_grants WHERE id=$1", [grant]);
+      await toggleDomainGrant(grant,true,"test-admin");
     }
   });
 
-  it("rejects a grant scoped to another product's service", async () => {
-    const productId = `prd_${crypto.randomUUID()}`;
-    await query("INSERT INTO products(id,name) VALUES ($1,$2)", [productId, productId]);
-    try {
-      await expect(createSenderGrant({ productId, serviceId: "svc_atlas_auth", domainId: "sd_atlas" }, "test-admin")).rejects.toThrow("does not belong");
-      expect((await query("SELECT id FROM sender_grants WHERE product_id=$1", [productId])).rows).toHaveLength(0);
-    } finally { await query("DELETE FROM products WHERE id=$1", [productId]); }
+  it("rejects grants to unknown business services",async()=>{
+    await expect(setDomainGrant({serviceId:"missing",domainId:"sd_atlas",send:true,receive:false},"test-admin")).rejects.toThrow("active business service");
   });
 
   it("loads active services for composition and sending permissions for credential management", async () => {
