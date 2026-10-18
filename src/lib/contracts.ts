@@ -28,6 +28,8 @@ export const createMessageSchema = z.object({
   cc: z.array(emailAddressSchema).max(50).default([]),
   bcc: z.array(emailAddressSchema).max(50).default([]),
   subject: headerSafe.max(998).default(""),
+  sendBefore: z.string().datetime().optional(),
+  contentPolicy: z.enum(["normal", "sensitive"]).default("normal"),
   html: contentSchema.optional(),
   text: contentSchema.optional(),
   replyTo: z.array(emailAddressSchema).max(10).default([]),
@@ -137,13 +139,13 @@ export const inboundSummarySchema = z.object({ id: z.string(), from: z.string(),
 export const inboundDetailSchema = inboundSummarySchema.omit({ attachmentCount: true }).extend({ messageId: nullableText, envelopeRecipients: z.array(z.string()), replyTo: z.array(z.string()), inReplyTo: nullableText, references: z.array(z.string()), cc: z.array(z.string()), bcc: z.array(z.string()), html: nullableText, text: nullableText, contentPurgedAt: iso.nullable(), rejectionReason: nullableText, attachments: z.array(attachmentSchema) });
 export const acceptedMessageSchema = z.object({ id: z.string(), processingState: z.literal("queued"), outcome: z.literal("pending"), product: z.string(), category: z.string(), recipientCount: z.number(), acceptedAt: iso, referenceId: z.string().optional() });
 export const messageCountsSchema = z.object(Object.fromEntries([...deliveryStatuses, "suppressed"].map(key => [key, z.number().int().nonnegative()])));
-export const messageSummarySchema = acceptedMessageSchema.extend({ processingState: z.enum(processingStates), outcome: z.enum(messageOutcomes), from: emailAddressSchema, subject: z.string(), referenceId: nullableText, counts: messageCountsSchema });
+export const messageSummarySchema = acceptedMessageSchema.extend({ contentPolicy: z.enum(["normal", "sensitive"]), sendBefore: iso.nullable(), processingState: z.enum(processingStates), outcome: z.enum(messageOutcomes), from: emailAddressSchema, subject: z.string(), referenceId: nullableText, counts: messageCountsSchema });
 export const messageDetailSchema = messageSummarySchema.extend({
   requestId: nullableText, to: z.array(emailAddressSchema), cc: z.array(emailAddressSchema), bcc: z.array(emailAddressSchema),
   html: nullableText, text: nullableText, contentPurgedAt: iso.nullable(), replyTo: z.array(emailAddressSchema),
   headers: z.record(z.string(), z.string()), inReplyTo: nullableText, references: z.array(z.string()), attachments: z.array(outboundAttachmentSchema),
   metadata: z.record(z.string(), z.string()), tags: z.record(z.string(), z.string()),
-  deliveries: z.array(deliverySummarySchema.omit({ messageId: true, subject: true, category: true, queuedAt: true })),
+  deliveries: z.array(deliverySummarySchema.omit({ messageId: true, subject: true, category: true, queuedAt: true }).extend({ acceptedAt: iso.nullable(), deliveredAt: iso.nullable() })),
 });
 export const deliveryDetailSchema = deliverySummarySchema.extend({ referenceId: nullableText, acceptedAt: iso.nullable(), deliveredAt: iso.nullable(), attempts: z.array(submissionAttemptSchema), events: z.array(publicEventSchema) });
 export const problemDetailsSchema = z.object({ type: z.string(), title: z.string(), status: z.number(), detail: z.string(), code: z.string(), requestId: z.string(), errors: z.record(z.string(), z.array(z.string())).optional() });

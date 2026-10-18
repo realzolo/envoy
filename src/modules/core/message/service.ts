@@ -1,3 +1,5 @@
+import { assertSendDeadline, persistedContent, sendingContent, DEADLINE_CODE, DEADLINE_MESSAGE } from "./policy";
+import { secretDigest } from "@/modules/config/envelope";
 import { outboundDomainAccess } from "@/modules/core/resources/authorization";
 import { createHash } from "node:crypto";
 import type { PoolClient } from "pg";
@@ -74,11 +76,12 @@ export async function acceptMessage(args: { identity: ServiceIdentity; idempoten
   if (!validated.success) throw new MessageValidationError(validated.error.issues.map(issue => `${issue.path.join(".")}: ${issue.message}`));
   const input = validated.data;
   if (!args.idempotencyKey.trim() || args.idempotencyKey.length > 256) throw new MessageValidationError(["A valid idempotency key is required."]);
-  const payloadHash = hashPayload(input);
   return transaction(async client => {
     await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [JSON.stringify([args.identity.serviceId, args.idempotencyKey])]);
-    const existing = (await client.query<{ id: string; payload_hash: string; accepted_at: Date; product: string; message_category: string; recipient_count: number; reference_id: string | null }>(
-      "SELECT id,payload_hash,accepted_at,sender_snapshot->>'product' AS product,message_category,recipient_count,reference_id FROM messages WHERE service_id=$1 AND idempotency_key=$2 FOR UPDATE", [args.identity.serviceId, args.idempotencyKey])).rows[0];
+    const existing = (await client.query<{ id: string; payload_hash: string; payload_hash_key_version: string | null; accepted_at: Date; product: string; message_category: string; recipient_count: number; reference_id: string | null }>(
+      "SELECT id,payload_hash,payload_hash_key_version,accepted_at,sender_snapshot->>'product' AS product,message_category,recipient_count,reference_id FROM messages WHERE service_id=$1 AND idempotency_key=$2 FOR UPDATE", [args.identity.serviceId, args.idempotencyKey])).rows[0];
+    const hashed = input.contentPolicy === "sensitive" ? secretDigest(JSON.stringify(stable(input)), `message-payload:${args.identity.serviceId}`, existing?.payload_hash_key_version ?? undefined) : { digest: hashPayload(input), keyVersion: null };
+    const payloadHash = hashed.digest;
     const receipt = (row: { id: string; accepted_at: Date; product: string; message_category: string; recipient_count: number; reference_id: string | null }): AcceptedMessage => ({
       id: row.id, processingState: "queued", outcome: "pending", product: row.product, category: row.message_category,
       recipientCount: row.recipient_count, acceptedAt: row.accepted_at.toISOString(), ...(row.reference_id ? { referenceId: row.reference_id } : {}),
@@ -87,6 +90,10 @@ export async function acceptMessage(args: { identity: ServiceIdentity; idempoten
       if (existing.payload_hash !== payloadHash) throw new IdempotencyConflictError();
       return { duplicate: true, message: receipt(existing) };
     }
+    const now = Date.now();
+    try { assertSendDeadline(input.sendBefore, now); } catch { throw new MessageValidationError([DEADLINE_MESSAGE], DEADLINE_CODE); }
+    if (input.contentPolicy === "sensitive" && (!input.sendBefore || Date.parse(input.sendBefore) > now + 900_000))
+      throw new MessageValidationError(["Sensitive content requires sendBefore within the next 900 seconds."], "INVALID_SENSITIVE_RETENTION");
     const domainId = await authorizedDomain(client, args.identity, input.from.email);
     if (!domainId) throw new MessageValidationError(["This service is not authorized to send from the supplied address."], "SENDER_NOT_AUTHORIZED");
     const attachments = await resolveOutboundAttachments(args.identity.serviceId, input.attachments, client, domainId);
@@ -98,23 +105,25 @@ export async function acceptMessage(args: { identity: ServiceIdentity; idempoten
       subject: input.subject, html_body: input.html ?? null, text_body: input.text ?? null,
       headers: input.headers, in_reply_to: input.inReplyTo ?? null, references_ids: input.references,
       attachment_snapshot: attachments, provider_tags: input.tags ?? {}, message_category: input.category,
-      content_purged_at: null, metadata: input.metadata ?? {},
+      content_purged_at: null, metadata: input.metadata ?? {}, content_policy: input.contentPolicy, send_before: input.sendBefore ? new Date(input.sendBefore) : null,
     };
     const recipients = [];
     for (const role of ["to", "cc", "bcc"] as const) for (const address of input[role]) recipients.push({ ...address, role, blocked: await isSuppressed(client, args.identity.productId, address.email, input.metadata?.listId) });
     const allowed = recipients.filter(item => !item.blocked);
     if (allowed.length) await assertRoutable(client, content, allowed);
+    try { assertSendDeadline(input.sendBefore); } catch { throw new MessageValidationError([DEADLINE_MESSAGE], DEADLINE_CODE); }
+    const stored = persistedContent(content);
     const accepted = (await client.query<{ accepted_at: Date }>(`INSERT INTO messages(id,product_id,service_id,sending_domain_id,request_id,idempotency_key,payload_hash,
       reference_id,metadata,recipient_count,subject,html_body,text_body,message_category,reply_to,provider_tags,sender_snapshot,
-      to_recipients,cc_recipients,bcc_recipients,headers,in_reply_to,references_ids,attachment_snapshot)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24) RETURNING accepted_at`,
+      to_recipients,cc_recipients,bcc_recipients,headers,in_reply_to,references_ids,attachment_snapshot,content_policy,send_before,sensitive_content,payload_hash_key_version)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28) RETURNING accepted_at`,
     [id, content.product_id, content.service_id, domainId, args.requestId ?? null, args.idempotencyKey, payloadHash, input.referenceId ?? null,
-      content.metadata, recipients.length, input.subject, content.html_body, content.text_body, input.category, JSON.stringify(input.replyTo), content.provider_tags,
-      content.sender_snapshot, JSON.stringify(input.to), JSON.stringify(input.cc), JSON.stringify(input.bcc), input.headers, input.inReplyTo ?? null, input.references, JSON.stringify(attachments)])).rows[0];
+      stored.metadata, recipients.length, stored.subject, stored.html_body, stored.text_body, input.category, JSON.stringify(stored.reply_to), stored.provider_tags,
+      stored.sender_snapshot, JSON.stringify(stored.to_recipients), JSON.stringify(stored.cc_recipients), JSON.stringify(stored.bcc_recipients), stored.headers, stored.in_reply_to, stored.references_ids, JSON.stringify(stored.attachment_snapshot), input.contentPolicy, stored.send_before, stored.sensitive_content ?? null, hashed.keyVersion])).rows[0];
     const deliveryIds: string[] = [];
     for (const recipient of recipients) {
       const deliveryId = createId("dlv");
-      await client.query("INSERT INTO deliveries(id,message_id,recipient_email,recipient_name,recipient_role) VALUES ($1,$2,$3,$4,$5)", [deliveryId, id, recipient.email, recipient.name ?? null, recipient.role]);
+      await client.query("INSERT INTO deliveries(id,message_id,recipient_email,recipient_name,recipient_role) VALUES ($1,$2,$3,$4,$5)", [deliveryId, id, recipient.email, input.contentPolicy === "sensitive" ? null : recipient.name ?? null, recipient.role]);
       if (!recipient.blocked) deliveryIds.push(deliveryId);
       await applyDeliveryEvent(client, deliveryId, {
         id: deliveryId, type: recipient.blocked ? "suppressed" : "queued", occurredAt: accepted.accepted_at,
@@ -152,7 +161,7 @@ export async function listMessages(serviceId: string, options: { limit: number; 
     ORDER BY accepted_at DESC,id DESC LIMIT $7`, [serviceId, options.referenceId ?? null, options.cursor?.at ?? null, options.cursor?.id ?? null, options.processingState ?? null, options.outcome ?? null, options.limit + 1])).rows;
   const more = rows.length > options.limit;
   const data = (more ? rows.slice(0, options.limit) : rows).map(row => ({
-    id: row.id, processingState: row.processing_state, outcome: row.outcome, counts: row.counts,
+    id: row.id, processingState: row.processing_state, outcome: row.outcome, counts: row.counts, contentPolicy: row.content_policy, sendBefore: row.send_before?.toISOString() ?? null,
     product: row.product, category: row.category, from: { email: row.sender_snapshot.fromEmail, name: row.sender_snapshot.fromName },
     subject: row.subject, referenceId: row.reference_id, recipientCount: row.recipient_count, acceptedAt: row.accepted_at.toISOString(),
   }));
@@ -161,7 +170,7 @@ export async function listMessages(serviceId: string, options: { limit: number; 
 export async function getMessage(id: string, serviceId: string) {
   const message = (await query<MessageRow>(`${projection} WHERE m.id=$1 AND m.service_id=$2 AND ${outboundDomainAccess('m')}`, [id, serviceId])).rows[0];
   if (!message) return null;
-  const deliveries = (await query<{ id: string; recipient_email: string; recipient_name: string | null; recipient_role: "to" | "cc" | "bcc"; lifecycle_status: string; engagement_status: string; compliance_status: string; last_error: unknown; updated_at: Date }>("SELECT id,recipient_email,recipient_name,recipient_role,lifecycle_status,engagement_status,compliance_status,last_error,updated_at FROM deliveries WHERE message_id=$1 ORDER BY queued_at,id", [id])).rows;
+  const deliveries = (await query<{ id: string; recipient_email: string; recipient_name: string | null; recipient_role: "to" | "cc" | "bcc"; lifecycle_status: string; engagement_status: string; compliance_status: string; last_error: unknown; updated_at: Date; accepted_at: Date | null; delivered_at: Date | null }>("SELECT id,recipient_email,recipient_name,recipient_role,lifecycle_status,engagement_status,compliance_status,last_error,updated_at,accepted_at,delivered_at FROM deliveries WHERE message_id=$1 ORDER BY queued_at,id", [id])).rows;
   return { ...message, deliveries };
 }
 
@@ -181,8 +190,8 @@ export async function cancelMessage(id: string, serviceId: string) {
 
 export type RetryOptions = { acknowledgeUnknown: boolean; actor: string };
 async function retryState(client: PoolClient, deliveryId: string) {
-  return (await client.query<{ id: string; message_id: string; service_id: string; lifecycle_status: string; compliance_status: string; current_attempt_id: string | null; uncertain: boolean; live: boolean; provider_pending: boolean; content_expired: boolean; enabled: boolean; blocked: boolean }>(`SELECT d.id,d.message_id,m.service_id,d.lifecycle_status,d.compliance_status,d.current_attempt_id,
-    COALESCE(NOT a.outcome_determinate,false) AS uncertain,(a.status='submitting') IS TRUE AS live,(a.status IN ('accepted','reconciled') AND d.lifecycle_status='deferred') IS TRUE AS provider_pending,m.content_purged_at IS NOT NULL AS content_expired,
+  return (await client.query<{ id: string; message_id: string; service_id: string; lifecycle_status: string; compliance_status: string; current_attempt_id: string | null; uncertain: boolean; live: boolean; provider_pending: boolean; content_expired: boolean; deadline_expired: boolean; enabled: boolean; blocked: boolean }>(`SELECT d.id,d.message_id,m.service_id,d.lifecycle_status,d.compliance_status,d.current_attempt_id,
+    COALESCE(NOT a.outcome_determinate,false) AS uncertain,(a.status='submitting') IS TRUE AS live,(a.status IN ('accepted','reconciled') AND d.lifecycle_status='deferred') IS TRUE AS provider_pending,m.content_purged_at IS NOT NULL AS content_expired,(m.send_before<=clock_timestamp()) IS TRUE AS deadline_expired,
     ${outboundDomainAccess('m')} AS enabled,
     EXISTS(SELECT 1 FROM suppressions su WHERE su.active AND su.email_normalized=lower(d.recipient_email) AND (su.expires_at IS NULL OR su.expires_at>now())
       AND (su.scope_type='global' OR (su.product_id=m.product_id AND (su.scope_type='product' OR su.list_id=m.metadata->>'listId')))) AS blocked
@@ -190,7 +199,7 @@ async function retryState(client: PoolClient, deliveryId: string) {
 }
 function eligibility(row: Awaited<ReturnType<typeof retryState>>) {
   if (!row) return { allowed: false, reason: "not_found", requiresUnknownAcknowledgement: false };
-  const reason = row.live ? "submission_in_progress" : row.provider_pending ? "provider_delivery_pending" : row.content_expired ? "content_expired" : row.blocked || row.compliance_status !== "clean" ? "suppressed" : !row.enabled ? "sender_not_authorized" : !["failed", "deferred", "unknown", "bounced"].includes(row.lifecycle_status) ? "status_not_retryable" : null;
+  const reason = row.live ? "submission_in_progress" : row.provider_pending ? "provider_delivery_pending" : row.deadline_expired ? "send_deadline_exceeded" : row.content_expired ? "content_expired" : row.blocked || row.compliance_status !== "clean" ? "suppressed" : !row.enabled ? "sender_not_authorized" : !["failed", "deferred", "unknown", "bounced"].includes(row.lifecycle_status) ? "status_not_retryable" : null;
   return { allowed: !reason, reason, requiresUnknownAcknowledgement: row.uncertain || row.lifecycle_status === "unknown" };
 }
 export async function getDeliveryRetryEligibility(deliveryId: string) {
@@ -222,7 +231,7 @@ export async function retryMessage(id: string, serviceId: string, input: { deliv
       eligible.push({ ...row, state: state! });
     }
     if (wanted && skipped.length) throw new MessageValidationError(skipped.map(row => `${row.deliveryId}: ${row.reason}`), "RETRY_NOT_ALLOWED");
-    if (eligible.length) await assertRoutable(client, message, eligible.map(row => ({ email: row.recipient_email, name: row.recipient_name ?? undefined })));
+    if (eligible.length) await assertRoutable(client, sendingContent(message), eligible.map(row => ({ email: row.recipient_email, name: row.recipient_name ?? undefined })));
     for (const row of eligible) {
       if (row.state.current_attempt_id) await client.query("UPDATE submission_attempts SET retry_authorized_at=now(),retry_authorized_by=$2 WHERE id=$1", [row.state.current_attempt_id, actor]);
       await applyDeliveryEvent(client, row.id, { id: createId("retry"), type: "queued", occurredAt: new Date(), metadata: { source: "authorized_retry", actor } }, `retry:${createId("evt")}`, { forceLifecycle: true });

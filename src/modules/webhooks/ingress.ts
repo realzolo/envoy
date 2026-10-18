@@ -1,5 +1,7 @@
+import { contentFreeOutboundEvents } from "./facts";
+import { sealSecret } from "@/modules/config/envelope";
 import { createHash } from "node:crypto";
-import type { ProviderType, WebhookRequest } from "@/modules/providers/contracts";
+import type { CanonicalEvent, ProviderType, WebhookRequest } from "@/modules/providers/contracts";
 import { loadWebhookEndpoint } from "@/modules/config/webhook-endpoint";
 import { objectStore } from "@/modules/config/object-store";
 import { createId } from "@/server/ids";
@@ -18,6 +20,11 @@ export async function ingestProviderWebhook(provider: ProviderType, opaqueToken:
     return { status: 401 as const, error: "Webhook verification failed" }
   }
   if (!verified.valid || !verified.replaySafe) return { status: 401 as const, error: "Webhook verification failed" };
+  // Normalization is provider-local parsing, never mailbox fetching. Freeze only content-free outbound facts.
+  let normalized: CanonicalEvent[] | null = null;
+  try {
+    normalized = contentFreeOutboundEvents(await endpoint.module.webhook.normalize(verified, endpoint.context));
+  } catch { /* Persist the encrypted verified receipt; the worker owns parsing failures/retry. */ }
   const eventId = verified.providerEventId ?? createHash("sha256").update(request.rawBody).digest("hex");
   const id = createId("raw");
   const storedHeaders = { ...request.headers };
@@ -25,7 +32,7 @@ export async function ingestProviderWebhook(provider: ProviderType, opaqueToken:
   if (request.remoteAddress) storedHeaders["x-envoy-source-ip"] = request.remoteAddress;
   const uploadKeys: string[] = [];
   try {
-    let rawBody: Buffer | null = Buffer.from(request.rawBody);
+    let rawBody: Buffer | null = Buffer.from(JSON.stringify(sealSecret({ body: Buffer.from(request.rawBody).toString("base64"), headers: storedHeaders }, `provider-raw:${id}`, 1)));
     let objectKey: string | null = null;
     if (rawBody.byteLength > 64 * 1024) {
       objectKey = `provider-events/${provider}/${id}.bin`;
@@ -34,7 +41,7 @@ export async function ingestProviderWebhook(provider: ProviderType, opaqueToken:
       await objectStore().put(objectKey, rawBody, "application/octet-stream");
       rawBody = null
     }
-    let verification: unknown = serializeVerification(verified);
+    let verification: unknown = sealSecret(serializeVerification(verified), `provider-receipt:${id}`, 1);
     const receipt = Buffer.from(JSON.stringify(verification));
     if (receipt.byteLength > 64 * 1024) {
       const receiptKey = `provider-events/${provider}/${id}.receipt.json`;
@@ -44,8 +51,8 @@ export async function ingestProviderWebhook(provider: ProviderType, opaqueToken:
       verification = { objectKey: receiptKey };
     }
     const inserted = await transaction(async client => {
-      const result = await client.query(`INSERT INTO raw_provider_events(id,provider_account_id,webhook_endpoint_id,provider_event_id,native_type,signature_valid,replay_valid,raw_body,raw_object_key,headers,verification,security_version)
-      VALUES ($1,$2,$3,$4,$5,true,true,$6,$7,$8,$9,$10) ON CONFLICT(provider_account_id,provider_event_id) DO NOTHING RETURNING id`, [id, endpoint.provider_account_id, endpoint.id, eventId, verified.nativeType, rawBody, objectKey, storedHeaders, verification, endpoint.security_version]);
+      const result = await client.query(`INSERT INTO raw_provider_events(id,provider_account_id,webhook_endpoint_id,provider_event_id,native_type,signature_valid,replay_valid,raw_body,raw_object_key,headers,verification,security_version,payload_expires_at,normalized_events)
+      VALUES ($1,$2,$3,$4,$5,true,true,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT(provider_account_id,provider_event_id) DO NOTHING RETURNING id`, [id, endpoint.provider_account_id, endpoint.id, eventId, verified.nativeType, rawBody, objectKey, {}, verification, endpoint.security_version, normalized ? new Date(Date.now() + 900_000) : null, normalized ? JSON.stringify(normalized) : null]);
       if (!result.rowCount) {
         const existing = await client.query<{ id: string }>("SELECT id FROM raw_provider_events WHERE provider_account_id=$1 AND provider_event_id=$2", [endpoint.provider_account_id, eventId]);
         return { duplicate: true, id: existing.rows[0].id };

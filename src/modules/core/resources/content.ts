@@ -20,7 +20,7 @@ async function purgeUnsharedRaw(client:PoolClient,id:string) {
       AND NOT EXISTS(SELECT 1 FROM submission_events se JOIN submissions sub ON sub.id=se.submission_id JOIN messages m ON m.id=sub.message_id WHERE se.raw_provider_event_id=r.id AND m.content_purged_at IS NULL)`,[id])).rows[0];
   if(!raw) return;
   await forgetObject(client,raw.raw_object_key);await forgetObject(client,raw.receipt_object_key);
-  await client.query("UPDATE raw_provider_events SET raw_body=NULL,raw_object_key=NULL,headers='{}',verification='{}',content_purged_at=clock_timestamp() WHERE id=$1",[id]);
+  await client.query("UPDATE raw_provider_events SET normalized_events=NULL,raw_body=NULL,raw_object_key=NULL,headers='{}',verification='{}',content_purged_at=clock_timestamp() WHERE id=$1",[id]);
 }
 
 /** Tombstones and deletion intents commit atomically; storage failures cannot restore API access. */
@@ -62,7 +62,7 @@ export async function purgeContent(kind: "inbound" | "message" | "file", id: str
         // Raw ingress is shared administrative evidence. It can be erased only after all frozen copies are gone.
         if (row.raw_provider_event_id) await purgeUnsharedRaw(client,row.raw_provider_event_id);
       } else {
-        await client.query(`UPDATE messages SET subject='',html_body=NULL,text_body='',headers='{}',metadata='{}',provider_tags='{}',
+        await client.query(`UPDATE messages SET sensitive_content=NULL,sensitive_content_purged_at=COALESCE(sensitive_content_purged_at,clock_timestamp()),subject='',html_body=NULL,text_body='',headers='{}',metadata='{}',provider_tags='{}',
           attachment_snapshot='[]',content_purged_at=clock_timestamp() WHERE id=$1`,[id]);
         const rawIds=(await client.query<{id:string}>(`SELECT DISTINCT raw_provider_event_id AS id FROM (
           SELECT e.raw_provider_event_id FROM delivery_events e JOIN deliveries d ON d.id=e.delivery_id WHERE d.message_id=$1

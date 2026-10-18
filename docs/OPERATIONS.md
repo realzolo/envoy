@@ -169,3 +169,10 @@ Run the existing cleanup task for unreferenced uploads, quarantined files and de
 safety and fence late jobs atomically. A download already authorized and copied before erasure may finish; deletion
 cannot recall bytes already delivered to a caller. Backups, object-store administrators and business caches retain their
 own lifecycle responsibilities. This task has performed no production deployment, scanner setup, migration or real send.
+
+
+## Sensitive-mail privacy and deadlines
+
+Keep the worker running: its mandatory 10-second privacy sweep destroys expired sensitive message envelopes independently of optional day-based retention, and retries durable object-deletion intents. Monitor worker heartbeats and storage cleanup failures; outages delay physical deletion but cannot enable preview or a new submission after `sendBefore`. Keep previous KEKs in `ENVOY_KEK_KEYRING_JSON` while versioned sensitive idempotency digests still need verification. Losing these keys prevents safe same-key comparisons even after body cleanup.
+
+Sensitive messages show a fixed placeholder in email lists and an unavailable-content explanation in the detail panel. Diagnose using message/reference/request IDs, delivery lifecycle, accepted/delivered timestamps and fixed diagnostics. Do not copy real verification codes into identifiers, category, reusable attachments, provider account labels or operator notes. Provider raw data is encrypted; outbound raw copies disappear after normalization or 15 minutes pending. A whitelist of normalized outbound facts is durably frozen first, so late association and replay still work after raw expiry; replay never reconstructs the original body. Unknown classifications and inbound receipts keep their independent recovery lifecycle. Accepted/unknown work retains its facts and is never automatically failed/resubmitted due to a content deadline. Templates, verification-code validation and TTL belong to the caller.

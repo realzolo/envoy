@@ -1,3 +1,4 @@
+import { messagePolicies } from "@/modules/core/message/policy";
 import { discoverMail } from "@/modules/core/resources/capabilities";
 import { MAX_ATTACHMENT_BYTES, MAX_CONTENT_BYTES, MAX_FILE_BYTES, MAX_REQUEST_BYTES } from "@/lib/contracts";
 import { scanPolicy } from "@/modules/attachments/scanner";
@@ -10,6 +11,7 @@ export const GET = serviceRoute(async (_request, identity) => {
     features: { nativeFrom: true, cc: true, bcc: true, replyTo: true, customHeaders: true, threading: true, outboundAttachments: true, inlineAttachments: true, scheduling: false, inboundAttachments: true, unknownOutcomeResolution: "best_effort_with_manual_review" },
     content: { ownership: "caller", formats: ["text/plain", "text/html"], requiresRenderedContent: true },
     mail: await discoverMail(identity),
+    messagePolicies,
     attachmentSafety: { processing:"asynchronous",mode:"require_clean",policyVersion:scanPolicy().version,runtimeAvailability:"unknown" },
     routing: "Submission-time routing checks authorization, configured routing rules, provider identity and requested capabilities; configuration does not guarantee current routing availability.",
     resources: ["messages", "deliveries", "events", "requests", "files", "inbound-messages", "inbound-changes", "suppressions", "capabilities"],

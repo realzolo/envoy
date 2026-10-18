@@ -1,3 +1,5 @@
+import { runWithSubmissionPolicy } from "@/modules/providers/submission-policy";
+import { SendDeadlineError } from "@/modules/core/message/policy";
 import { withSafeOutboundAttachments } from "@/modules/attachments/access";
 import { AttachmentUseError } from "@/modules/attachments/safety";
 import type { Job } from "bullmq";
@@ -15,19 +17,20 @@ export async function processDelivery(job: Job<{ submissionId: string }>) {
   try {
     account = await loadProviderAccount(submission.providerAccountId);
     account.context.idempotencyKey = submission.providerIdempotencyKey ?? undefined;
-    await withSafeOutboundAttachments(submission.messageId,submission.attemptId,submission.attachments,async bytes => {
+    await withSafeOutboundAttachments(submission.messageId,submission.attemptId,submission.attachments,async (bytes,beforeSend) => {
       bytes.forEach((value,index)=>{submission.message.attachments[index].content=value;});
       started=true;
-      result=await account.module.sender.send(submission.message,account.context);
+      result=await runWithSubmissionPolicy({ sendBefore: submission.sendBefore, sensitive: submission.sensitive, beforeSend }, () => account.module.sender.send(submission.message,account.context));
     });
   } catch (error) {
     if (!started) {
-      await markDeterminateFailure(submission.attemptId, {category:"policy",code:error instanceof AttachmentUseError ? error.code : "LOCAL_PREPARATION_FAILED",stage:"preparation",message:error instanceof AttachmentUseError ? error.reasonCode : "Local message preparation failed"},false);
+      await markDeterminateFailure(submission.attemptId, {category:"policy",code:error instanceof SendDeadlineError ? error.code : error instanceof AttachmentUseError ? error.code : "LOCAL_PREPARATION_FAILED",stage:"preparation",message:error instanceof SendDeadlineError ? error.message : error instanceof AttachmentUseError ? error.reasonCode : "Local message preparation failed"},false);
       return;
     }
     // A read-only guard COMMIT can fail after a definitive provider response; retain that response.
     if (!result) {
-      if (error instanceof CanonicalProviderError && error.outcome === "not_accepted") await markDeterminateFailure(submission.attemptId,error,error.retryable);
+      if (error instanceof SendDeadlineError) await markDeterminateFailure(submission.attemptId,{category:"policy",code:error.code,message:error.message},false);
+      else if (error instanceof CanonicalProviderError && error.outcome === "not_accepted") await markDeterminateFailure(submission.attemptId,error,error.retryable);
       else await markUnknown(submission.attemptId,"Provider submission outcome is unknown",error instanceof CanonicalProviderError ? error : undefined);
       return;
     }

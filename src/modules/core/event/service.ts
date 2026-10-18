@@ -1,3 +1,5 @@
+import { contentFreeOutboundEvents } from "@/modules/webhooks/facts";
+import { openSecret, type Envelope } from "@/modules/config/envelope";
 import type { PoolClient } from "pg";
 import type { CanonicalEvent, ProviderType, WebhookVerification } from "@/modules/providers/contracts";
 import { safeDiagnostic } from "@/modules/providers/shared";
@@ -20,6 +22,17 @@ function eventDiagnostic(event: DeliveryStateEvent): Diagnostic | null {
   if (event.type === "failed" || event.type === "deferred") return diagnostic(event.type === "failed" ? "DELIVERY_FAILED" : "DELIVERY_DEFERRED", safeDiagnostic(event.metadata.reason ?? event.bounce?.message ?? (event.type === "failed" ? "Delivery failed." : "The recipient server temporarily deferred delivery.")), "recipient_delivery", { acceptance: "accepted", retryable: event.type === "deferred", providerCode: typeof event.metadata.providerCode === "string" ? safeDiagnostic(event.metadata.providerCode) : event.bounce?.code, smtpStatus: typeof event.metadata.smtpStatus === "string" ? safeDiagnostic(event.metadata.smtpStatus) : undefined, retryDecision: { action: "none", reason: event.type === "deferred" ? "provider_managed_retry" : "not_retryable" }, occurredAt: event.occurredAt.toISOString() });
   if (event.type === "suppressed") return diagnostic("RECIPIENT_SUPPRESSED", "The recipient is blocked by suppression policy.", event.externalMessageId ? "recipient_delivery" : "policy", { acceptance: event.externalMessageId ? "accepted" : "not_accepted", occurredAt: event.occurredAt.toISOString() });
   return null;
+}
+
+/** Provider free text can echo the submitted content. Persist facts only for sensitive mail. */
+function sensitiveEvent(event: DeliveryStateEvent): DeliveryStateEvent {
+  const error = eventDiagnostic(event);
+  const safe = error ? { ...error, message: error.code === "SEND_DEADLINE_EXCEEDED" ? "The message sending deadline has passed; no new provider submission is allowed." : "Sensitive message delivery diagnostic withheld.",
+    providerCode: undefined, smtpStatus: undefined,
+    retryDecision: { ...error.retryDecision, reason: error.retryDecision.action === "manual_review" ? "manual_review_required" : undefined } } : undefined;
+  return { id: event.id, externalMessageId: event.externalMessageId, type: event.type, occurredAt: event.occurredAt,
+    recipient: event.recipient, ...(event.bounce ? { bounce: { classification: event.bounce.classification } } : {}),
+    metadata: safe ? { diagnostic: safe } : {} };
 }
 
 async function enqueueCallbacks(client: PoolClient, serviceId: string, eventId: string, event: DeliveryStateEvent, data: Record<string, unknown>, scope: "recipient" | "submission") {
@@ -51,6 +64,7 @@ async function applySuppression(client: PoolClient, delivery: { recipient_email:
 export async function applyDeliveryEvent(client: PoolClient, deliveryId: string, event: DeliveryStateEvent, sourceKey: string, options: { rawEventId?: string | null; attemptId?: string; forceLifecycle?: boolean; providerEvent?: boolean; projectLifecycle?: boolean } = {}) {
   const current = (await client.query<{ current_attempt_id: string | null; current_submission_id: string | null; lifecycle_status: string }>("SELECT current_attempt_id,current_submission_id,lifecycle_status FROM deliveries WHERE id=$1 FOR UPDATE", [deliveryId])).rows[0];
   if (!current) return false;
+  if ((await client.query<{ content_policy: string }>("SELECT m.content_policy FROM messages m JOIN deliveries d ON d.message_id=m.id WHERE d.id=$1", [deliveryId])).rows[0]?.content_policy === "sensitive") event = sensitiveEvent(event);
   const eventId = createId("dev");
   const key = event.type === "accepted" && options.attemptId ? `attempt:${options.attemptId}:${deliveryId}:accepted` : sourceKey;
   const error = eventDiagnostic(event);
@@ -98,6 +112,7 @@ export async function applyDeliveryEvent(client: PoolClient, deliveryId: string,
 }
 
 export async function applySubmissionEvent(client: PoolClient, submissionId: string, event: DeliveryStateEvent, sourceKey: string, attemptId?: string, rawEventId?: string | null) {
+  if ((await client.query<{ content_policy: string }>("SELECT m.content_policy FROM messages m JOIN submissions s ON s.message_id=m.id WHERE s.id=$1", [submissionId])).rows[0]?.content_policy === "sensitive") event = sensitiveEvent(event);
   const id = createId("sev");
   const error = eventDiagnostic(event);
   const payload = { ...event, id, attemptId, sourceId: event.id, metadata: { ...event.metadata, ...(error ? { diagnostic: error } : {}) } };
@@ -158,30 +173,47 @@ function restoreVerification(value: unknown): WebhookVerification {
 export async function processRawProviderEvent(rawEventId: string) {
   const raw = (await query<{
     id: string; provider_account_id: string; webhook_endpoint_id: string; provider_type: ProviderType;
-    processed_at: Date | null; verification: unknown; signature_valid: boolean; replay_valid: boolean; processing_attempt_count: number
+    processed_at: Date | null; verification: unknown; signature_valid: boolean; replay_valid: boolean; processing_attempt_count: number; raw_payload_purged_at: Date | null; normalized_events: Array<Omit<CanonicalEvent, "occurredAt"> & { occurredAt: string }> | null
   }>(`UPDATE raw_provider_events r SET processing_attempt_count=processing_attempt_count+1,next_attempt_at=now()+interval '2 minutes'
     FROM provider_accounts a WHERE r.id=$1 AND a.id=r.provider_account_id AND r.processed_at IS NULL
       AND r.next_attempt_at<=now() AND r.processing_attempt_count<20 AND r.content_purged_at IS NULL AND r.terminated_at IS NULL
-    RETURNING r.id,r.provider_account_id,r.webhook_endpoint_id,a.type AS provider_type,r.processed_at,r.verification,r.signature_valid,r.replay_valid,r.processing_attempt_count`, [rawEventId])).rows[0];
+    RETURNING r.id,r.provider_account_id,r.webhook_endpoint_id,a.type AS provider_type,r.processed_at,r.verification,r.signature_valid,r.replay_valid,r.processing_attempt_count,r.raw_payload_purged_at,r.normalized_events`, [rawEventId])).rows[0];
   if (!raw) return;
   try {
-    if (!raw.signature_valid || !raw.replay_valid || !raw.verification) throw new Error("Persisted webhook has no verified receipt");
+    if (!raw.signature_valid || !raw.replay_valid) throw new Error("Persisted webhook has no verified receipt");
     const account = await loadProviderAccount(raw.provider_account_id, { allowNonActive: true });
-    const reference = raw.verification as { objectKey?: unknown };
-    const receipt = typeof reference.objectKey === "string" ? JSON.parse(Buffer.from(await objectStore().get(reference.objectKey)).toString("utf8")) : raw.verification;
-    const verified = restoreVerification(receipt);
-    if (raw.provider_type === "ses") {
-      const p = verified.parsed as Record<string, unknown>;
-      if (p.Type === "SubscriptionConfirmation" && typeof p.SubscribeURL === "string" && typeof p.TopicArn === "string" && isTrustedSnsSubscribeUrl(p.SubscribeURL, p.TopicArn)) await fetch(p.SubscribeURL, { redirect: "error", signal: AbortSignal.timeout(5_000) });
+    let verified: WebhookVerification | undefined;
+    let events: CanonicalEvent[];
+    if (raw.raw_payload_purged_at && raw.normalized_events) {
+      events = raw.normalized_events.map(event => ({ ...event, occurredAt: new Date(event.occurredAt) }));
+    } else {
+      const reference = raw.verification as { objectKey?: unknown };
+      const receipt = typeof reference.objectKey === "string" ? JSON.parse(Buffer.from(await objectStore().get(reference.objectKey)).toString("utf8")) : raw.verification;
+      verified = restoreVerification(openSecret(receipt as Envelope, `provider-receipt:${raw.id}`, 1));
+      if (raw.provider_type === "ses") {
+        const p = verified.parsed as Record<string, unknown>;
+        if (p.Type === "SubscriptionConfirmation" && typeof p.SubscribeURL === "string" && typeof p.TopicArn === "string" && isTrustedSnsSubscribeUrl(p.SubscribeURL, p.TopicArn)) await fetch(p.SubscribeURL, { redirect: "error", signal: AbortSignal.timeout(5_000) });
+      }
+      events = await account.module.webhook.normalize(verified, account.context);
     }
-    const events = await account.module.webhook.normalize(verified, account.context);
+    const facts = contentFreeOutboundEvents(events);
+    if (facts && !raw.normalized_events) await query("UPDATE raw_provider_events SET normalized_events=$2,payload_expires_at=COALESCE(payload_expires_at,clock_timestamp()+interval '15 minutes') WHERE id=$1", [raw.id, JSON.stringify(facts)]);
     for (const item of events) {
-      if (item.type === "inbound.received" && account.module.inbound) await processInboundEvent({ providerAccountId: raw.provider_account_id, webhookEndpointId: raw.webhook_endpoint_id, rawEventId: raw.id, verified, receive: value => account.module.inbound!.receive(value, account.context) });
+      if (item.type === "inbound.received" && account.module.inbound) await processInboundEvent({ providerAccountId: raw.provider_account_id, webhookEndpointId: raw.webhook_endpoint_id, rawEventId: raw.id, verified: verified!, receive: value => account.module.inbound!.receive(value, account.context) });
       else if (!await applyCanonicalEvent(raw.provider_account_id, raw.id, item)) throw new Error("Provider event is waiting for its delivery attempt to be associated");
     }
-    await query("UPDATE raw_provider_events SET processed_at=now(),processing_error=NULL WHERE id=$1", [raw.id]);
+    if (!facts) {
+      await query("UPDATE raw_provider_events SET processed_at=now(),processing_error=NULL WHERE id=$1", [raw.id]);
+    } else {
+      // Outbound normalized facts are sufficient for replay. Never retain an extra provider echo of sensitive content.
+      await transaction(async client => {
+        const stored = (await client.query<{ raw_object_key: string | null; receipt_object_key: string | null }>("SELECT raw_object_key,verification->>'objectKey' AS receipt_object_key FROM raw_provider_events WHERE id=$1 FOR UPDATE", [raw.id])).rows[0];
+        for (const key of [stored.raw_object_key, stored.receipt_object_key]) if (key) await client.query("INSERT INTO pending_object_deletions(object_key) VALUES($1) ON CONFLICT DO NOTHING", [key]);
+        await client.query("UPDATE raw_provider_events SET processed_at=now(),processing_error=NULL,raw_body=NULL,raw_object_key=NULL,verification='{}',headers='{}',raw_payload_purged_at=clock_timestamp() WHERE id=$1", [raw.id]);
+      });
+    }
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown event error";
+    const message = error instanceof InboundTerminalError ? "Inbound event processing was rejected." : "Provider event processing failed; durable verified receipt/facts retained for retry.";
     if (error instanceof InboundTerminalError) {
       await query("UPDATE raw_provider_events SET processed_at=now(),processing_error=$2 WHERE id=$1", [raw.id, message]);
       return;

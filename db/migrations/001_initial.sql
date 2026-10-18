@@ -185,8 +185,13 @@ CREATE TABLE messages
     references_ids text[] NOT NULL DEFAULT '{}',
     attachment_snapshot jsonb NOT NULL DEFAULT '[]'::jsonb,
     sender_snapshot   jsonb       NOT NULL,
+    content_policy text NOT NULL DEFAULT 'normal' CHECK(content_policy IN ('normal','sensitive')),
+    send_before timestamptz,
+    sensitive_content jsonb,
+    sensitive_content_purged_at timestamptz,
     idempotency_key   text        NOT NULL,
     payload_hash      text        NOT NULL,
+    payload_hash_key_version text,
     reference_id      text,
     metadata          jsonb       NOT NULL DEFAULT '{}'::jsonb,
     recipient_count   integer     NOT NULL CHECK (recipient_count > 0),
@@ -198,9 +203,14 @@ CREATE TABLE messages
     provider_tags     jsonb       NOT NULL DEFAULT '{}'::jsonb,
     accepted_at       timestamptz NOT NULL DEFAULT now(),
     updated_at        timestamptz NOT NULL DEFAULT now(),
-    CHECK (html_body IS NOT NULL OR text_body IS NOT NULL),
+    CHECK (content_policy='sensitive' OR html_body IS NOT NULL OR text_body IS NOT NULL),
+    CHECK (content_policy<>'sensitive' OR content_purged_at IS NOT NULL OR (send_before IS NOT NULL AND html_body IS NULL AND text_body IS NULL
+      AND subject='[Sensitive content]' AND metadata='{}'::jsonb AND headers='{}'::jsonb AND provider_tags='{}'::jsonb)),
+    CHECK (content_policy='sensitive' OR sensitive_content IS NULL),
     UNIQUE (service_id, idempotency_key)
 );
+
+CREATE INDEX messages_sensitive_expiry_idx ON messages(send_before) WHERE sensitive_content IS NOT NULL;
 
 CREATE TABLE message_retries (
     message_id text NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
@@ -312,6 +322,9 @@ CREATE TABLE raw_provider_events
     native_type         text        NOT NULL,
     signature_valid     boolean     NOT NULL,
     replay_valid        boolean     NOT NULL,
+    payload_expires_at timestamptz,
+    raw_payload_purged_at timestamptz,
+    normalized_events jsonb,
     raw_body            bytea,
     raw_object_key      text,
     headers             jsonb       NOT NULL,

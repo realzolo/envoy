@@ -42,6 +42,8 @@ Both API submissions and console test messages supply From, Reply-To, and catego
 | `to`, `cc`, `bcc` | Arrays of `{email,name?}`, default empty; 1–50 recipients combined, unique across roles |
 | `replyTo` | Array of `{email,name?}`, default empty, at most 10 addresses |
 | `subject` | Header-safe string, defaults to empty, at most 998 characters |
+| `sendBefore` | Optional future UTC ISO timestamp ending in `Z`; prohibits new provider submissions at or after this instant |
+| `contentPolicy` | `normal` (default) or `sensitive`; sensitive requires `sendBefore` within the next 900 seconds |
 | `html`, `text` | At least one nonempty body; at most 2,000,000 UTF-8 bytes each |
 | `category` | Stable lowercase key, default `transactional`, 2–80 characters |
 | `attachments` | At most 20 private file references; at most 20,000,000 bytes combined |
@@ -67,6 +69,28 @@ claim that a provider accepted the mail or that an inbox received it.
 The key is scoped to the service. Repeating a key with the same normalized request returns the same acceptance receipt;
 reusing it with different content returns `409`. Keep the same key after an HTTP timeout. Message IDs and idempotency
 summaries survive optional body cleanup.
+
+## Sending deadline and sensitive content
+
+`sendBefore` is a latest **submission** time, independent of the worker execution lease and mail category. Admission, claims, manual retries, determinate-rejection failover and reconciliation-triggered resubmission check it. After attachment, credential, DNS and TLS waits, the transport rechecks current domain authorization, the execution lease and the deadline immediately before writing HTTP headers/body. A pre-submit expiry produces `failed` with `SEND_DEADLINE_EXCEEDED`, acceptance `not_accepted` and no retry. Once bytes may have been sent, lost responses remain `unknown`; existing accepted/unknown attempts continue factual reconciliation and are never declared expired merely to permit resending. Upstream providers may deliver already accepted mail later; this field cannot recall it.
+
+Use `contentPolicy: "sensitive"` for content that must not be inspectable in Envoy. The sender/recipient display names, subject, bodies, Reply-To, custom/thread headers, attachment presentation, tags and metadata are encrypted in one AES-256-GCM envelope, bound to the message ID. Only send preparation opens this envelope. API/admin queries return `[Sensitive content]`, null bodies, empty metadata/tags/headers/thread fields and no message attachment details. Minimal envelope email addresses, category, opaque reference/request IDs and delivery facts remain available. Keep secrets out of these retained identifiers and independently uploaded file bytes/names; sensitive message policy does not redefine the separate reusable-file lifecycle. Inline public branding assets remain supported.
+
+Sensitive requests require a deadline no more than 900 seconds in the future. Their encrypted content becomes unusable for submission at that deadline and is removed by the mandatory worker privacy sweep, normally within its 10-second interval. This sweep runs independently of optional normal-content retention; worker downtime delays physical removal, while send/read restrictions remain in force. It preserves minimal message/receipt/callback facts. Request and provider fingerprints use KEK-versioned HMACs to prevent offline guessing of short sensitive values; retain old KEKs needed for durable idempotency verification. Identical service key/payload replays resolve **before** deadline and retention checks, even after the encrypted body is gone. Changing the policy or deadline under an existing key is a conflict.
+
+All provider raw bodies, headers and verified receipts are envelope-encrypted before DB/object storage. Outbound receipts are erased after successful normalization; verified outbound receipts first freeze a whitelist of content-free normalized facts. Their raw copies have a 900-second privacy deadline even before association; durable normalized replay remains available after raw removal. Unknown classifications and inbound receipts are not assigned this outbound deadline. Inbound receipts keep their independent recovery/retention lifecycle. Sensitive canonical events, callback data, provider responses and diagnostics retain only delivery facts and fixed diagnostic text, never provider free-text echoes of the original message.
+
+Discovery exposes the exact gate below. Callers requiring sensitive/deadline handling must fail closed when these features are absent:
+
+```json
+"messagePolicies": {
+  "sendBefore": true,
+  "contentPolicies": ["normal", "sensitive"],
+  "sensitive": { "requiresSendBefore": true, "maxRetentionSeconds": 900, "contentReadable": false }
+}
+```
+
+`POST /messages` and message-level `acceptedAt` indicate durable Envoy queue acceptance. In `GET /messages/{id}`, each delivery now includes nullable `acceptedAt` and `deliveredAt` from its provider/recipient facts. Provider lifecycle `accepted` keeps message outcome `pending`; `succeeded` means all recipient lifecycles are `delivered`. A provider event can confirm delivery without supplying an earlier acceptance timestamp; do not synthesize that timestamp from the local 202 receipt.
 
 ## Files and inline images
 

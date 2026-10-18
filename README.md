@@ -84,7 +84,7 @@ The service API is self-describing at `GET /api/v1` and `GET /api/v1/openapi.jso
 | Resource                | Operations                                                                       |
 |-------------------------|----------------------------------------------------------------------------------|
 | `/messages`             | Queue and list messages                                                          |
-| `/messages/{id}`        | Inspect final content and recipient deliveries                                   |
+| `/messages/{id}`        | Inspect normal content or redacted sensitive metadata and recipient deliveries                                   |
 | `/messages/{id}/cancel` | Cancel deliveries that have not crossed the provider boundary                    |
 | `/messages/{id}/retry`  | Retry eligible outcomes with duplicate-risk acknowledgement for unknown outcomes |
 | `/deliveries`           | List recipient-level deliveries and inspect attempts                             |
@@ -181,3 +181,6 @@ scanner absence or timeout fails closed. Start the PostgreSQL worker and configu
 The **Attachment Safety** console distinguishes configuration from observed task results. See the
 [API and architecture contract, runnable flow and Morph/Sonaops cutover checklist](docs/ATTACHMENT-SAFETY.md).
 Do not remove business-side scanners until this Envoy capability is verified and available in the target deployment.
+
+
+Deadline-bound sensitive sends use `sendBefore` plus `contentPolicy: "sensitive"`; check `messagePolicies` in capabilities before use. Sensitive free-form payloads and provider raw receipts are envelope-encrypted, API/admin never reveal the content, and a mandatory worker sweep removes expired encrypted bodies while preserving receipts and real delivery facts. Sensitive requests require a deadline within 15 minutes. Deadline checks reach the final HTTP write after DNS/TLS; unknown or already accepted outcomes never become automatic resends. See [the API contract](docs/API.md#sending-deadline-and-sensitive-content) for exact fields, retained metadata, independent file policies and cleanup limits.

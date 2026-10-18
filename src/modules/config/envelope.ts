@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes } from "node:crypto";
 
 type CipherParts = { iv: Buffer; tag: Buffer; ciphertext: Buffer };
 
@@ -77,4 +77,9 @@ export function openSecret<T>(envelope: Envelope, resourceId: string, version: n
   const aad = `${resourceId}:${version}`;
   const dek = decrypt(rootKey(envelope.keyVersion), envelope.encryptedDek, aad);
   return JSON.parse(decrypt(dek, envelope.secretCiphertext, aad).toString("utf8")) as T
+}
+
+/** Keyed digests prevent offline guessing of short sensitive values from durable receipts. */
+export function secretDigest(value: string, purpose: string, version = currentKeyVersion()) {
+  return { digest: createHmac("sha256", rootKey(version)).update(`${purpose}\0${value}`).digest("hex"), keyVersion: version };
 }

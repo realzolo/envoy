@@ -1,3 +1,5 @@
+import { sendingContent, assertSendDeadline, DEADLINE_CODE, DEADLINE_MESSAGE } from "@/modules/core/message/policy";
+import { secretDigest } from "@/modules/config/envelope";
 import { createHash } from "node:crypto";
 import type { PoolClient } from "pg";
 import { authorizedDomain, canonicalMessage, capabilityIssue, subsetEnvelope, type MessageContent, type StoredAttachment } from "@/modules/core/message/native";
@@ -34,7 +36,7 @@ export type DeliverySubmission = {
   attemptId: string; attemptNumber: number; submissionId: string; messageId: string;
   providerAccountId: string; providerIdentityId: string; providerType: ProviderType; providerName: string;
   providerIdempotencyKey: string | null; requestFingerprint: string; routingSnapshot: Record<string, unknown>;
-  message: CanonicalMessage; attachments: StoredAttachment[];
+  message: CanonicalMessage; attachments: StoredAttachment[]; sendBefore: Date | null; sensitive: boolean;
 };
 
 export function chooseWeighted<T extends {
@@ -111,7 +113,7 @@ type Submission = { id: string; message_id: string; status: string; current_atte
 type Attempt = {
   id: string; submission_id: string; status: string; external_message_id: string | null; attempt_number: number;
   routing_snapshot: Record<string, unknown>; started_at: Date; reconciliation_count: number;
-  retry_authorized_at: Date | null; is_current: boolean; submission_expired: boolean;
+  retry_authorized_at: Date | null; is_current: boolean; submission_expired: boolean; content_policy: string; send_before: Date | null;
 };
 type Recipient = { id: string; recipient_email: string; recipient_name: string | null; lifecycle_status: string; compliance_status: string; current_attempt_id: string | null; current_submission_id: string | null };
 
@@ -146,7 +148,7 @@ export async function prepareSubmission(submissionId: string): Promise<DeliveryS
   return transaction(async client => {
     const owner = (await client.query<{ message_id: string }>("SELECT message_id FROM submissions WHERE id=$1", [submissionId])).rows[0];
     if (!owner) return null;
-    const message = (await client.query<MessageContent>("SELECT * FROM messages WHERE id=$1 FOR UPDATE", [owner.message_id])).rows[0];
+    let message = (await client.query<MessageContent>("SELECT * FROM messages WHERE id=$1 FOR UPDATE", [owner.message_id])).rows[0];
     const submission = (await client.query<Submission>("SELECT * FROM submissions WHERE id=$1 FOR UPDATE", [submissionId])).rows[0];
     const latest = submission.current_attempt_id ? (await client.query<Attempt>(`SELECT a.*,s.current_attempt_id=a.id AS is_current,a.submission_deadline_at<=now() AS submission_expired
       FROM submission_attempts a JOIN submissions s ON s.id=a.submission_id WHERE a.id=$1 FOR UPDATE OF a`, [submission.current_attempt_id])).rows[0] : undefined;
@@ -165,10 +167,13 @@ export async function prepareSubmission(submissionId: string): Promise<DeliveryS
     const all = await recipients(client, submissionId);
     const active = all.filter(row => row.current_submission_id === submissionId && ["queued", "deferred"].includes(row.lifecycle_status) && row.current_attempt_id === (latest?.id ?? null));
     if (!active.length) { await client.query("UPDATE submissions SET status='canceled',updated_at=now() WHERE id=$1", [submissionId]); return null; }
+    try { assertSendDeadline(message.send_before); }
+    catch { await routingFailure(client, submission, DEADLINE_CODE, DEADLINE_MESSAGE, false); return null; }
     if (message.content_purged_at || !await authorizedDomain(client, { productId: message.product_id, serviceId: message.service_id }, message.sender_snapshot.fromEmail)) {
       await routingFailure(client, submission, message.content_purged_at ? "CONTENT_EXPIRED" : "SENDER_NOT_AUTHORIZED", message.content_purged_at ? "The retained message content has expired." : "The sender authorization is no longer active.", false);
       return null;
     }
+    message = sendingContent(message);
     const allowed: Recipient[] = [];
     for (const recipient of active) {
       if (recipient.compliance_status !== "clean" || await isSuppressed(client, message.product_id, recipient.recipient_email, message.metadata.listId)) {
@@ -220,11 +225,14 @@ export async function prepareSubmission(submissionId: string): Promise<DeliveryS
       pool = pool.filter(row => row.target_id !== pick.target_id);
     }
     if (!selected) { await routingFailure(client, submission, "ROUTE_TEMPORARILY_UNAVAILABLE", "No healthy routing target has sufficient quota or rate capacity.", true); return null; }
+    try { assertSendDeadline(message.send_before); }
+    catch { await routingFailure(client, submission, DEADLINE_CODE, DEADLINE_MESSAGE, false); return null; }
     const attemptId = createId("att");
     const nativeIdempotency = providerRegistry(selected.provider_type).descriptor.capabilities.nativeIdempotency;
     const providerIdempotencyKey = nativeIdempotency ? `envoy/${submissionId}/${selected.provider_account_id}` : null;
     const canonical = { ...canonicalMessage(message, submissionId, envelope), rfcMessageId: `<${attemptId}@${message.sender_snapshot.fromEmail.split("@")[1]}>` };
-    const fingerprint = createHash("sha256").update(JSON.stringify({ ...canonical, attachments: message.attachment_snapshot })).digest("hex");
+    const fingerprintInput = JSON.stringify({ ...canonical, attachments: message.attachment_snapshot });
+    const fingerprint = message.content_policy === "sensitive" ? secretDigest(fingerprintInput, `provider-request:${message.id}`, message.payload_hash_key_version ?? undefined).digest : createHash("sha256").update(fingerprintInput).digest("hex");
     const snapshot = {
       policy: { id: selected.policy_id, name: selected.policy_name, priority: selected.policy_priority },
       chosen: { targetId: selected.target_id, accountId: selected.provider_account_id, identityId: selected.provider_identity_id, providerType: selected.provider_type, nativeIdempotency },
@@ -240,7 +248,7 @@ export async function prepareSubmission(submissionId: string): Promise<DeliveryS
       await applyDeliveryEvent(client, row.id, { id: attemptId, type: "submitting", occurredAt: new Date(), metadata: {} }, `attempt:${attemptId}:${row.id}:submitting`, { attemptId, forceLifecycle: true });
     }
     await applySubmissionEvent(client, submissionId, { id: attemptId, type: "submitting", occurredAt: new Date(), metadata: {} }, `attempt:${attemptId}:submitting`, attemptId);
-    return { attemptId, attemptNumber, submissionId, messageId: message.id, providerAccountId: selected.provider_account_id, providerIdentityId: selected.provider_identity_id, providerType: selected.provider_type, providerName: selected.provider_name, providerIdempotencyKey, requestFingerprint: fingerprint, routingSnapshot: snapshot, message: canonical, attachments: message.attachment_snapshot };
+    return { attemptId, attemptNumber, submissionId, messageId: message.id, providerAccountId: selected.provider_account_id, providerIdentityId: selected.provider_identity_id, providerType: selected.provider_type, providerName: selected.provider_name, providerIdempotencyKey, requestFingerprint: fingerprint, routingSnapshot: snapshot, message: canonical, attachments: message.attachment_snapshot, sendBefore: message.send_before ?? null, sensitive: message.content_policy === "sensitive" };
   });
 }
 
@@ -249,15 +257,15 @@ async function lockAttempt(client: PoolClient, attemptId: string): Promise<Attem
   if (!owner) return null;
   await client.query("SELECT id FROM messages WHERE id=$1 FOR UPDATE", [owner.message_id]);
   await client.query("SELECT id FROM submissions WHERE id=$1 FOR UPDATE", [owner.submission_id]);
-  return (await client.query<Attempt>(`SELECT a.*,s.current_attempt_id=a.id AS is_current,a.submission_deadline_at<=now() AS submission_expired
-    FROM submission_attempts a JOIN submissions s ON s.id=a.submission_id WHERE a.id=$1 FOR UPDATE OF a`, [attemptId])).rows[0] ?? null;
+  return (await client.query<Attempt>(`SELECT a.*,s.current_attempt_id=a.id AS is_current,a.submission_deadline_at<=now() AS submission_expired,m.content_policy,m.send_before
+    FROM submission_attempts a JOIN submissions s ON s.id=a.submission_id JOIN messages m ON m.id=s.message_id WHERE a.id=$1 FOR UPDATE OF a`, [attemptId])).rows[0] ?? null;
 }
 
 export async function markAccepted(attemptId: string, externalMessageId: string, response: Record<string, unknown> = {}, rfcMessageId: string | null = null) {
   await transaction(async client => {
     const row = await lockAttempt(client, attemptId);
     if (!row || !["submitting", "unknown", "reconciling", "reconciled"].includes(row.status) || (row.status === "reconciled" && row.external_message_id)) return;
-    await client.query("UPDATE submission_attempts SET status='accepted',outcome_determinate=true,external_message_id=$2,provider_response_ref=$3,rfc_message_id=$4,finished_at=now(),reconcile_after=NULL,diagnostic=NULL,error_category=NULL,error_code=NULL,error_message=NULL WHERE id=$1", [attemptId, externalMessageId, JSON.stringify(response), rfcMessageId]);
+    await client.query("UPDATE submission_attempts SET status='accepted',outcome_determinate=true,external_message_id=$2,provider_response_ref=$3,rfc_message_id=$4,finished_at=now(),reconcile_after=NULL,diagnostic=NULL,error_category=NULL,error_code=NULL,error_message=NULL WHERE id=$1", [attemptId, externalMessageId, JSON.stringify(row.content_policy === "sensitive" ? {} : response), rfcMessageId]);
     if (row.is_current) await client.query("UPDATE submissions SET status='accepted',updated_at=now() WHERE id=$1", [row.submission_id]);
     await emit(client, row.submission_id, "accepted", `attempt:${attemptId}:accepted`, undefined, row, row.started_at);
     const targetId = ((row.routing_snapshot.chosen ?? {}) as Record<string, unknown>).targetId;
@@ -269,7 +277,7 @@ export async function markUnknown(attemptId: string, message: string, details: {
   await transaction(async client => {
     const row = await lockAttempt(client, attemptId);
     if (!row || row.status !== "submitting") return;
-    const error = diagnostic("SUBMISSION_OUTCOME_UNKNOWN", safeDiagnostic(message), details.stage ?? "submission", { acceptance: "unknown", providerCode: details.providerCode, smtpStatus: details.smtpStatus, retryDecision: { action: "manual_review", reason: "Automatic resubmission is blocked until provider acceptance is determined." } });
+    const error = diagnostic("SUBMISSION_OUTCOME_UNKNOWN", row.content_policy === "sensitive" ? "Provider submission outcome is unknown." : safeDiagnostic(message), details.stage ?? "submission", { acceptance: "unknown", providerCode: row.content_policy === "sensitive" ? undefined : details.providerCode, smtpStatus: row.content_policy === "sensitive" ? undefined : details.smtpStatus, retryDecision: { action: "manual_review", reason: "Automatic resubmission is blocked until provider acceptance is determined." } });
     await client.query("UPDATE submission_attempts SET status='unknown',outcome_determinate=false,error_category='unknown',error_code=$2,error_message=$3,diagnostic=$4,finished_at=now(),reconcile_after=now()+interval '30 seconds' WHERE id=$1", [attemptId, error.code, error.message, error]);
     if (row.is_current) await client.query("UPDATE submissions SET status='unknown',updated_at=now() WHERE id=$1", [row.submission_id]);
     await emit(client, row.submission_id, "unknown", `attempt:${attemptId}:unknown`, error, row);
@@ -281,9 +289,11 @@ export async function markDeterminateFailure(attemptId: string, failure: { categ
   return transaction(async client => {
     const row = await lockAttempt(client, attemptId);
     if (!row || row.status !== "submitting") return null;
-    const retry = row.is_current && retryable && row.attempt_number < 5;
+    const expired = Boolean(row.send_before && row.send_before.getTime() <= Date.now());
+    if (expired) { failure = { category: "policy", code: DEADLINE_CODE, message: DEADLINE_MESSAGE, stage: "submission" }; retryable = false; }
+    const retry = !expired && row.is_current && retryable && row.attempt_number < 5;
     const delay = Math.min(300, 5 * 2 ** (row.attempt_number-1));
-    const error = diagnostic(failure.code, safeDiagnostic(failure.message), failure.stage ?? "submission", { retryable, acceptance: "not_accepted", providerCode: failure.providerCode, smtpStatus: failure.smtpStatus, retryDecision: retry ? { action: "scheduled", nextAttemptAt: new Date(Date.now()+delay*1000).toISOString() } : { action: "none", reason: retryable ? "attempts_exhausted" : "not_retryable" } });
+    const error = diagnostic(failure.code, row.content_policy === "sensitive" && !expired ? "Provider submission was not accepted." : safeDiagnostic(failure.message), failure.stage ?? "submission", { retryable, acceptance: "not_accepted", providerCode: row.content_policy === "sensitive" ? undefined : failure.providerCode, smtpStatus: row.content_policy === "sensitive" ? undefined : failure.smtpStatus, retryDecision: retry ? { action: "scheduled", nextAttemptAt: new Date(Date.now()+delay*1000).toISOString() } : { action: "none", reason: retryable ? "attempts_exhausted" : "not_retryable" } });
     await client.query("UPDATE submission_attempts SET status='failed',outcome_determinate=true,error_category=$2,error_code=$3,error_message=$4,diagnostic=$5,finished_at=now(),reconcile_after=NULL WHERE id=$1", [attemptId, failure.category, error.code, error.message, error]);
     if (row.is_current) await client.query("UPDATE submissions SET status=$2,updated_at=now() WHERE id=$1", [row.submission_id, retry ? "deferred" : "failed"]);
     const targetId = ((row.routing_snapshot.chosen ?? {}) as Record<string, unknown>).targetId;
@@ -319,8 +329,9 @@ export async function markReconciled(attemptId: string, outcome: "accepted" | "n
       } else if (row.is_current) await enqueueReconciliation(client, attemptId, 300);
       return;
     }
-    const retry = outcome === "not_accepted" && row.is_current && row.attempt_number < 5;
-    const error = outcome === "not_accepted" ? diagnostic("PROVIDER_NOT_ACCEPTED", "Reconciliation confirmed the provider did not accept the message.", "reconciliation", { retryable: true, retryDecision: retry ? { action: "scheduled", nextAttemptAt: new Date(Date.now()+5000).toISOString() } : { action: "none", reason: "attempts_exhausted" } }) : undefined;
+    const expired = Boolean(row.send_before && row.send_before.getTime() <= Date.now());
+    const retry = !expired && outcome === "not_accepted" && row.is_current && row.attempt_number < 5;
+    const error = outcome === "not_accepted" ? diagnostic(expired ? DEADLINE_CODE : "PROVIDER_NOT_ACCEPTED", expired ? DEADLINE_MESSAGE : "Reconciliation confirmed the provider did not accept the message.", "reconciliation", { retryable: !expired, retryDecision: retry ? { action: "scheduled", nextAttemptAt: new Date(Date.now()+5000).toISOString() } : { action: "none", reason: expired ? "send_deadline_exceeded" : "attempts_exhausted" } }) : undefined;
     await client.query("UPDATE submission_attempts SET status=$2,outcome_determinate=true,finished_at=now(),reconcile_after=NULL,diagnostic=$3,error_category=CASE WHEN $2='reconciled' THEN NULL ELSE error_category END,error_code=CASE WHEN $2='reconciled' THEN NULL ELSE error_code END,error_message=CASE WHEN $2='reconciled' THEN NULL ELSE error_message END WHERE id=$1", [attemptId, outcome === "accepted" ? "reconciled" : "failed", error ?? null]);
     if (row.is_current) await client.query("UPDATE submissions SET status=$2,updated_at=now() WHERE id=$1", [row.submission_id, outcome === "accepted" ? "accepted" : retry ? "deferred" : "failed"]);
     await emit(client, row.submission_id, outcome === "accepted" ? "accepted" : retry ? "deferred" : "failed", `attempt:${attemptId}:reconciled:${outcome}`, error, row, outcome === "accepted" ? row.started_at : new Date());
@@ -332,10 +343,10 @@ export async function recordWorkflowFailure(submissionId: string, message: strin
   await transaction(async client => {
     const owner = (await client.query<{ message_id: string }>("SELECT message_id FROM submissions WHERE id=$1", [submissionId])).rows[0];
     if (!owner) return;
-    await client.query("SELECT id FROM messages WHERE id=$1 FOR UPDATE", [owner.message_id]);
+    const content = (await client.query<{ content_policy: string }>("SELECT content_policy FROM messages WHERE id=$1 FOR UPDATE", [owner.message_id])).rows[0];
     const row = (await client.query<Submission>("SELECT * FROM submissions WHERE id=$1 FOR UPDATE", [submissionId])).rows[0];
     if (!["queued", "deferred"].includes(row.status)) return;
-    const error = diagnostic("WORKFLOW_EXHAUSTED", safeDiagnostic(message), "queue", { retryable: true, retryDecision: { action: "manual_review", reason: "The task exhausted infrastructure retries; retry the failed task or use the message retry API." } });
+    const error = diagnostic("WORKFLOW_EXHAUSTED", content.content_policy === "sensitive" ? "Message workflow requires review." : safeDiagnostic(message), "queue", { retryable: true, retryDecision: { action: "manual_review", reason: "The task exhausted infrastructure retries; retry the failed task or use the message retry API." } });
     await client.query("UPDATE submissions SET status='deferred',updated_at=now() WHERE id=$1", [submissionId]);
     await emit(client, submissionId, "deferred", `submission:${submissionId}:workflow_exhausted`, error);
   });

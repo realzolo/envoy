@@ -67,7 +67,7 @@ export async function getDeliveryDetail(id: string) {
       SELECT id,event_type,occurred_at,canonical_payload,'recipient' AS scope FROM delivery_events WHERE delivery_id=$1
       UNION ALL SELECT e.id,e.event_type,e.occurred_at,e.canonical_payload,'submission' AS scope FROM submission_events e JOIN submission_deliveries sd ON sd.submission_id=e.submission_id WHERE sd.delivery_id=$1
     ) events ORDER BY occurred_at DESC,id DESC`, [id]),
-    query<{ html_body:string|null;text_body:string|null;reply_to:Array<{email:string;name?:string}>;to_recipients:Array<{email:string;name?:string}>;cc_recipients:Array<{email:string;name?:string}>;bcc_recipients:Array<{email:string;name?:string}>;attachment_snapshot:Array<Record<string,unknown>>;headers:Record<string,string>;in_reply_to:string|null;references_ids:string[];sender_snapshot:EmailRow["sender_snapshot"];content_purged_at:string|null }>(`SELECT html_body,text_body,reply_to,to_recipients,cc_recipients,bcc_recipients,attachment_snapshot,headers,in_reply_to,references_ids,sender_snapshot,content_purged_at FROM messages WHERE id=$1`, [row.message_id]),
+    query<{ content_policy:string;html_body:string|null;text_body:string|null;reply_to:Array<{email:string;name?:string}>;to_recipients:Array<{email:string;name?:string}>;cc_recipients:Array<{email:string;name?:string}>;bcc_recipients:Array<{email:string;name?:string}>;attachment_snapshot:Array<Record<string,unknown>>;headers:Record<string,string>;in_reply_to:string|null;references_ids:string[];sender_snapshot:EmailRow["sender_snapshot"];content_purged_at:string|null }>(`SELECT content_policy,html_body,text_body,reply_to,to_recipients,cc_recipients,bcc_recipients,attachment_snapshot,headers,in_reply_to,references_ids,sender_snapshot,content_purged_at FROM messages WHERE id=$1`, [row.message_id]),
     getRetryEligibility(id)
   ]);
   return {
@@ -193,7 +193,7 @@ const adminQueries = {
     GROUP BY e.id,s.id,s.name,p.id,p.name ORDER BY e.created_at DESC`),
   callbackDeliveries: () => query(`SELECT d.id,d.endpoint_id,e.name AS endpoint,d.event_type,d.payload->>'id' AS event_id,d.payload_purged_at,d.status,d.attempt_count,d.next_attempt_at,d.response_code,d.last_error,d.delivered_at,d.created_at
     FROM callback_deliveries d JOIN callback_endpoints e ON e.id=d.endpoint_id ORDER BY d.created_at DESC LIMIT 200`),
-  rawEvents: () => query(`SELECT r.id,r.native_type,r.provider_event_id,r.signature_valid,r.replay_valid,r.received_at,r.processed_at,r.processing_error,r.processing_attempt_count,r.terminated_at,r.content_purged_at,pa.name AS account,pa.type
+  rawEvents: () => query(`SELECT r.id,r.native_type,r.provider_event_id,r.signature_valid,r.replay_valid,r.received_at,r.processed_at,r.processing_error,r.processing_attempt_count,r.terminated_at,r.content_purged_at,r.raw_payload_purged_at,pa.name AS account,pa.type
     FROM raw_provider_events r JOIN provider_accounts pa ON pa.id=r.provider_account_id ORDER BY r.received_at DESC LIMIT 200`),
   canonicalEvents: () => query(`SELECT * FROM (
     SELECT de.id,de.event_type,de.occurred_at,de.canonical_payload,d.recipient_email,'recipient' AS scope FROM delivery_events de JOIN deliveries d ON d.id=de.delivery_id

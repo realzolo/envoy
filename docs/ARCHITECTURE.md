@@ -118,8 +118,7 @@ provider setup flow and allows sending to be configured without inventing webhoo
 
 After account creation, copy the opaque endpoint displayed under **Provider Accounts** into the provider console. Never
 place a provider credential in that URL. **Provider Accounts** owns provider event-webhook setup; **Callbacks** only
-configures outbound canonical callbacks to business services. Envoy redacts authorization headers before raw event
-persistence and persists the verified receipt and security version. Workers parse that accepted receipt without requiring a fresh signature window or current verification key.
+configures outbound canonical callbacks to business services. Envoy removes plaintext headers and envelope-encrypts raw bodies, headers and the verified receipt before DB/object persistence. It retains the provider security version for audit. Workers parse that accepted receipt without requiring a fresh signature window or current verification key.
 
 ### DNS and identity workflow
 
@@ -351,7 +350,7 @@ never reconstructs purged content. Caller caches and backups require their own l
 Dead letters mean recoverable work. Explicit audited termination is separate from delivered success and from content
 purge/age retention. Callback termination releases retention gates without fabricating an HTTP success. Raw-event
 termination fences frozen dispatch, rejects unfinished copies and preserves completed copies. Terminated/purged work
-cannot be replayed. The existing transport timeout does not implement a business verification-code deadline; scheduling
+cannot be replayed. `sendBefore` now adds a caller-supplied latest provider-submission instant, independent of the execution lease; scheduling
 and expiry enforcement remain outside the current send contract.
 
 ## Shared attachment safety
@@ -378,3 +377,14 @@ an in-flight read; they cannot recall a previously downloaded copy. Retention se
 
 This development project preserves executed migration checksums and advances directly to the final schema with `002_service_domain_permissions.sql`; no data conversion layer exists. There are no legacy scan adapters,
 unchecked-content bypasses, migration-adoption patches, provider capability compatibility views or automatic historical resends.
+
+
+## Generic bounded sensitive delivery
+
+`sendBefore` and `contentPolicy` are transport policy, independent of APPs, OTPs and category. Sensitive content requires a future UTC deadline within 900 seconds. Message free-form fields live only in a resource-bound AES-256-GCM envelope; public/admin projections are stored redacted, and normal message columns never contain the sensitive body or display names. Independent file references retain only the opaque identifiers/digests needed to pin bytes; reusable files keep their own lifecycle. Sensitive request/provider fingerprints are HMACs with a persisted KEK version, so low-entropy secrets cannot be recovered by offline SHA-256 enumeration. Old hash KEKs must remain available for durable idempotency comparisons after content destruction.
+
+Send preparation decrypts only after history/unknown/authorization/deadline gates. An AsyncLocalStorage submission scope carries the deadline and final current-authorization guard to native HTTP adapters. For deadline-bound mail, one Node HTTPS transport establishes DNS/TLS without writing HTTP headers/body, then rechecks the execution lease, domain permission and wall-clock deadline. SES uses that same transport as its one-attempt SDK request handler after credential/signing waits. A lost response after the write remains unknown; definite pre-write deadline expiry is failed/not_accepted. Claims, rate-capacity waits, attachment reads, manual retries, automatic failover and conclusive-negative reconciliation cannot bypass the deadline. Accepted/unknown attempts survive body expiry and continue to receive real facts.
+
+All verified provider raw copies are encrypted, including large object-store bodies/receipts, because unassociated early events may echo a sensitive message. Successful outbound normalization destroys those copies; content-free outbound facts are durably frozen before association and raw copies expire after 900 seconds without terminating fact replay or manufacturing message outcomes. Unknown or inbound classifications never inherit that deadline. Inbound encrypted receipts retain the recovery lifecycle. Sensitive canonical events/callbacks use a whitelist of delivery facts and fixed messages, and accepted provider response blobs are discarded. The mandatory 10-second worker privacy sweep clears expired message envelopes separately from optional normal-message retention and processes durable object-deletion intents. Physical deletion resumes after worker/storage outages; expired content remains unavailable to send/read throughout.
+
+Message-level `acceptedAt` remains Envoy queue acceptance. Message detail recipient rows additionally publish nullable provider `acceptedAt` and actual `deliveredAt`; only all-delivered messages have outcome `succeeded`. This metadata remains readable for sensitive mail even after body purge. API discovery publishes `messagePolicies` as documented in API.md, allowing callers to reject unsupported sensitive delivery before persisting requests. No business verification-code semantics, SMTP fallback, new dependency or version is introduced. The user-authorized pre-launch initial schema contains these columns directly; no existing deployment database is reset or checksum-adopted automatically.

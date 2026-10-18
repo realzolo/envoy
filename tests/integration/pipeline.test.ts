@@ -808,7 +808,7 @@ describe("durable message pipeline", () => {
       const stored = (await query<{
         headers: Record<string, string>
       }>("SELECT headers FROM raw_provider_events WHERE id=$1", [accepted.id])).rows[0];
-      expect(stored.headers.authorization).toBe("[redacted]");
+      expect(stored.headers).toEqual({});
       await processRawProviderEvent(accepted.id);
       const inbound = (await query<{
         id: string;

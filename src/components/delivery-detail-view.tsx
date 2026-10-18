@@ -13,7 +13,7 @@ import styles from "./mail-views.module.css";
 type DeliveryDetail = EmailRecord & {
   updatedAt: string;
   retry: { allowed: boolean; reason: string | null; requiresUnknownAcknowledgement: boolean };
-  content: { html_body: string | null; text_body: string | null; reply_to: Array<{email: string; name?: string}>; to_recipients: Array<{email: string; name?: string}>; cc_recipients: Array<{email: string; name?: string}>; bcc_recipients: Array<{email: string; name?: string}>; attachment_snapshot: Array<Record<string, unknown>>; headers: Record<string,string>; in_reply_to: string | null; references_ids: string[]; content_purged_at: string | null };
+  content: { content_policy: string; html_body: string | null; text_body: string | null; reply_to: Array<{email: string; name?: string}>; to_recipients: Array<{email: string; name?: string}>; cc_recipients: Array<{email: string; name?: string}>; bcc_recipients: Array<{email: string; name?: string}>; attachment_snapshot: Array<Record<string, unknown>>; headers: Record<string,string>; in_reply_to: string | null; references_ids: string[]; content_purged_at: string | null };
   lifecycle: string;
   engagement: string;
   compliance: string;
@@ -116,7 +116,7 @@ export function DeliveryDetailView({ detail, back = "/emails" }: { detail: Deliv
             </Timeline> : <Empty description="No delivery events yet. Activity will appear here as processing continues." />}
           </Tabs.TabPane>
           <Tabs.TabPane key="content" title="Message content">
-            {detail.content.content_purged_at ? <Alert showIcon type="info" content="Message content has expired under the retention policy. Identifiers and delivery history are retained." /> : <div className={styles.tabPanel}>
+            {detail.content.content_policy === "sensitive" ? <Alert showIcon type="info" content="Sensitive message content is encrypted for delivery and is never available for preview. Delivery status and receipt history remain available." /> : detail.content.content_purged_at ? <Alert showIcon type="info" content="Message content has expired under the retention policy. Identifiers and delivery history are retained." /> : <div className={styles.tabPanel}>
               <Descriptions className={styles.descriptions} column={{ xs: 1, md: 2 }} data={[
                 { label: "From", value: detail.from },
                 ...([ ["To", detail.content.to_recipients], ["Cc", detail.content.cc_recipients], ["Bcc", detail.content.bcc_recipients], ["Reply-To", detail.content.reply_to] ] as const).map(([label, addresses]) => ({ label, value: addresses.map(address => address.name ? `${address.name} <${address.email}>` : address.email).join(", ") || "Not set" })),

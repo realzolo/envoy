@@ -1,3 +1,5 @@
+import { submissionPolicy } from "../submission-policy";
+import { assertSendDeadline } from "@/modules/core/message/policy";
 import { smtpRecipients } from "../inbound-fields";
 import { CanonicalProviderError, type ProviderModule } from "../contracts";
 import { event, nativeMailCapabilities, assertMessageCapabilities, messageRecipients, requestFingerprint } from "../shared";
@@ -23,6 +25,8 @@ export const mockModule: ProviderModule = {
   },
   sender: {
     async send(message, context) {
+      await submissionPolicy()?.beforeSend();
+      assertSendDeadline(submissionPolicy()?.sendBefore);
       assertMessageCapabilities(message, mockModule.descriptor.capabilities);
       if (context.config.type !== "mock") throw new Error("Invalid mock configuration");
       if (messageRecipients(message).some(a => a.email.includes("unknown")) || context.config.behavior === "unknown") return {

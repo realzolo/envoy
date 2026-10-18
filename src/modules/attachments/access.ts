@@ -1,3 +1,4 @@
+import { assertSendDeadline } from "@/modules/core/message/policy";
 import {inboundDomainAccess,outboundDomainAccess} from "@/modules/core/resources/authorization";
 import { transaction } from "@/server/database";
 import { objectStore } from "@/modules/config/object-store";
@@ -23,9 +24,9 @@ async function rememberFailure(error:unknown) {
 }
 
 /** Keep content and safety locks through the provider boundary; load/check EVERY attachment before send(). */
-export async function withSafeOutboundAttachments<T>(messageId:string,attemptId:string,files:AttachmentSnapshot[],send:(bytes:Uint8Array[])=>Promise<T>) {
+export async function withSafeOutboundAttachments<T>(messageId:string,attemptId:string,files:AttachmentSnapshot[],send:(bytes:Uint8Array[],beforeSend:()=>Promise<void>)=>Promise<T>) {
   return transaction(async client => {
-    const owner = (await client.query<{service_id:string;sending_domain_id:string;content_purged_at:Date|null}>(`SELECT service_id,sending_domain_id,content_purged_at FROM messages m WHERE id=$1 AND ${outboundDomainAccess('m')} FOR SHARE`,[messageId])).rows[0];
+    const owner = (await client.query<{service_id:string;sending_domain_id:string;content_purged_at:Date|null;send_before:Date|null}>(`SELECT service_id,sending_domain_id,content_purged_at,send_before FROM messages m WHERE id=$1 AND ${outboundDomainAccess('m')} FOR SHARE`,[messageId])).rows[0];
     if (!owner || owner.content_purged_at) throw new AttachmentUseError("FILE_UNAVAILABLE","FILE_CONTENT_PURGED");
     const loaded = new Map<string,Uint8Array>();
     for (const file of [...files].sort((a,b)=>a.fileId.localeCompare(b.fileId))) {
@@ -43,14 +44,19 @@ export async function withSafeOutboundAttachments<T>(messageId:string,attemptId:
       const safety=(await client.query<SafetyRow>("SELECT * FROM attachment_safety WHERE resource_id=$1",[file.fileId])).rows[0];
       assertUsable(true,file.sha256,safety);
     }
-    // Preparation may have waited on storage. Never start a stale/expired attempt's network operation.
-    // The message lock serializes recovery/cancellation; use wall-clock time, not BEGIN's timestamp.
-    const live = await client.query(`SELECT a.id FROM submission_attempts a JOIN submissions s ON s.id=a.submission_id
-      WHERE a.id=$1 AND s.message_id=$2 AND s.current_attempt_id=a.id AND s.status='submitting'
-        AND a.status='submitting' AND a.submission_deadline_at>clock_timestamp() FOR SHARE OF a,s`,[attemptId,messageId]);
-    if (!live.rowCount) throw new Error("Submission preparation lease is no longer valid");
-    if(!(await client.query(`SELECT id FROM messages m WHERE id=$1 AND ${outboundDomainAccess('m')}`,[messageId])).rowCount) throw new AttachmentUseError("FILE_UNAVAILABLE","DOMAIN_SEND_NOT_AUTHORIZED");
-    return send(files.map(file=>loaded.get(file.fileId)!));
+    const beforeSend = async () => {
+      assertSendDeadline(owner.send_before);
+      // Preparation may have waited on storage. Never start a stale/expired attempt's network operation.
+      // The message lock serializes recovery/cancellation; use wall-clock time, not BEGIN's timestamp.
+      const live = await client.query(`SELECT a.id FROM submission_attempts a JOIN submissions s ON s.id=a.submission_id
+        WHERE a.id=$1 AND s.message_id=$2 AND s.current_attempt_id=a.id AND s.status='submitting'
+          AND a.status='submitting' AND a.submission_deadline_at>clock_timestamp() FOR SHARE OF a,s`,[attemptId,messageId]);
+      if (!live.rowCount) throw new Error("Submission preparation lease is no longer valid");
+      if(!(await client.query(`SELECT id FROM messages m WHERE id=$1 AND ${outboundDomainAccess('m')}`,[messageId])).rowCount) throw new AttachmentUseError("FILE_UNAVAILABLE","DOMAIN_SEND_NOT_AUTHORIZED");
+      assertSendDeadline(owner.send_before);
+    };
+    await beforeSend();
+    return send(files.map(file=>loaded.get(file.fileId)!),beforeSend);
   }).catch(rememberFailure);
 }
 

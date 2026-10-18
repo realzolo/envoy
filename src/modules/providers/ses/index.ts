@@ -1,3 +1,5 @@
+import { boundedProviderRequest, submissionPolicy } from "../submission-policy";
+import { SendDeadlineError } from "@/modules/core/message/policy";
 import { declaredAuthorDate, mailAddresses, smtpRecipients } from "../inbound-fields";
 import { createVerify } from "node:crypto";
 import {
@@ -42,7 +44,14 @@ function credentials(context: ProviderSendContext) {
 
 function ses(context: ProviderSendContext) {
   if (context.config.type !== "ses") throw new Error("Invalid SES configuration");
-  return new SESv2Client({ region: context.config.region, credentials: credentials(context), maxAttempts: 1, requestHandler: { connectionTimeout: 5_000, requestTimeout: 30_000 } })
+  return new SESv2Client({ region: context.config.region, credentials: credentials(context), maxAttempts: 1, requestHandler: submissionPolicy()?.sendBefore ? {
+    handle: async (request: { protocol: string; hostname: string; port?: number; path: string; query?: Record<string, string | string[] | null>; method: string; headers: Record<string, string>; body?: string | Uint8Array }) => {
+      const url = new URL(`${request.protocol}//${request.hostname}${request.port ? `:${request.port}` : ""}${request.path}`);
+      for (const [name, values] of Object.entries(request.query ?? {})) for (const value of Array.isArray(values) ? values : [values]) url.searchParams.append(name, value ?? "");
+      const response = await boundedProviderRequest(url, { method: request.method, headers: request.headers, body: request.body ?? "" });
+      return { response: { statusCode: response.statusCode ?? 500, reason: response.statusMessage, headers: Object.fromEntries(Object.entries(response.headers).map(([key, value]) => [key, Array.isArray(value) ? value.join(", ") : value ?? ""])), body: response } };
+    },
+  } : { connectionTimeout: 5_000, requestTimeout: 30_000 } })
 }
 
 function snsString(payload: Record<string, unknown>) {
@@ -120,7 +129,7 @@ export const sesModule: ProviderModule = {
         }));
         return accepted(result.MessageId)
       } catch (error) {
-        if (error instanceof CanonicalProviderError) throw error;
+        if (error instanceof CanonicalProviderError || error instanceof SendDeadlineError) throw error;
         const value = error as { $metadata?: { httpStatusCode?: number }; name?: string; message?: string };
         const status = value.$metadata?.httpStatusCode;
         const details = { providerCode: value.name ?? `http_${status ?? "unknown"}` };

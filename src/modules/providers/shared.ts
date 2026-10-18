@@ -1,3 +1,5 @@
+import { boundedProviderRequest, responseHeaders, submissionPolicy } from "./submission-policy";
+import { SendDeadlineError } from "@/modules/core/message/policy";
 import { createHash } from "node:crypto";
 import { type CanonicalEvent, type CanonicalMessage, type EmailAddress, type ProviderCapabilities, CanonicalProviderError, type ProviderSendResult } from "./contracts";
 
@@ -55,6 +57,7 @@ export function assertMessageCapabilities(message: CanonicalMessage, capabilitie
 }
 
 export function safeDiagnostic(value: unknown) {
+  if (submissionPolicy()?.sensitive) return "Sensitive message provider diagnostic withheld.";
   return String(value ?? "Provider request failed")
     .replace(/(?:Bearer|Basic)\s+[A-Za-z0-9+/=_\-.]+/gi, "[redacted credential]")
     .replace(/\b(?:re_|SG\.|key-)[A-Za-z0-9_.-]{8,}/g, "[redacted credential]")
@@ -201,8 +204,17 @@ export async function parseMultipart(raw: Uint8Array, contentType: string) {
 // cannot prove rejection and must never trigger an automatic provider switch.
 export async function submitRequest(url: string, options: RequestInit) {
   try {
+    if (submissionPolicy()?.sendBefore) {
+      const request = new Request(url, options);
+      const response = await boundedProviderRequest(new URL(url), { method: request.method, headers: Object.fromEntries(request.headers), body: new Uint8Array(await request.arrayBuffer()) });
+      const chunks: Buffer[] = [];
+      for await (const chunk of response) chunks.push(Buffer.from(chunk));
+      return new Response(Buffer.concat(chunks), { status: response.statusCode, statusText: response.statusMessage, headers: responseHeaders(response.headers) });
+    }
+    await submissionPolicy()?.beforeSend();
     return await fetch(url, { ...options, signal: AbortSignal.timeout(30_000) });
   } catch (error) {
+    if (error instanceof SendDeadlineError || error instanceof CanonicalProviderError) throw error;
     throw new CanonicalProviderError(safeDiagnostic(error instanceof Error ? error.message : "Submission response unavailable"), "network", "SUBMISSION_OUTCOME_UNKNOWN", "unknown", false, { providerCode: "submission_transport_error" });
   }
 }

@@ -12,6 +12,8 @@ export const GET = serviceRoute(async (request, identity, context: { params: Pro
 
   return Response.json({
     id: message.id,
+    contentPolicy: message.content_policy,
+    sendBefore: message.send_before?.toISOString() ?? null,
     processingState: message.processing_state,
     outcome: message.outcome,
     counts: message.counts,
@@ -23,7 +25,7 @@ export const GET = serviceRoute(async (request, identity, context: { params: Pro
     headers: message.headers,
     inReplyTo: message.in_reply_to,
     references: message.references_ids,
-    attachments: message.attachment_snapshot.map(attachment => ({ fileId: attachment.fileId, fileName: attachment.fileName, contentType: attachment.contentType, size: attachment.size, sha256: attachment.sha256, disposition: attachment.disposition, contentId: attachment.contentId })),
+    attachments: (message.content_policy === "sensitive" ? [] : message.attachment_snapshot).map(attachment => ({ fileId: attachment.fileId, fileName: attachment.fileName, contentType: attachment.contentType, size: attachment.size, sha256: attachment.sha256, disposition: attachment.disposition, contentId: attachment.contentId })),
     product: message.product,
     category: message.category,
     subject: message.subject,
@@ -45,7 +47,9 @@ export const GET = serviceRoute(async (request, identity, context: { params: Pro
       lifecycle: delivery.lifecycle_status,
       engagement: delivery.engagement_status,
       compliance: delivery.compliance_status,
-      updatedAt: delivery.updated_at.toISOString()
+      updatedAt: delivery.updated_at.toISOString(),
+      acceptedAt: delivery.accepted_at?.toISOString() ?? null,
+      deliveredAt: delivery.delivered_at?.toISOString() ?? null
     })),
   });
 });

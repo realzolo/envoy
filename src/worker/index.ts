@@ -1,3 +1,4 @@
+import { purgeExpiredSensitiveContent } from "@/modules/core/message/policy";
 import { processAttachmentScan, scheduleAttachmentScans } from "@/modules/attachments/tasks";
 import { scanPolicy } from "@/modules/attachments/scanner";
 import { randomUUID } from "node:crypto";
@@ -69,6 +70,7 @@ async function main() {
     schedule("Outbox dispatcher", dispatchOutboxBatch, 500);
     schedule("Work recovery", recoverWorkBatch, 30_000);
     schedule("Worker heartbeat", () => writeWorkerHeartbeat(workerId), 15_000);
+    schedule("Sensitive content cleanup", purgeExpiredSensitiveContent, 10_000);
     schedule("Runtime cleanup", cleanupRuntimeStore, 60_000);
     console.log("Envoy PostgreSQL workers started");
     await Promise.all(workers.map(worker => worker.run()));

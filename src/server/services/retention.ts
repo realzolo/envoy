@@ -96,7 +96,7 @@ async function purge(client: PoolClient, category: RetentionCategory, id: string
     await client.query("SELECT id FROM deliveries WHERE message_id=$1 ORDER BY id FOR UPDATE", [id]);
     const row = await client.query(`SELECT m.id FROM messages m WHERE m.id=$1 AND m.content_purged_at IS NULL AND ${messageSafe} FOR UPDATE`, [id]);
     if (!row.rowCount) return false;
-    await client.query(`UPDATE messages SET subject='',html_body=NULL,text_body='',content_purged_at=now() WHERE id=$1`, [id]);
+    await client.query(`UPDATE messages SET sensitive_content=NULL,sensitive_content_purged_at=COALESCE(sensitive_content_purged_at,clock_timestamp()),subject='',html_body=NULL,text_body='',content_purged_at=now() WHERE id=$1`, [id]);
   } else if (category === "outboundFiles") {
     // Acceptance takes FOR SHARE on these rows before committing its message
     // snapshot. Lock first, then recheck references in a fresh statement snapshot.
@@ -112,7 +112,7 @@ async function purge(client: PoolClient, category: RetentionCategory, id: string
     if (!row.rowCount) return false;
     if (row.rows[0].raw_object_key) await (store ?? objectStore()).delete(row.rows[0].raw_object_key);
     if (row.rows[0].receipt_object_key) await (store ?? objectStore()).delete(row.rows[0].receipt_object_key);
-    await client.query("UPDATE raw_provider_events SET raw_body=NULL,raw_object_key=NULL,headers='{}',verification='{}',content_purged_at=now() WHERE id=$1", [id]);
+    await client.query("UPDATE raw_provider_events SET normalized_events=NULL,raw_body=NULL,raw_object_key=NULL,headers='{}',verification='{}',content_purged_at=now() WHERE id=$1", [id]);
   } else if (category === "inbound") {
     const row = await client.query<{ raw_mime_object_key: string | null }>(`SELECT i.raw_mime_object_key FROM inbound_messages i
       WHERE i.id=$1 AND i.content_purged_at IS NULL AND i.status IN ('ready','rejected') AND ${inboundSafe} FOR UPDATE`, [id]);

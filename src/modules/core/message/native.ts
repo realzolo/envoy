@@ -16,6 +16,8 @@ export type MessageContent = {
   headers: Record<string, string>; in_reply_to: string | null; references_ids: string[];
   attachment_snapshot: StoredAttachment[]; provider_tags: Record<string, string>; message_category: string;
   content_purged_at: Date | null; metadata: Record<string, string>;
+  content_policy?: "normal" | "sensitive"; send_before?: Date | null; payload_hash_key_version?: string | null;
+  sensitive_content?: import("@/modules/config/envelope").Envelope | null; sensitive_content_purged_at?: Date | null;
 };
 
 export async function authorizedDomain(client: PoolClient, identity: Pick<ServiceIdentity, "productId" | "serviceId">, email: string) {
