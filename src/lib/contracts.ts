@@ -152,7 +152,7 @@ export const suppressionSchema = z.object({ id: z.string(), scope: z.enum(["glob
 
 // Public discovery contains configuration facts separately from transport evidence.
 const mailReasonSchema = z.enum(["SENDER_NOT_AUTHORIZED", "SENDING_DOMAIN_DISABLED", "NO_ELIGIBLE_ROUTE", "INBOUND_ROUTE_DISABLED", "INBOUND_DOMAIN_DISABLED", "INBOUND_INGRESS_UNAVAILABLE", "ENVELOPE_RECIPIENT_UNAVAILABLE"]);
-const mailPermissionBase = { id: z.string(), domain: z.string(), displayName: nullableText };
+const mailPermissionBase = { id: z.string(), domain: z.string() };
 const senderPermissionSchema = z.object({ ...mailPermissionBase, scope: z.enum(["product", "service"]), authorization: z.enum(["granted", "revoked"]),
   sending: z.object({ state: z.enum(["configured", "unavailable"]), reasonCodes: z.array(mailReasonSchema), categories: z.array(nullableText), runtimeAvailability: z.literal("unknown") }),
   evidence: z.object({ lastAcceptedAt: iso.nullable(), lastDeliveredAt: iso.nullable() }),

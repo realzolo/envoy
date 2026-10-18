@@ -9,9 +9,9 @@ Use `Authorization: Bearer <service-key>`. Each key belongs to one service and p
 on every request, including files, events, and request diagnostics; another service's identifiers are not accessible.
 `GET /capabilities` returns product/service identity, current limits, native mail features, explicit sender/receiver scopes, configuration status and observed evidence. See the business connection contract below.
 
-An administrator grants the product or service an active domain or exact sender address under **Senders**. Verification
+An administrator grants the product or service an active domain or exact sender address under **Service Credentials**. Verification
 of a domain on a provider is a separate prerequisite. A caller may directly specify any authorized From address and name.
-No sender profile is required or accepted by the service API. Optional console presets fill normal request fields only.
+Both API submissions and console test messages supply From, Reply-To, and category directly.
 
 ## Submit a mail message
 
@@ -157,7 +157,7 @@ content cleanup; identifiers, state, errors, and idempotency summaries remain us
 ## Business mail connection and discovery
 
 Business configuration consists of the Envoy base URL, one service key and the chosen authorized From/receiving address(es). Callback integrations additionally configure their HTTPS URL and signing secret issued by Envoy; polling-only integrations use the same durable inbound change feed. Business services never need administrator
-credentials, provider accounts, DNS records, domain verification APIs, or a sender profile ID. Each APP can bind its own
+credentials, provider accounts, DNS records, or domain verification APIs. Each APP can bind its own
 service key; APP identity, mailbox purposes, conversations, assignees and ticket links belong to the caller.
 
 `GET /capabilities` still returns `product`, `service`, limits and native features. Its new `mail` object is the
@@ -169,7 +169,6 @@ never grant access to another service's mail or inbound routes.
 |---|---|
 | `mail.senders[].kind` | `exact_address` has a complete `address`; `domain` has `address:null` and authorizes From addresses only on that exact `domain`, not subdomains |
 | `scope`, `authorization` | Grant applies to `product` or `service`; current state is `granted` or `revoked`. Disabled grants remain discoverable here for diagnosis |
-| `displayName` | Optional public From display name from an existing active exact-address console preset; `null` when none exists. It is a suggestion, not a required profile |
 | `sending.state` | `configured` means an active grant/domain and a currently configured eligible target with a verified identity and usable credential exist; otherwise `unavailable` |
 | `sending.categories` | Categories with an eligible configured target; a `null` entry means the policy has no category restriction |
 | `sending.runtimeAvailability` | Always `unknown`: discovery does not reserve capacity, evaluate the eventual content, guarantee provider availability, or override live authorization checks |

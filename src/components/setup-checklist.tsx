@@ -15,7 +15,7 @@ export function SetupChecklist({state}:{state:SetupState}) {
   const chain=state.chains.find(row=>row.id===selected) ?? state.chains[0];
   const steps = [
     {title:"Service credential",done:chain?.credential,href:"/api-keys"},
-    {title:"Sender authorization",done:chain?.grant,href:"/senders"},
+    {title:"Sender authorization",done:chain?.grant,href:"/api-keys#sender-permissions"},
     {title:"Tested provider",done:chain?.provider,href:"/providers"},
     {title:"Verified domain",done:chain?.identity,href:"/domains"},
     {title:"Matching route",done:chain?.route,href:"/routing"},
@@ -40,7 +40,7 @@ export function SetupChecklist({state}:{state:SetupState}) {
       </Collapse>
     </Space> : <Space direction="vertical" size="medium" style={{width:"100%"}}>
       <Alert type="info" content="Connect a provider, verify a domain, then create a service credential and authorize its sender domain to start sending."/>
-      <Space wrap><Button href="/providers" type="primary">Connect provider</Button><Button href="/domains">Domains</Button><Button href="/api-keys">Service credentials</Button><Button href="/senders">Sender authorization</Button></Space>
+      <Space wrap><Button href="/providers" type="primary">Connect provider</Button><Button href="/domains">Domains</Button><Button href="/api-keys">Service credentials and permissions</Button></Space>
     </Space>}
   </Card>
 }

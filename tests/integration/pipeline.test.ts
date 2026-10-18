@@ -14,7 +14,6 @@ import { applyCanonicalEvent, applyDeliveryEvent, processRawProviderEvent } from
 import {
   createSuppression,
   listDeliveries,
-  listSenderProfiles,
   listSuppressions,
   removeSuppression
 } from "@/modules/core/resources/service";
@@ -24,7 +23,6 @@ import {
   createDomain,
   createInboundRoute,
   createRoutingPolicy,
-  createSenderProfile,
   manualRetryDelivery,
   replayDeadLetters,
   rotateProviderCredential,
@@ -111,22 +109,19 @@ describe("durable message pipeline", () => {
     const accepted = await acceptMessage({ identity, idempotencyKey: crypto.randomUUID(), input: request });
     messageIds.push(accepted.message.id);
     const delivery = (await query<{ id: string }>("SELECT id FROM deliveries WHERE message_id=$1", [accepted.message.id])).rows[0];
-    await query("UPDATE sender_profiles SET from_name='Changed after acceptance',from_local_part='changed' WHERE id='sp_atlas_security'");
-    try {
-      const submissions = await Promise.all(Array.from({ length: 8 }, () => prepareRecipientSubmission(delivery.id)));
-      const claimed = submissions.filter(submission => submission && !("reconcileAttemptId" in submission));
-      expect(claimed).toHaveLength(1);
-      const submission = claimed[0]!;
-      if ("reconcileAttemptId" in submission) throw new Error("Unexpected reconcile work");
-      expect(submission.message.from.name).toBe("Atlas");
-      expect(submission.message.from.email).toBe("security@mail.atlas.test");
-      const externalId = crypto.randomUUID();
-      await Promise.all([markAccepted(submission.attemptId, externalId), markAccepted(submission.attemptId, externalId)]);
-      await applyCanonicalEvent("pa_mock", null, { id: crypto.randomUUID(), externalMessageId: externalId, type: "accepted", occurredAt: new Date(), metadata: {} });
-      const callbacks = (await query<{ id: string; event_id: string; payload_id: string }>("SELECT c.id,c.delivery_event_id AS event_id,c.payload->>'id' AS payload_id FROM callback_deliveries c JOIN delivery_events e ON e.id=c.delivery_event_id WHERE e.delivery_id=$1 AND e.event_type='accepted'", [delivery.id])).rows;
-      expect(callbacks).toHaveLength(1);
-      expect(callbacks[0].payload_id).toBe(callbacks[0].event_id);
-    } finally { await query("UPDATE sender_profiles SET from_name='Atlas',from_local_part='security' WHERE id='sp_atlas_security'"); }
+    const submissions = await Promise.all(Array.from({ length: 8 }, () => prepareRecipientSubmission(delivery.id)));
+    const claimed = submissions.filter(submission => submission && !("reconcileAttemptId" in submission));
+    expect(claimed).toHaveLength(1);
+    const submission = claimed[0]!;
+    if ("reconcileAttemptId" in submission) throw new Error("Unexpected reconcile work");
+    expect(submission.message.from.name).toBe("Atlas");
+    expect(submission.message.from.email).toBe("security@mail.atlas.test");
+    const externalId = crypto.randomUUID();
+    await Promise.all([markAccepted(submission.attemptId, externalId), markAccepted(submission.attemptId, externalId)]);
+    await applyCanonicalEvent("pa_mock", null, { id: crypto.randomUUID(), externalMessageId: externalId, type: "accepted", occurredAt: new Date(), metadata: {} });
+    const callbacks = (await query<{ id: string; event_id: string; payload_id: string }>("SELECT c.id,c.delivery_event_id AS event_id,c.payload->>'id' AS payload_id FROM callback_deliveries c JOIN delivery_events e ON e.id=c.delivery_event_id WHERE e.delivery_id=$1 AND e.event_type='accepted'", [delivery.id])).rows;
+    expect(callbacks).toHaveLength(1);
+    expect(callbacks[0].payload_id).toBe(callbacks[0].event_id);
   });
 
   it("rechecks suppression at the submission boundary", async () => {
@@ -453,14 +448,6 @@ describe("durable message pipeline", () => {
         status: "degraded",
         health: expect.objectContaining({ status: "unknown" })
       });
-      await expect(createSenderProfile({
-        productId: "prd_atlas",
-        domainId: "sd_atlas",
-        name: "Atlas Security",
-        fromName: "Atlas",
-        fromLocalPart: "different-local-part",
-        category: "transactional"
-      }, "test-suite")).rejects.toThrow(/already exists/);
       await expect(addSuppression({
         email: `global-${suffix}@example.test`,
         scope: "global",
@@ -598,7 +585,7 @@ describe("durable message pipeline", () => {
     expect(attempt.status).toBe("unknown");
     expect(attempt.authorized).toBeTruthy()
   });
-  it("manages product-scoped suppressions and discovers sender profiles", async () => {
+  it("manages product-scoped suppressions", async () => {
     const email = `suppression-${crypto.randomUUID()}@example.net`;
     suppressionEmails.push(email);
     const created = await createSuppression({
@@ -618,7 +605,6 @@ describe("durable message pipeline", () => {
     expect(await listSuppressions(identity.productId, email)).toHaveLength(1);
     expect(await removeSuppression(created.id, "prd_nova")).toBeNull();
     expect(await removeSuppression(created.id, identity.productId)).toEqual({ id: created.id });
-    expect((await listSenderProfiles(identity.productId)).some(sender => sender.category === request.category)).toBe(true)
   });
   it("is safe under duplicate worker consumption", async () => {
     const accepted = await acceptMessage({

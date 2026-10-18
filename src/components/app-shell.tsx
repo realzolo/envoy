@@ -32,7 +32,6 @@ import {
   IconPoweroff,
   IconPublic,
   IconRefresh,
-  IconSend,
   IconSettings,
 } from "@arco-design/web-react/icon";
 import { type ReactNode, useEffect, useState } from "react";
@@ -47,10 +46,6 @@ const navigation = [
       { href: "/emails", label: "Messages", icon: IconMessage },
       { href: "/inbound", label: "Inbound", icon: IconBook },
     ],
-  },
-  {
-    label: "Delivery",
-    items: [{ href: "/senders", label: "Senders", icon: IconSend }],
   },
   {
     label: "Infrastructure",

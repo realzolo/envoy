@@ -99,9 +99,9 @@ The service API is self-describing at `GET /api/v1` and `GET /api/v1/openapi.jso
 | `/messages/{id}/attempts` | Inspect submission attempts and structured diagnostics |
 | `/capabilities`         | Discover product/service, sender/receiver ranges, limits, configuration status and evidence                            |
 
-Sender authorization is configured once under **Senders** for a product or service: either every address in a verified
-domain, or one exact local part. Domain verification proves control; the grant authorizes a caller. Sender presets are
-optional console shortcuts and have no role in the send API or accepted-message lifecycle.
+Sender authorization is configured under **Service Credentials** for a product or service: either every address in a verified
+domain, or one exact local part. Domain verification proves control; the grant authorizes a caller. Enter From, Reply-To,
+and category directly when composing a console test message or submitting an API request.
 
 See [the final service API contract](docs/API.md) for full request fields, file upload, result semantics, and failure diagnosis.
 

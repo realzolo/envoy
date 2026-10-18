@@ -109,23 +109,6 @@ CREATE TABLE provider_identities
     UNIQUE (id, provider_account_id)
 );
 
-CREATE TABLE sender_profiles
-(
-    id                text PRIMARY KEY,
-    product_id        text        NOT NULL REFERENCES products (id) ON DELETE CASCADE,
-    sending_domain_id text        NOT NULL REFERENCES sending_domains (id) ON DELETE RESTRICT,
-    name              text        NOT NULL,
-    from_name         text        NOT NULL,
-    from_local_part   text        NOT NULL,
-    reply_to          text,
-    message_category  text        NOT NULL DEFAULT 'transactional',
-    status            text        NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
-    created_at        timestamptz NOT NULL DEFAULT now(),
-    updated_at        timestamptz NOT NULL DEFAULT now(),
-    UNIQUE (product_id, message_category, from_local_part),
-    UNIQUE (product_id, name)
-);
-
 CREATE TABLE sender_grants
 (
     id text PRIMARY KEY,

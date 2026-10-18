@@ -27,15 +27,14 @@ Raw MIME, large native payloads, and attachments are written to the configured o
 metadata and object keys. Local object storage is development-only; production should use an encrypted S3-compatible
 bucket.
 
-## Sender authorization and presets
+## Sender authorization
 
 An active sender grant authorizes a product or one of its services to use an active sending domain, optionally restricted
 to one exact local part. Domain verification and caller authorization are independent controls. Acceptance, submission,
 and manual retry enforce the current product, domain, and grant state. Removing a grant blocks future submissions.
 
-Sender profiles are optional console presets. Selecting one expands its From, Reply-To, and category fields into a normal
-mail request. The API accepts complete mail parameters without a preset, and accepted mail does not reference profiles.
-Editing or disabling a preset never mutates queued snapshots or grants/revokes sending permission.
+Manage sender grants alongside products and service credentials under **Service Credentials**. Console composition and
+API requests supply From, Reply-To, and category directly. Accepted messages retain immutable sender and content snapshots.
 
 ## Routing
 

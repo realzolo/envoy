@@ -6,5 +6,5 @@ export const metadata: Metadata = { title: "Send a test" };
 
 export default async function ComposeMessagePage() {
   const data = await messageComposerData();
-  return <ComposeMessageView services={data.services} senders={data.senders} />;
+  return <ComposeMessageView services={data.services} />;
 }

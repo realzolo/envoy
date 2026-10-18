@@ -64,8 +64,7 @@ afterAll(async () => {
 });
 
 describe("native API integration", () => {
-  it("uploads a service-owned file and submits one grouped native email with dynamic From and no matching Profile", async () => {
-    expect((await query<{ count: string }>("SELECT count(*) FROM sender_profiles WHERE from_local_part=$1", [base.from.email.split("@")[0]])).rows[0].count).toBe("0");
+  it("uploads a service-owned file and submits one grouped native email with caller-supplied From", async () => {
     const bytes = Buffer.from([1, 2, 3, 4]);
     const uploaded = await uploadFile(new Request("http://localhost/api/v1/files", { method: "POST", headers: { authorization: `Bearer ${apiKey}`, "content-type": "image/png", "x-file-name": encodeURIComponent("业务标识.png") }, body: bytes }));
     expect(uploaded.status).toBe(201);

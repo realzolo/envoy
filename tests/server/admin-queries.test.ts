@@ -48,7 +48,7 @@ import { createMessageSchema } from "@/lib/contracts";
 import { getDeliveryDetail, messageComposerData } from "@/modules/admin/queries";
 
 describe("native admin mail", () => {
-  it("accepts direct mail parameters without a preset and retains recipient roles in queries", async () => {
+  it("accepts manually entered mail parameters and retains recipient roles in queries", async () => {
     const grant = await createSenderGrant({ productId: "prd_atlas", serviceId: "svc_atlas_auth", domainId: "sd_atlas", fromLocalPart: `admin-${crypto.randomUUID()}` }, "test-admin");
     const permission = (await query<{ from_local_part: string }>("SELECT from_local_part FROM sender_grants WHERE id=$1", [grant])).rows[0];
     let messageId: string | undefined;
@@ -86,10 +86,16 @@ describe("native admin mail", () => {
     } finally { await query("DELETE FROM products WHERE id=$1", [productId]); }
   });
 
-  it("returns expanded preset fields for optional console shortcuts", async () => {
-    const data = await messageComposerData();
-    expect(data.senders).toEqual(expect.arrayContaining([expect.objectContaining({
-      name: "Atlas Security", from_name: "Atlas", from_email: "security@mail.atlas.test",
+  it("loads active services for composition and sending permissions for credential management", async () => {
+    const composer = await messageComposerData();
+    expect(composer.services).toEqual(expect.arrayContaining([expect.objectContaining({
+      id: "svc_atlas_auth", product_id: "prd_atlas",
+    })]));
+    const access = await adminData("api-keys");
+    expect(access.services).toEqual(expect.arrayContaining([expect.objectContaining({ id: "svc_atlas_auth" })]));
+    expect(access.domains).toEqual(expect.arrayContaining([expect.objectContaining({ id: "sd_atlas" })]));
+    expect(access.grants).toEqual(expect.arrayContaining([expect.objectContaining({
+      product_id: "prd_atlas", service_id: "svc_atlas_auth", domain: "mail.atlas.test",
     })]));
   });
 });

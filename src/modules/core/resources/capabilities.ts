@@ -9,11 +9,9 @@ const iso = (value: Date | null) => value?.toISOString() ?? null;
 export async function discoverMail(identity: ServiceIdentity) {
   const senders = (await query<{
     id: string; domain: string; from_local_part: string | null; service_id: string | null;
-    status: string; domain_status: string; display_name: string | null;
+    status: string; domain_status: string;
     categories: (string | null)[]; last_accepted_at: Date | null; last_delivered_at: Date | null;
   }>(`SELECT g.id,d.domain,g.from_local_part,g.service_id,g.status,d.status AS domain_status,
-    (SELECT sp.from_name FROM sender_profiles sp WHERE sp.product_id=g.product_id AND sp.sending_domain_id=d.id
-      AND sp.from_local_part=g.from_local_part AND sp.status='active' ORDER BY sp.id LIMIT 1) AS display_name,
     ARRAY(SELECT DISTINCT rp.message_category FROM routing_policies rp JOIN routing_targets rt ON rt.policy_id=rp.id
       JOIN provider_accounts a ON a.id=rt.provider_account_id JOIN provider_identities pi ON pi.id=rt.provider_identity_id
       WHERE rp.sending_domain_id=d.id AND rp.status='active' AND (rp.product_id IS NULL OR rp.product_id=$1)
@@ -62,7 +60,7 @@ export async function discoverMail(identity: ServiceIdentity) {
       const reasons = [...(row.status !== "active" ? ["SENDER_NOT_AUTHORIZED"] : []), ...(row.domain_status !== "active" ? ["SENDING_DOMAIN_DISABLED"] : []), ...(!row.categories.length ? ["NO_ELIGIBLE_ROUTE"] : [])];
       const exact = row.from_local_part !== null;
       return { id: row.id, kind: exact ? "exact_address" as const : "domain" as const, domain: row.domain,
-        address: exact ? `${row.from_local_part}@${row.domain}` : null, displayName: row.display_name,
+        address: exact ? `${row.from_local_part}@${row.domain}` : null,
         scope: row.service_id ? "service" as const : "product" as const,
         authorization: row.status === "active" ? "granted" as const : "revoked" as const,
         sending: { state: reasons.length ? "unavailable" as const : "configured" as const, reasonCodes: reasons, categories: row.categories, runtimeAvailability: "unknown" as const },
@@ -79,7 +77,7 @@ export async function discoverMail(identity: ServiceIdentity) {
       ] : [];
       return { id: row.id, kind: row.local_part_pattern.includes("*") ? "local_part_pattern" as const : "exact_address" as const,
         address: row.local_part_pattern.includes("*") ? null : `${row.local_part_pattern}@${row.domain}`,
-        domain: row.domain, localPartPattern: row.local_part_pattern, displayName: null,
+        domain: row.domain, localPartPattern: row.local_part_pattern,
         receiving: { state: reasons.length ? "unavailable" as const : "configured" as const, reasonCodes: reasons, externalReadiness: "unknown" as const },
         notification: { mode: row.callback_endpoint_id ? "callback_and_polling" as const : "polling" as const,
           state: notificationReasons.length ? "unavailable" as const : "configured" as const,

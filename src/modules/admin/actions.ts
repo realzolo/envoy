@@ -27,24 +27,10 @@ const optionalIdentifierSchema = z.preprocess(
   value => typeof value === "string" && value.trim() === "" ? undefined : value,
   identifierSchema.optional(),
 );
-const optionalEmailSchema = z.preprocess(
-  value => typeof value === "string" && value.trim() === "" ? undefined : value,
-  z.string().trim().email().max(320).optional(),
-);
 const optionalDateTimeSchema = z.preprocess(
   value => typeof value === "string" && value.trim() === "" ? undefined : value,
   z.string().datetime({ offset: true }).optional(),
 );
-
-const senderProfileInputSchema = z.object({
-  productId: identifierSchema,
-  domainId: identifierSchema,
-  name: z.string().trim().min(2).max(120),
-  fromName: z.string().trim().min(1).max(120),
-  fromLocalPart: z.string().trim().min(1).max(64).regex(/^[^@\s]+$/, "fromLocalPart must not contain whitespace or @"),
-  replyTo: optionalEmailSchema,
-  category: categorySchema,
-}).strict();
 
 const routingTargetSchema = z.object({
   accountId: identifierSchema,
@@ -363,39 +349,6 @@ export async function toggleIdentity(id: string, enabled: boolean, actor: string
   if (!identity) throw new Error("Provider identity not found");
   await query("UPDATE provider_identities SET status=$2,updated_at=now() WHERE id=$1", [id, enabled ? providerRegistry(identity.type).identity ? "pending" : "verified" : "disabled"]);
   await audit(actor, "provider_identity.toggle", "provider_identity", id, { enabled })
-}
-
-export async function createSenderProfile(input: {
-  productId: string;
-  domainId: string;
-  name: string;
-  fromName: string;
-  fromLocalPart: string;
-  replyTo?: string;
-  category: string
-}, actor: string) {
-  const validated = senderProfileInputSchema.parse(input);
-  const id = createId("sp");
-  await transaction(async client => {
-    const product = await client.query<{ id: string }>("SELECT id FROM products WHERE id=$1", [validated.productId]);
-    const domain = await client.query<{ id: string; status: string }>("SELECT id,status FROM sending_domains WHERE id=$1", [validated.domainId]);
-    const verifiedIdentity = await client.query<{ id: string }>(`SELECT pi.id FROM provider_identities pi
-      JOIN provider_accounts pa ON pa.id=pi.provider_account_id
-      WHERE pi.sending_domain_id=$1 AND pi.status='verified' AND pa.status='active' LIMIT 1`, [validated.domainId]);
-    const existing = await client.query<{ id: string }>("SELECT id FROM sender_profiles WHERE product_id=$1 AND name=$2", [validated.productId, validated.name]);
-    if (!product.rows[0]) throw new Error("Product not found");
-    if (!domain.rows[0]) throw new Error("Sending domain not found");
-    if (domain.rows[0].status !== "active" || !verifiedIdentity.rows[0]) throw new Error("An active sending domain with a verified provider identity is required");
-    if (existing.rows[0]) throw new Error("A sender preset with this name already exists for the product");
-    await client.query("INSERT INTO sender_profiles(id,product_id,sending_domain_id,name,from_name,from_local_part,reply_to,message_category) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)", [id, validated.productId, validated.domainId, validated.name, validated.fromName, validated.fromLocalPart, validated.replyTo ?? null, validated.category]);
-    await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id) VALUES ($1,'sender_profile.create','sender_profile',$2)", [actor, id]);
-  });
-  return id
-}
-
-export async function toggleSenderProfile(id: string, enabled: boolean, actor: string) {
-  await query("UPDATE sender_profiles SET status=$2,updated_at=now() WHERE id=$1", [id, enabled ? "active" : "disabled"]);
-  await audit(actor, "sender_profile.toggle", "sender_profile", id, { enabled })
 }
 
 export async function createRoutingPolicy(input: {
@@ -800,16 +753,6 @@ export async function updateCallback(id: string, input: { name: string; url: str
     await client.query(`UPDATE callback_deliveries SET status='dead_letter',last_error='CALLBACK_EVENT_NOT_SUBSCRIBED',updated_at=now()
       WHERE endpoint_id=$1 AND NOT(event_type=ANY($2::text[])) AND status IN ('pending','retrying')`,[id,validated.events]);
     await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES ($1,'callback_endpoint.update','callback_endpoint',$2,$3)", [actor,id,{name:validated.name,url:target.url.toString(),events:validated.events}]);
-  })
-}
-
-export async function updateSenderProfile(id: string, input: z.input<typeof senderProfileInputSchema>, actor: string) {
-  const validated = senderProfileInputSchema.parse(input);
-  await transaction(async client => {
-    const updated = await client.query(`UPDATE sender_profiles SET name=$2,from_name=$3,from_local_part=$4,reply_to=$5,message_category=$6,updated_at=now()
-      WHERE id=$1 AND product_id=$7 AND sending_domain_id=$8 RETURNING id`, [id,validated.name,validated.fromName,validated.fromLocalPart,validated.replyTo ?? null,validated.category,validated.productId,validated.domainId]);
-    if (!updated.rowCount) throw new Error("Sender profile not found, or its product/domain was changed. Create a new sender for a different domain.");
-    await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES ($1,'sender_profile.update','sender_profile',$2,$3)", [actor,id,validated]);
   })
 }
 

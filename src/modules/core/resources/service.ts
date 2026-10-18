@@ -322,37 +322,6 @@ export async function removeSuppression(id: string, productId: string) {
   return result.rows[0] ?? null;
 }
 
-export async function listSenderProfiles(productId: string) {
-  const rows = (await query<{
-    id: string;
-    name: string;
-    from_name: string;
-    from_local_part: string;
-    reply_to: string | null;
-    message_category: string;
-    domain: string;
-    provider_count: string;
-  }>(
-    `SELECT sp.id,sp.name,sp.from_name,sp.from_local_part,sp.reply_to,sp.message_category,sd.domain,
-       count(pi.id) FILTER (WHERE pi.status='verified' AND pa.status='active')::text AS provider_count
-     FROM sender_profiles sp JOIN sending_domains sd ON sd.id=sp.sending_domain_id
-     LEFT JOIN provider_identities pi ON pi.sending_domain_id=sd.id
-     LEFT JOIN provider_accounts pa ON pa.id=pi.provider_account_id
-     WHERE sp.product_id=$1 AND sp.status='active' AND sd.status='active'
-     GROUP BY sp.id,sd.domain ORDER BY sp.message_category,sp.name`,
-    [productId],
-  )).rows;
-  return rows.map(row => ({
-    id: row.id,
-    name: row.name,
-    category: row.message_category,
-    from: { name: row.from_name, email: `${row.from_local_part}@${row.domain}` },
-    replyTo: row.reply_to,
-    availableProviders: Number(row.provider_count),
-  }));
-}
-
-
 type PublicEventRow = { id: string; message_id: string; delivery_id: string | null; submission_id?: string; event_type: string; occurred_at: Date; canonical_payload: Record<string, unknown> };
 export function publicEvent(row: PublicEventRow) {
   const payload = row.canonical_payload;

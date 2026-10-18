@@ -96,24 +96,6 @@ export async function POST(request: Request) {
       case"identity.toggle":
         await actions.toggleIdentity(text(body, "id"), body.enabled === true, session.email);
         break;
-      case"sender.update":
-      case"sender.create":
-        result = {
-          id: await (body.action === "sender.update" ? (input: Parameters<typeof actions.updateSenderProfile>[1], actor: string) => actions.updateSenderProfile(text(body,"id"),input,actor) : actions.createSenderProfile)({
-            productId: text(body, "productId"),
-            domainId: text(body, "domainId"),
-            name: text(body, "name"),
-            fromName: text(body, "fromName"),
-            fromLocalPart: text(body, "fromLocalPart"),
-            replyTo: typeof body.replyTo === "string" ? body.replyTo : undefined,
-            category: text(body, "category")
-          }, session.email)
-        };
-        status = 201;
-        break;
-      case"sender.toggle":
-        await actions.toggleSenderProfile(text(body, "id"), body.enabled === true, session.email);
-        break;
       case"routing.update":
       case"routing.create":
         result = {

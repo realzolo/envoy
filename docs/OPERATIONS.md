@@ -69,9 +69,9 @@ Configure these resources in Envoy, not in each business system:
 2. **Provider Accounts / Domains**: associate provider identities and retrieve/present available DNS records.
    The domain administrator publishes them on the actual DNS platform. Refresh the result in Envoy. Provider-specific
    workflows stay with Envoy operators; sending-domain verification is not proof that inbound MX/rules work.
-3. **Senders**: grant a domain range or exact local part to a product/service. Optional sender presets publish a suggested
-   From name and simplify console composition; they are not mandatory business API identities. Revocation blocks new
-   submissions and retries even if a caller discovered the grant earlier.
+3. **Service Credentials → Sender permissions**: grant a domain range or exact local part to a product/service.
+   Enter the From address and display name directly when sending. Revocation blocks new submissions and retries even
+   if a caller discovered the grant earlier.
 4. **Routing**: configure outbound policies and categories. Discovery reports configured categories, not a reserved quota
    or a guarantee for a particular content/recipient set.
 5. **Domains / Inbound**: register an inbound-only domain with no outbound providers selected, then route the receiving domain and route its exact address or local-part pattern to a service. An active

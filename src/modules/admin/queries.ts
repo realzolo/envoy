@@ -79,18 +79,11 @@ export async function getDeliveryDetail(id: string) {
 }
 
 export async function messageComposerData() {
-  const [services, senders] = await Promise.all([
-    query<{ id: string; name: string; product: string; product_id: string }>(`SELECT s.id,s.name,p.name AS product,p.id AS product_id
-      FROM services s JOIN products p ON p.id=s.product_id
-      WHERE p.status='active'
-      ORDER BY p.name,s.name`),
-    query<{ name: string; product_id: string; category: string; from_address: string; from_name: string; from_email: string; reply_to: string | null }>(`SELECT sp.name,sp.product_id,sp.message_category AS category,
-      sp.from_name||' <'||sp.from_local_part||'@'||sd.domain||'>' AS from_address,sp.from_name,sp.from_local_part||'@'||sd.domain AS from_email,sp.reply_to
-      FROM sender_profiles sp JOIN sending_domains sd ON sd.id=sp.sending_domain_id
-      WHERE sp.status='active' AND sd.status='active'
-      ORDER BY sp.name`)
-  ]);
-  return { services: services.rows, senders: senders.rows }
+  const services = await query<{ id: string; name: string; product: string; product_id: string }>(`SELECT s.id,s.name,p.name AS product,p.id AS product_id
+    FROM services s JOIN products p ON p.id=s.product_id
+    WHERE p.status='active'
+    ORDER BY p.name,s.name`);
+  return { services: services.rows };
 }
 
 export async function dashboardData() {
@@ -146,7 +139,6 @@ export type AdminSection =
   | "attachments"
   | "providers"
   | "domains"
-  | "senders"
   | "routing"
   | "api-keys"
   | "webhooks"
@@ -174,9 +166,6 @@ const adminQueries = {
     LEFT JOIN provider_identities pi ON pi.sending_domain_id=sd.id
     LEFT JOIN provider_accounts pa ON pa.id=pi.provider_account_id
     GROUP BY sd.id ORDER BY sd.domain`),
-  senders: () => query(`SELECT sp.id,sp.name,sp.from_name,sp.from_local_part,sp.reply_to,sp.message_category,sp.status,p.name AS product,p.id AS product_id,sd.domain,sd.id AS domain_id
-    FROM sender_profiles sp JOIN products p ON p.id=sp.product_id JOIN sending_domains sd ON sd.id=sp.sending_domain_id
-    ORDER BY p.name,sp.name`),
   grants: () => query(`SELECT sg.id,sg.product_id,sg.service_id,sg.sending_domain_id,sg.from_local_part,sg.status,p.name AS product,s.name AS service,sd.domain
     FROM sender_grants sg JOIN products p ON p.id=sg.product_id LEFT JOIN services s ON s.id=sg.service_id JOIN sending_domains sd ON sd.id=sg.sending_domain_id ORDER BY p.name,s.name,sd.domain`),
   policies: () => query(`SELECT rp.id,rp.name,rp.priority,rp.status,rp.product_id,rp.service_id,rp.sending_domain_id,p.name AS product,s.name AS service,sd_policy.domain AS sending_domain,rp.message_category,
@@ -256,17 +245,13 @@ export async function adminData(section: AdminSection) {
       const [providers, domains] = await Promise.all([rows("providers"), rows("domains")]);
       return { providers, domains, descriptors: providerDescriptors() };
     }
-    case "senders": {
-      const [products, services, domains, senders, grants] = await Promise.all([rows("products"), rows("services"), rows("domains"), rows("senders"), rows("grants")]);
-      return { products, services, domains, senders, grants };
-    }
     case "routing": {
       const [products, services, domains, policies] = await Promise.all([rows("products"), rows("services"), rows("domains"), rows("policies")]);
       return { products, services, domains, policies };
     }
     case "api-keys": {
-      const [products, credentials] = await Promise.all([rows("products"), rows("credentials")]);
-      return { products, credentials };
+      const [products, services, domains, credentials, grants] = await Promise.all([rows("products"), rows("services"), rows("domains"), rows("credentials"), rows("grants")]);
+      return { products, services, domains, credentials, grants };
     }
     case "webhooks": {
       const [services, callbacks, callbackDeliveries] = await Promise.all([rows("services"), rows("callbacks"), rows("callbackDeliveries")]);

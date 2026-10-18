@@ -31,7 +31,6 @@ beforeAll(async () => {
       INSERT INTO provider_accounts(id,type,name,public_config) VALUES ('provider','mock','queue-test','{}');
       INSERT INTO provider_webhook_endpoints(id,provider_account_id,opaque_token) VALUES ('webhook','provider','queue-test');
       INSERT INTO provider_identities(id,sending_domain_id,provider_account_id,status) VALUES ('identity','domain','provider','verified');
-      INSERT INTO sender_profiles(id,product_id,sending_domain_id,name,from_name,from_local_part) VALUES ('sender','p','domain','queue-test','Queue','test');
       INSERT INTO messages(id,product_id,service_id,sending_domain_id,sender_snapshot,idempotency_key,payload_hash,recipient_count,subject,text_body,message_category)
       VALUES ('m','p','s','domain','{}','queue-test','test',1,'Queue','test','transactional');`);
   } finally { client.release(); }

@@ -12,8 +12,7 @@ describe("native mail contract", () => {
     expect(parsed.replyTo[0].name).toBe("回复");
     expect(createMessageSchema.parse({ ...base, bcc: parsed.bcc }).subject).toBe("");
   });
-  it("requires a caller-supplied sender and recipient independently of presets", () => {
-    expect(createMessageSchema.safeParse({ ...base, senderProfile: "preset", to: [{ email: "a@example.com" }] }).success).toBe(false);
+  it("requires a caller-supplied sender and recipient", () => {
     expect(createMessageSchema.safeParse(base).success).toBe(false);
     expect(createMessageSchema.safeParse({ text: "Hi", to: [{ email: "a@example.com" }] }).success).toBe(false);
   });
@@ -46,10 +45,8 @@ describe("native mail contract", () => {
     const document = await openapi(new Request("https://envoy.test/api/v1/openapi.json")).json();
     const create = document.components.schemas.CreateMessage;
     expect(create.required).toContain("from");
-    expect(create.properties.senderProfile).toBeUndefined();
     for (const key of ["from", "to", "cc", "bcc", "replyTo", "attachments", "headers", "inReplyTo", "references"]) expect(create.properties[key]).toBeDefined();
     for (const key of ["/files", "/files/{id}", "/requests/{requestId}", "/messages/{id}/attempts", "/messages/{id}/events"]) expect(document.paths[key]).toBeDefined();
-    expect(document.paths["/senders"]).toBeUndefined();
     expect(document.paths["/messages/{id}/retry"].post.parameters.some((p: {name:string;required?:boolean}) => p.name === "Idempotency-Key" && p.required)).toBe(true);
   });
 });

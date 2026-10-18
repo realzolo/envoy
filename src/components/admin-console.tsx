@@ -9,7 +9,7 @@ import { useState } from "react";
 import { ProviderAccounts } from "@/components/provider-accounts";
 
 import { ActionForm, type Row, type Data, type FormValues, requiredRule, rows, record, value, formValue, formValues, optionalValue, date, StatusTag, useAction, Field, Panel, Submit, Notice, ActionButton, EmptyState, Prerequisite, DataTable, TableCard, DnsRecords, RoutingSimulation, Secret, CopyableValue, JsonPreview } from "@/components/admin-console-shared";
-import { EditSender, EditRouting, AddDomainProvider } from "@/components/admin-config-editors";
+import { EditRouting, AddDomainProvider } from "@/components/admin-config-editors";
 import { Callbacks } from "@/components/admin-callbacks";
 import { Inbound } from "@/components/admin-inbound";
 function Providers({ data }: { data: Data }) {
@@ -123,14 +123,15 @@ function SenderGrants({ data }: { data: Data }) {
   const action = useAction();
   const products = rows(data.products).filter(item => item.status === "active");
   const domains = rows(data.domains).filter(item => item.status === "active");
-  const [productId, setProductId] = useState(value(products[0] ?? {}, "id"));
+  const [selectedProductId, setProductId] = useState("");
+  const productId = products.some(item => item.id === selectedProductId) ? selectedProductId : value(products[0] ?? {}, "id");
   const services = rows(data.services).filter(item => item.product_id === productId);
   async function submit(values: FormValues) {
     try {
       await action.run({ action: "grant.create", productId, serviceId: formValue(values, "serviceId"), domainId: formValue(values, "domainId"), fromLocalPart: formValue(values, "fromLocalPart") });
     } catch { /* Inline notice owns this request. */ }
   }
-  return <Space direction="vertical" size="large" className={styles.stack}>
+  return <div id="sender-permissions"><Space direction="vertical" size="large" className={styles.stack}>
     <Panel title="Authorize sender addresses" description="Grant a product or service permission to use a domain or exact address. Domain verification alone does not grant permission." defaultExpanded={!rows(data.grants).length}>
       {products.length && domains.length ? <ActionForm key={productId} fieldErrors={action.fields} layout="vertical" onSubmit={values => void submit(values as FormValues)} initialValues={{ serviceId: "", domainId: value(domains[0], "id"), fromLocalPart: "" }}>
         <Grid.Row gutter={[16, 0]}>
@@ -149,84 +150,7 @@ function SenderGrants({ data }: { data: Data }) {
       { title: "Status", render: (_, grant) => <StatusTag>{value(grant, "status")}</StatusTag> },
       { title: "Action", render: (_, grant) => <ActionButton body={{ action: "grant.toggle", id: grant.id, enabled: grant.status !== "active" }} confirmText={grant.status === "active" ? "Revoke this permission? Queued messages using it will be checked again before sending." : undefined}>{grant.status === "active" ? "Revoke" : "Activate"}</ActionButton> },
     ]} /></TableCard>
-  </Space>;
-}
-
-function Senders({ data }: { data: Data }) {
-  const [editingSender, setEditingSender] = useState<Row | null>(null);
-  const action = useAction();
-  const products = rows(data.products).filter(product => product.status === "active");
-  const domains = rows(data.domains).filter(domain => domain.status === "active" && rows(domain.identities).some(identity => identity.status === "verified" && identity.accountStatus === "active"));
-  const senders = rows(data.senders);
-
-  async function submit(values: FormValues) {
-    try {
-      await action.run({
-        action: "sender.create",
-        productId: formValue(values, "productId"),
-        domainId: formValue(values, "domainId"),
-        name: formValue(values, "name"),
-        fromName: formValue(values, "fromName"),
-        fromLocalPart: formValue(values, "fromLocalPart"),
-        replyTo: formValue(values, "replyTo"),
-        category: formValue(values, "category"),
-      });
-    } catch {
-      // Inline notice owns failures from this request.
-    }
-  }
-
-  if (!products.length || !domains.length) {
-    return <Space direction="vertical" size="large" className={styles.stack}><SenderGrants data={data} /><Typography.Text type="secondary">Optional sender presets become available after a provider identity is verified.</Typography.Text></Space>;
-  }
-
-  return (
-    <Space direction="vertical" size="large" className={styles.stack}>
-      <SenderGrants data={data} />
-      <Panel
-        title="Create optional sender preset"
-        description="A console shortcut that fills standard From, Reply-To, and category fields. Sending authorization is configured separately."
-        defaultExpanded={senders.length === 0}
-      >
-        <ActionForm fieldErrors={action.fields} layout="vertical" onSubmit={values => void submit(values as FormValues)}>
-          <Grid.Row gutter={[16, 0]}>
-            <Grid.Col md={8} xs={24}>
-              <Field field="productId" label="Product" initialValue={value(products[0], "id")} required rules={requiredRule}>
-                <Select options={products.map(product => ({ value: value(product, "id"), label: value(product, "name") }))} />
-              </Field>
-            </Grid.Col>
-            <Grid.Col md={8} xs={24}>
-              <Field field="domainId" label="Domain" initialValue={value(domains[0], "id")} required rules={requiredRule}>
-                <Select options={domains.map(domain => ({ value: value(domain, "id"), label: value(domain, "domain") }))} />
-              </Field>
-            </Grid.Col>
-            <Grid.Col md={8} xs={24}><Field field="name" label="Preset name" required rules={requiredRule}><Input /></Field></Grid.Col>
-            <Grid.Col md={8} xs={24}><Field field="fromName" label="From name" required rules={requiredRule}><Input /></Field></Grid.Col>
-            <Grid.Col md={8} xs={24}><Field field="fromLocalPart" label="From local part" required rules={requiredRule}><Input /></Field></Grid.Col>
-            <Grid.Col md={8} xs={24}><Field field="category" label="Category" initialValue="transactional" required rules={requiredRule}><Input /></Field></Grid.Col>
-            <Grid.Col md={16} xs={24}><Field field="replyTo" label="Reply-To" rules={[{ type: "email" }]}><Input type="email" /></Field></Grid.Col>
-            <Grid.Col md={8} xs={24}><Space><Submit pending={action.pending} labelText="Create preset" /></Space></Grid.Col>
-          </Grid.Row>
-        </ActionForm>
-        <Notice notice={action.notice} />
-      </Panel>
-      <TableCard title="Optional sender presets">
-        <DataTable
-          data={senders}
-          emptyText="No optional sender presets configured."
-          columns={[
-            { title: "Preset", render: (_, sender) => value(sender, "name") },
-            { title: "Product", render: (_, sender) => value(sender, "product") },
-            { title: "From", render: (_, sender) => <Typography.Text code>{value(sender, "from_name")} &lt;{value(sender, "from_local_part")}@{value(sender, "domain")}&gt;</Typography.Text> },
-            { title: "Category", render: (_, sender) => value(sender, "message_category") },
-            { title: "Status", render: (_, sender) => <StatusTag>{value(sender, "status")}</StatusTag> },
-            { title: "Action", render: (_, sender) => <Space><Button size="small" onClick={() => setEditingSender(sender)}>Edit</Button><ActionButton body={{ action: "sender.toggle", id: sender.id, enabled: sender.status !== "active" }}>{sender.status === "active" ? "Disable" : "Enable"}</ActionButton></Space> },
-          ]}
-        />
-      </TableCard>
-      {editingSender && <EditSender key={value(editingSender, "id")} sender={editingSender} data={data} onClose={() => setEditingSender(null)} />}
-    </Space>
-  );
+  </Space></div>;
 }
 
 function Routing({ data }: { data: Data }) {
@@ -401,7 +325,7 @@ function Credentials({ data }: { data: Data }) {
     <Space direction="vertical" size="large" className={styles.stack}>
       <Panel
         title="Create product"
-        description="A product owns its services, senders, and delivery rules."
+        description="A product owns its services, sending permissions, and delivery rules."
         defaultExpanded={products.length === 0}
       >
         <ActionForm fieldErrors={productAction.fields} form={productForm} layout="vertical" onSubmit={values => void createProduct(values as FormValues)}>
@@ -475,6 +399,7 @@ function Credentials({ data }: { data: Data }) {
           </TableCard>
         </>
       ) : <Prerequisite title="Create an active product first" description="A service credential must be scoped to an active product." href="/api-keys" action="Create product" />}
+      <SenderGrants data={data} />
     </Space>
   );
 }
@@ -641,7 +566,6 @@ export function AdminConsole({ section, data }: { section: string; data: Data })
   if (section === "attachments") return <AttachmentSafety data={data} />;
   if (section === "providers") return <Providers data={data} />;
   if (section === "domains") return <Domains data={data} />;
-  if (section === "senders") return <Senders data={data} />;
   if (section === "routing") return <Routing data={data} />;
   if (section === "api-keys") return <Credentials data={data} />;
   if (section === "webhooks") return <Callbacks data={data} />;
