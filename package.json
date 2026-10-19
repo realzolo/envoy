@@ -42,7 +42,7 @@
     "sanitize-html": "^2.17.7",
     "server-only": "^0.0.1",
     "svix": "^2.5.0",
-    "tsx": "^4.23.13",
+    "tsx": "^4.23.15",
     "zod": "^4.6.5"
   },
   "devDependencies": {
