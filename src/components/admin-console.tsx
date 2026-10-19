@@ -2,7 +2,7 @@
 
 import styles from "@/components/admin-views.module.css";
 
-import { Button, Card, Checkbox, Collapse, Form, Grid, Input, List, Select, Space, Typography } from "@arco-design/web-react";
+import { Button, Card, Checkbox, Collapse, Form, Grid, Input, List, Select, Space, Typography, type SelectProps } from "@arco-design/web-react";
 import { IconDelete, IconExclamationCircle, IconRefresh, IconRotateLeft } from "@arco-design/web-react/icon";
 
 import { useState } from "react";
@@ -12,6 +12,9 @@ import { ActionForm, type Row, type Data, type FormValues, requiredRule, rows, r
 import { EditRouting, AddDomainProvider } from "@/components/admin-config-editors";
 import { Callbacks } from "@/components/admin-callbacks";
 import { Inbound } from "@/components/admin-inbound";
+
+const ALL_DOMAINS = "__all_domains__";
+
 function Providers({ data }: { data: Data }) {
   return <ProviderAccounts data={data} />;
 }
@@ -121,12 +124,12 @@ function Domains({ data }: { data: Data }) {
 
 function DomainGrants({data}:{data:Data}){
   const action=useAction(),domains=rows(data.domains).filter(d=>d.status==='active');
-  async function submit(v:FormValues){try{await action.run({action:"domain_grant.set",serviceId:formValue(v,"serviceId"),domainId:formValue(v,"domainId"),send:v.send===true,receive:v.receive===true});}catch{}}
+  async function submit(v:FormValues){try{const domainId=formValue(v,"domainId");await action.run({action:"domain_grant.set",serviceId:formValue(v,"serviceId"),domainId:domainId===ALL_DOMAINS?null:domainId,send:v.send===true,receive:v.receive===true});}catch{}}
   return <Space direction="vertical" size="large" className={styles.stack}>
     <Panel title="Business domain permissions" description="Choose a business service, domain and sending/receiving permissions. All current and rotated keys of this service share these permissions.">
       <ActionForm fieldErrors={action.fields} layout="vertical" onSubmit={v=>void submit(v as FormValues)}><Grid.Row gutter={[16,0]}>
         <Grid.Col md={12} xs={24}><Field field="serviceId" label="Business service" required rules={requiredRule}><Select options={rows(data.services).map(s=>({value:value(s,'id'),label:`${value(s,'product')} / ${value(s,'name')}`}))}/></Field></Grid.Col>
-        <Grid.Col md={12} xs={24}><Field field="domainId" label="Domain" required rules={requiredRule}><Select options={domains.map(d=>({value:value(d,'id'),label:value(d,'domain')}))}/></Field></Grid.Col>
+        <Grid.Col md={12} xs={24}><Field field="domainId" label="Domain" required rules={requiredRule} hint="ALL includes current and future registered domains. Grants are combined; revoke ALL to restrict access to selected domains."><Select options={[{value:ALL_DOMAINS,label:"ALL (current and future domains)"},...domains.map(d=>({value:value(d,'id'),label:value(d,'domain')}))]}/></Field></Grid.Col>
         <Grid.Col md={12} xs={24}><Field field="send" label="Sending" triggerPropName="checked"><Checkbox>Allow sending from this domain</Checkbox></Field></Grid.Col>
         <Grid.Col md={12} xs={24}><Field field="receive" label="Receiving" triggerPropName="checked"><Checkbox>Allow receiving and forwarding this domain</Checkbox></Field></Grid.Col>
         <Grid.Col xs={24}><Submit pending={action.pending} labelText="Save domain permissions"/></Grid.Col>
@@ -270,6 +273,33 @@ function Routing({ data }: { data: Data }) {
   );
 }
 
+function DomainMultiSelect({ domains, value: selected = [], onChange, ...props }: Omit<SelectProps, "options" | "value" | "onChange"> & {
+  domains: Row[];
+  value?: string[];
+  onChange?: (value: string[]) => void;
+}) {
+  return (
+    <Select
+      {...props}
+      mode="multiple"
+      showSearch
+      allowClear
+      maxTagCount={2}
+      placeholder="Select domains"
+      value={selected}
+      onChange={(next: string[]) => onChange?.(
+        next.includes(ALL_DOMAINS) && !selected.includes(ALL_DOMAINS)
+          ? [ALL_DOMAINS]
+          : next.filter(id => id !== ALL_DOMAINS)
+      )}
+      options={[
+        { value: ALL_DOMAINS, label: "ALL (current and future domains)" },
+        ...domains.map(domain => ({ value: value(domain, "id"), label: value(domain, "domain") })),
+      ]}
+    />
+  );
+}
+
 function Credentials({ data }: { data: Data }) {
   const action = useAction();
   const productAction = useAction();
@@ -278,6 +308,7 @@ function Credentials({ data }: { data: Data }) {
   const products = rows(data.products);
   const activeProducts = products.filter(product => product.status === "active");
   const credentials = rows(data.credentials);
+  const activeDomains = rows(data.domains).filter(domain => domain.status === "active");
 
   async function createProduct(values: FormValues) {
     try {
@@ -292,7 +323,7 @@ function Credentials({ data }: { data: Data }) {
     try {
       setKey("");
       const sendIds=formValues(values,"sendDomainIds"),receiveIds=formValues(values,"receiveDomainIds");
-      const result=await action.run({action:"credential.create",productId:formValue(values,"productId"),serviceName:formValue(values,"serviceName"),domains:[...new Set([...sendIds,...receiveIds])].map(domainId=>({domainId,send:sendIds.includes(domainId),receive:receiveIds.includes(domainId)})),callbackUrl:formValue(values,"callbackUrl"),suppressionManagement:values.suppressionManagement===true}) as {key?:string;callback?:{secret:string}};
+      const result=await action.run({action:"credential.create",productId:formValue(values,"productId"),serviceName:formValue(values,"serviceName"),allSendingDomains:sendIds.includes(ALL_DOMAINS),allReceivingDomains:receiveIds.includes(ALL_DOMAINS),domains:[...new Set([...sendIds,...receiveIds])].filter(domainId=>domainId!==ALL_DOMAINS).map(domainId=>({domainId,send:sendIds.includes(domainId),receive:receiveIds.includes(domainId)})),callbackUrl:formValue(values,"callbackUrl"),suppressionManagement:values.suppressionManagement===true}) as {key?:string;callback?:{secret:string}};
       setKey([result?.key,result?.callback?.secret?`Callback secret: ${result.callback.secret}`:null].filter(Boolean).join("\n"));
     } catch {
       // Inline notice owns failures from this request.
@@ -349,9 +380,9 @@ function Credentials({ data }: { data: Data }) {
               <Grid.Row gutter={[16, 0]}>
                 <Grid.Col md={12} xs={24}><Field field="productId" label="Product" initialValue={value(activeProducts[0], "id")} required rules={requiredRule}><Select options={activeProducts.map(product => ({ value: value(product, "id"), label: value(product, "name") }))} /></Field></Grid.Col>
                 <Grid.Col md={12} xs={24}><Field field="serviceName" label="Service name" required rules={requiredRule}><Input /></Field></Grid.Col>
-                <Grid.Col md={12} xs={24}><Field field="sendDomainIds" label="Sending domains"><Select mode="multiple" options={rows(data.domains).filter(d=>d.status==='active').map(d=>({value:value(d,'id'),label:value(d,'domain')}))}/></Field></Grid.Col>
-                <Grid.Col md={12} xs={24}><Field field="receiveDomainIds" label="Receiving domains"><Select mode="multiple" options={rows(data.domains).filter(d=>d.status==='active').map(d=>({value:value(d,'id'),label:value(d,'domain')}))}/></Field></Grid.Col>
-                <Grid.Col xs={24}><Field field="callbackUrl" label="Unified business callback URL" hint="Optional for polling-only connections. The callback secret is shown once with the key."><Input placeholder="https://business.example.com/mail/events"/></Field></Grid.Col>
+                <Grid.Col md={12} xs={24}><Field field="sendDomainIds" label="Sending domains" hint="ALL includes current and future registered domains. Leave empty for no sending permission."><DomainMultiSelect domains={activeDomains} /></Field></Grid.Col>
+                <Grid.Col md={12} xs={24}><Field field="receiveDomainIds" label="Receiving domains" hint="ALL includes current and future registered domains. Leave empty for no receiving permission."><DomainMultiSelect domains={activeDomains} /></Field></Grid.Col>
+                <Grid.Col xs={24}><Field field="callbackUrl" label="Business callback URL" hint="Optional for polling-only connections. The callback secret is shown once with the key."><Input placeholder="https://business.example.com/mail/events"/></Field></Grid.Col>
                 <Grid.Col xs={24}><Field field="suppressionManagement" label="Advanced permission" triggerPropName="checked"><Checkbox>Allow product-wide suppression management</Checkbox></Field></Grid.Col>
                 <Grid.Col xs={24}><Space><Submit pending={action.pending} labelText="Issue credential" /></Space></Grid.Col>
               </Grid.Row>

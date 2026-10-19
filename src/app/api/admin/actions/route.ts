@@ -168,13 +168,13 @@ export async function POST(request: Request) {
         status = 202;
         break;
       case"domain_grant.set":
-        result={id:await actions.setDomainGrant({serviceId:text(body,"serviceId"),domainId:text(body,"domainId"),send:body.send===true,receive:body.receive===true},session.email)};
+        result={id:await actions.setDomainGrant({serviceId:text(body,"serviceId"),domainId:body.domainId===null?null:text(body,"domainId"),send:body.send===true,receive:body.receive===true},session.email)};
         break;
       case"domain_grant.toggle":
         await actions.toggleDomainGrant(text(body,"id"),body.enabled===true,session.email);
         break;
       case"credential.create":
-        result=await actions.createServiceCredential({productId:text(body,"productId"),serviceName:text(body,"serviceName"),domains:body.domains as Array<{domainId:string;send:boolean;receive:boolean}>,callbackUrl:typeof body.callbackUrl==='string'&&body.callbackUrl.trim()?body.callbackUrl:undefined,suppressionManagement:body.suppressionManagement===true},session.email);
+        result=await actions.createServiceCredential({productId:text(body,"productId"),serviceName:text(body,"serviceName"),domains:body.domains as Array<{domainId:string;send:boolean;receive:boolean}>,allSendingDomains:body.allSendingDomains===true,allReceivingDomains:body.allReceivingDomains===true,callbackUrl:typeof body.callbackUrl==='string'&&body.callbackUrl.trim()?body.callbackUrl:undefined,suppressionManagement:body.suppressionManagement===true},session.email);
         status=201;
         break;
       case"credential.rotate":

@@ -85,7 +85,7 @@ export function Callbacks({ data }: { data: Data }) {
     <Space direction="vertical" size="large" className={styles.stack}>
       <Panel
         title="Add callback endpoint"
-        description="One unified callback per business Service, with canonical events and HMAC signatures"
+        description="One callback per business Service, with canonical events and HMAC signatures"
         defaultExpanded={callbacks.length === 0}
       >
         {unconfiguredServices.length ? <ActionForm fieldErrors={action.fields} layout="vertical" onSubmit={values => void submit(values as FormValues)}>
@@ -96,7 +96,7 @@ export function Callbacks({ data }: { data: Data }) {
             <Grid.Col md={12} xs={24}><Field label="Events" required><Checkbox.Group value={events} options={eventOptions.map(([event, title]) => ({ value: event, label: title }))} onChange={next => setEvents(next.map(String))} /></Field></Grid.Col>
             <Grid.Col xs={24}><Space><Submit pending={action.pending} disabled={!events.length} labelText="Add endpoint" /></Space></Grid.Col>
           </Grid.Row>
-        </ActionForm> : <Typography.Text type="secondary">All active Services already have a unified callback. Manage their endpoint and subscriptions below.</Typography.Text>}
+        </ActionForm> : <Typography.Text type="secondary">All active Services already have a business callback. Manage their endpoint and subscriptions below.</Typography.Text>}
         <Notice notice={action.notice} />
         {secret && <Secret value={secret} label="Generated signing secret. Store it in the callback consumer now." />}
       </Panel>

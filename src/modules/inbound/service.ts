@@ -7,7 +7,7 @@ import { objectStore } from "@/modules/config/object-store";
 import { createId } from "@/server/ids";
 import { completeObjectUploads, registerObjectUpload } from "@/server/services/object-cleanup";
 import { query, transaction } from "@/server/database";
-import { inboundDomainAccess } from "@/modules/core/resources/authorization";
+import { domainPermission, inboundDomainAccess } from "@/modules/core/resources/authorization";
 
 const MAX_MESSAGE_BYTES = 25 * 1024 * 1024;
 
@@ -51,11 +51,10 @@ export async function persistInbound(input: InboundInput) {
     SELECT r.id,r.product_id,r.service_id,array_agg(DISTINCT recipient) AS recipients
     FROM inbound_routes r JOIN sending_domains d ON d.id=r.sending_domain_id
     JOIN products p ON p.id=r.product_id AND p.status='active'
-    JOIN service_domain_grants dg ON dg.service_id=r.service_id AND dg.sending_domain_id=d.id AND dg.status='active' AND dg.receive_allowed
     JOIN provider_webhook_endpoints e ON e.id=r.provider_webhook_endpoint_id
     CROSS JOIN unnest($2::text[]) recipient
     WHERE e.id=$1 AND e.provider_account_id=$3 AND e.status='active' AND e.security_configured
-      AND r.status='active' AND d.status='active'
+      AND r.status='active' AND d.status='active' AND ${domainPermission("r.service_id", "d.id", "receive")}
       AND split_part(recipient,'@',2)=d.domain
     GROUP BY r.id ORDER BY r.id`, [input.webhookEndpointId, recipients, input.providerAccountId])).rows) : [];
   // Freeze the complete dispatch plan at the first durable processing decision.
@@ -105,7 +104,7 @@ export async function persistInbound(input: InboundInput) {
 
 async function persistRoutedInbound(input: InboundInput, scope: string, routes: InboundRoute[]) {
   const route = routes[0];
-  const allowed=(await query<{domain:string}>(`SELECT d.domain FROM service_domain_grants g JOIN sending_domains d ON d.id=g.sending_domain_id JOIN services s ON s.id=g.service_id JOIN products p ON p.id=s.product_id WHERE g.service_id=$1 AND g.status='active' AND g.receive_allowed AND d.status='active' AND p.status='active'`,[route.service_id])).rows.map(row=>row.domain);
+  const allowed=(await query<{domain:string}>(`SELECT d.domain FROM sending_domains d WHERE ${domainPermission("$1", "d.id", "receive")}`,[route.service_id])).rows.map(row=>row.domain);
   const envelopeRecipients=input.message.envelopeRecipients?.filter(recipient=>allowed.includes(recipient.split('@')[1]))??[];
   if(!envelopeRecipients.length) throw new InboundTerminalError("Domain receiving permission was revoked","DOMAIN_RECEIVE_NOT_AUTHORIZED");
   const message = {...input.message,envelopeRecipients,bcc:input.message.bcc.filter(item=>envelopeRecipients.includes(address(item)))};

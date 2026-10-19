@@ -2,6 +2,7 @@ import { providerRegistry } from "@/modules/providers/registry";
 import type { ProviderType } from "@/modules/providers/contracts";
 import type { ServiceIdentity } from "@/server/auth";
 import { query } from "@/server/database";
+import { effectiveDomainGrants } from "./authorization";
 
 const iso = (value: Date | null) => value?.toISOString() ?? null;
 
@@ -29,8 +30,8 @@ export async function discoverMail(identity: ServiceIdentity) {
       UNION ALL SELECT e.occurred_at FROM submission_events e JOIN submissions s ON s.id=e.submission_id JOIN messages m ON m.id=s.message_id WHERE m.service_id=$2 AND m.sending_domain_id=d.id AND e.event_type='delivered'
     ) f) AS last_delivered_at,
     (SELECT max(i.created_at) FROM inbound_messages i WHERE i.service_id=$2 AND i.status='ready' AND EXISTS(SELECT 1 FROM unnest(i.envelope_recipients) er WHERE split_part(er,'@',2)=d.domain)) AS last_received_at
-    FROM service_domain_grants g JOIN sending_domains d ON d.id=g.sending_domain_id
-    WHERE g.service_id=$2 ORDER BY d.domain`,[identity.productId,identity.serviceId])).rows;
+    FROM sending_domains d JOIN LATERAL (${effectiveDomainGrants("$2", "d.id")}) g ON true
+    ORDER BY d.domain`,[identity.productId,identity.serviceId])).rows;
   const routes = (await query<{domain_id:string;status:string;endpoint_status:string;security_configured:boolean;provider_type:ProviderType}>(`SELECT r.sending_domain_id AS domain_id,r.status,e.status AS endpoint_status,e.security_configured,a.type AS provider_type
     FROM inbound_routes r JOIN provider_webhook_endpoints e ON e.id=r.provider_webhook_endpoint_id
     JOIN provider_accounts a ON a.id=e.provider_account_id WHERE r.service_id=$1`,[identity.serviceId])).rows;

@@ -20,6 +20,7 @@ import { query, transaction } from "@/server/database";
 import { PROVIDER_EVENT_RECEIVED } from "@/server/outbox-events";
 import { queueForEvent } from "@/server/services/outbox";
 import { SERVICE_REQUESTS_PER_MINUTE } from "@/server/service-limits";
+import { domainPermission } from "@/modules/core/resources/authorization";
 
 const identifierSchema = z.string().trim().min(1).max(160);
 const categorySchema = z.string().trim().min(2).max(80).regex(/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/, "category must be a stable lowercase key");
@@ -80,11 +81,13 @@ const adminSuppressionInputSchema = z.object({
 });
 
 const inboundRouteInputSchema=z.object({webhookEndpointId:identifierSchema,domainId:identifierSchema,productId:identifierSchema,serviceId:identifierSchema}).strict();
-const domainGrantInputSchema=z.object({serviceId:identifierSchema,domainId:identifierSchema,send:z.boolean(),receive:z.boolean()}).strict().refine(v=>v.send||v.receive,{message:"Select sending or receiving"});
+const domainGrantInputSchema=z.object({serviceId:identifierSchema,domainId:identifierSchema.nullable(),send:z.boolean(),receive:z.boolean()}).strict().refine(v=>v.send||v.receive,{message:"Select sending or receiving"});
 const serviceCredentialInputSchema=z.object({productId:identifierSchema,serviceName:z.string().trim().min(2).max(120),
-  domains:z.array(z.object({domainId:identifierSchema,send:z.boolean(),receive:z.boolean()}).strict().refine(v=>v.send||v.receive,{message:"Select sending or receiving"})).min(1).max(100),
+  domains:z.array(z.object({domainId:identifierSchema,send:z.boolean(),receive:z.boolean()}).strict().refine(v=>v.send||v.receive,{message:"Select sending or receiving"})).default([]),
+  allSendingDomains:z.boolean().default(false),allReceivingDomains:z.boolean().default(false),
   callbackUrl:z.string().trim().url().max(2048).optional(),suppressionManagement:z.boolean().default(false),
-}).strict().refine(v=>new Set(v.domains.map(d=>d.domainId)).size===v.domains.length,{message:"Duplicate authorized domain"});
+}).strict().refine(v=>new Set(v.domains.map(d=>d.domainId)).size===v.domains.length,{message:"Duplicate authorized domain"})
+  .refine(v=>v.domains.length>0||v.allSendingDomains||v.allReceivingDomains,{path:["domains"],message:"Select at least one sending or receiving domain, or ALL"});
 
 const callbackEventSchema = z.enum([
   "email.accepted",
@@ -539,9 +542,10 @@ async function queuePermissionsChanged(client:import('pg').PoolClient,serviceId:
 export async function setDomainGrant(input:z.input<typeof domainGrantInputSchema>,actor:string){
   const v=domainGrantInputSchema.parse(input);
   return transaction(async client=>{
-    if(!(await client.query("SELECT s.id FROM services s JOIN products p ON p.id=s.product_id JOIN sending_domains d ON d.id=$2 WHERE s.id=$1 AND p.status='active' AND d.status='active'",[v.serviceId,v.domainId])).rowCount) throw new Error("Select an active business service and domain");
+    if(!(await client.query("SELECT s.id FROM services s JOIN products p ON p.id=s.product_id WHERE s.id=$1 AND p.status='active' AND ($2::text IS NULL OR EXISTS(SELECT 1 FROM sending_domains d WHERE d.id=$2 AND d.status='active'))",[v.serviceId,v.domainId])).rowCount) throw new Error("Select an active business service and domain");
+    const conflictTarget=v.domainId===null?"(service_id) WHERE sending_domain_id IS NULL":"(service_id,sending_domain_id)";
     const id=(await client.query<{id:string}>(`INSERT INTO service_domain_grants(id,service_id,sending_domain_id,send_allowed,receive_allowed) VALUES($1,$2,$3,$4,$5)
-      ON CONFLICT(service_id,sending_domain_id) DO UPDATE SET send_allowed=EXCLUDED.send_allowed,receive_allowed=EXCLUDED.receive_allowed,status='active',revision=service_domain_grants.revision+1,updated_at=now() RETURNING id`,[createId('dg'),v.serviceId,v.domainId,v.send,v.receive])).rows[0].id;
+      ON CONFLICT ${conflictTarget} DO UPDATE SET send_allowed=EXCLUDED.send_allowed,receive_allowed=EXCLUDED.receive_allowed,status='active',revision=service_domain_grants.revision+1,updated_at=now() RETURNING id`,[createId('dg'),v.serviceId,v.domainId,v.send,v.receive])).rows[0].id;
     await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES($1,'domain_grant.set','service_domain_grant',$2,$3)",[actor,id,v]);await queuePermissionsChanged(client,v.serviceId);return id;
   });
 }
@@ -559,6 +563,9 @@ export async function createServiceCredential(input:z.input<typeof serviceCreden
     if(!(await client.query("SELECT id FROM products WHERE id=$1 AND status='active'",[v.productId])).rowCount) throw new Error("Active product required");
     const serviceId=createId('svc');
     await client.query("INSERT INTO services(id,product_id,name,suppression_management_allowed) VALUES($1,$2,$3,$4)",[serviceId,v.productId,v.serviceName,v.suppressionManagement]);
+    if(v.allSendingDomains||v.allReceivingDomains){
+      await client.query("INSERT INTO service_domain_grants(id,service_id,sending_domain_id,send_allowed,receive_allowed) VALUES($1,$2,NULL,$3,$4)",[createId('dg'),serviceId,v.allSendingDomains,v.allReceivingDomains]);
+    }
     for(const domain of v.domains){
       if(!(await client.query("SELECT id FROM sending_domains WHERE id=$1 AND status='active'",[domain.domainId])).rowCount) throw new Error("Active domain required");
       await client.query("INSERT INTO service_domain_grants(id,service_id,sending_domain_id,send_allowed,receive_allowed) VALUES($1,$2,$3,$4,$5)",[createId('dg'),serviceId,domain.domainId,domain.send,domain.receive]);
@@ -570,7 +577,7 @@ export async function createServiceCredential(input:z.input<typeof serviceCreden
     }
     const key=`ev_live_${randomBytes(24).toString('base64url')}`,id=createId('cred');
     await client.query("INSERT INTO service_credentials(id,service_id,key_prefix,key_hash) VALUES($1,$2,$3,$4)",[id,serviceId,key.slice(0,12),hashApiKey(key)]);
-    await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES($1,'service_credential.create','service_credential',$2,$3)",[actor,id,{serviceId,domains:v.domains,suppressionManagement:v.suppressionManagement}]);
+    await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES($1,'service_credential.create','service_credential',$2,$3)",[actor,id,{serviceId,domains:v.domains,allSendingDomains:v.allSendingDomains,allReceivingDomains:v.allReceivingDomains,suppressionManagement:v.suppressionManagement}]);
     return {id,serviceId,key,callback};
   });
 }
@@ -677,7 +684,7 @@ export async function createInboundRoute(input:z.input<typeof inboundRouteInputS
   await transaction(async client=>{
     const endpoint=(await client.query<{type:ProviderType;status:string;security_configured:boolean}>("SELECT a.type,e.status,e.security_configured FROM provider_webhook_endpoints e JOIN provider_accounts a ON a.id=e.provider_account_id WHERE e.id=$1",[v.webhookEndpointId])).rows[0];
     if(!endpoint||endpoint.status!=='active'||!endpoint.security_configured||!providerRegistry(endpoint.type).inbound) throw new Error("A configured inbound provider endpoint is required");
-    if(!(await client.query("SELECT s.id FROM services s JOIN products p ON p.id=s.product_id JOIN service_domain_grants g ON g.service_id=s.id JOIN sending_domains d ON d.id=g.sending_domain_id WHERE s.id=$1 AND s.product_id=$2 AND p.status='active' AND d.id=$3 AND d.status='active' AND g.status='active' AND g.receive_allowed",[v.serviceId,v.productId,v.domainId])).rowCount) throw new Error("The service requires receiving permission for this domain");
+    if(!(await client.query(`SELECT s.id FROM services s WHERE s.id=$1 AND s.product_id=$2 AND ${domainPermission("s.id", "$3", "receive")}`,[v.serviceId,v.productId,v.domainId])).rowCount) throw new Error("The service requires receiving permission for this domain");
     await client.query("INSERT INTO inbound_routes(id,provider_webhook_endpoint_id,sending_domain_id,product_id,service_id) VALUES($1,$2,$3,$4,$5)",[id,v.webhookEndpointId,v.domainId,v.productId,v.serviceId]);
     await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES($1,'inbound_route.create','inbound_route',$2,$3)",[actor,id,v]);
   });return id;

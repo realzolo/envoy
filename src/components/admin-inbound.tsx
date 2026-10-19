@@ -61,10 +61,10 @@ export function Inbound({ data }: { data: Data }) {
 
   return (
     <Space direction="vertical" size="large" className={styles.stack}>
-      <Alert type="info" content="Inbound routes use authenticated envelope recipients and require domain receiving permission. Each business service receives one private copy and uses its unified callback. Domain verification does not prove receiving works; providers without a trustworthy envelope remain unavailable." />
+      <Alert type="info" content="Inbound routes use authenticated envelope recipients and require domain receiving permission. Each business service receives one private copy and uses its business callback. Domain verification does not prove receiving works; providers without a trustworthy envelope remain unavailable." />
       <Panel
         title="Create inbound route"
-        description="Route the entire authorized domain to a business service; its unified callback is used automatically"
+        description="Route the entire authorized domain to a business service; its business callback is used automatically"
         defaultExpanded={inboundRoutes.length === 0}
       >
         <ActionForm fieldErrors={action.fields} layout="vertical" onSubmit={() => void submit()}>

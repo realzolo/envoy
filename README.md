@@ -99,7 +99,9 @@ The service API is self-describing at `GET /api/v1` and `GET /api/v1/openapi.jso
 | `/messages/{id}/attempts` | Inspect submission attempts and structured diagnostics |
 | `/capabilities`         | Discover product/service, domain sending/receiving permissions, limits, configuration status and evidence                            |
 
-Business Service Keys are issued under **Service Credentials** with explicit domain sending/receiving permissions and one optional unified callback. A Service can use several domains; keys rotate without changing its identity or grants. Envoy does not configure business APPs or their mailbox purposes. The caller selects its complete From/Reply-To addresses within authorized domains and performs internal APP routing from trustworthy envelope recipients.
+Business Service Keys are issued under **Service Credentials** with explicit domain sending/receiving permissions and one optional business callback. A Service can use several domains; keys rotate without changing its identity or grants. Envoy does not configure business APPs or their mailbox purposes. The caller selects its complete From/Reply-To addresses within authorized domains and performs internal APP routing from trustworthy envelope recipients.
+
+For sending and receiving independently, choose **ALL (current and future domains)** to automatically authorize newly registered domains. ALL grants can be updated or revoked under **Business domain permissions**. Domain activation and mail routing still apply.
 
 See [the final service API contract](docs/API.md) for full request fields, file upload, result semantics, and failure diagnosis.
 

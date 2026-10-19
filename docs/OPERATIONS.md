@@ -81,7 +81,7 @@ Configure these resources in Envoy, not in each business system:
    Every route requires a Service with explicit receiving permission. Multiple authorized Services on the same domain
    intentionally receive private copies; review that choice as a receiving-data authorization.
 6. **Callbacks**: configure the business HTTPS URL, subscriptions and single signature secret once per Service.
-   Inbound and outbound events use that same unified endpoint automatically. Give the caller its callback connection
+   Inbound and outbound events use that same endpoint automatically. Give the caller its callback connection
    secret. Callback retries/replay acknowledge transport receipt, never completed business work.
 
 Use `/api/v1/capabilities` with the caller's service key to review `mail`: sender configuration, inbound route

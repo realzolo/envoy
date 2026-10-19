@@ -5,6 +5,7 @@ import type { DeliveryStatus, EmailRecord } from "@/lib/types";
 import { providerDescriptors } from "@/modules/providers/registry";
 import { query } from "@/server/database";
 import { workerHeartbeatAlive } from "@/server/runtime-store";
+import { effectiveDomainGrants } from "@/modules/core/resources/authorization";
 
 type EmailRow = {
   delivery_id: string; message_id: string; recipient_email: string; recipient_name: string | null; recipient_role: "to" | "cc" | "bcc"; last_error: Record<string, unknown> | null;
@@ -105,7 +106,7 @@ export async function dashboardData() {
       (SELECT count(*) FROM callback_deliveries WHERE status='dead_letter') AS dead_letters,
       (SELECT count(*) FROM deliveries WHERE lifecycle_status='unknown') AS unknown,
       (SELECT count(*) FROM raw_provider_events WHERE processed_at IS NULL AND terminated_at IS NULL AND processing_error IS NOT NULL) AS raw_errors`),
-    query<{id:string;product:string;service:string;category:string;sender:string;grant:boolean;credential:boolean;provider:boolean;identity:boolean;route:boolean;tested:boolean;observable:boolean;event_seen:boolean}>(`SELECT sg.id||':'||s.id||':'||cat.category AS id,p.name AS product,s.name AS service,cat.category AS category,
+    query<{id:string;product:string;service:string;category:string;sender:string;grant:boolean;credential:boolean;provider:boolean;identity:boolean;route:boolean;tested:boolean;observable:boolean;event_seen:boolean}>(`SELECT s.id||':'||sd.id||':'||cat.category AS id,p.name AS product,s.name AS service,cat.category AS category,
       '*'||'@'||sd.domain AS sender,sg.status='active' AND sg.send_allowed AS grant,
       EXISTS(SELECT 1 FROM service_credentials c WHERE c.service_id=s.id AND c.status='active' AND c.valid_from<=now() AND (c.valid_to IS NULL OR c.valid_to>now())) AS credential,
       EXISTS(SELECT 1 FROM provider_identities pi JOIN provider_accounts pa ON pa.id=pi.provider_account_id WHERE pi.sending_domain_id=sd.id AND pa.status='active') AS provider,
@@ -118,7 +119,8 @@ export async function dashboardData() {
         WHERE rp.status='active' AND rp.sending_domain_id=sd.id AND (rp.product_id IS NULL OR rp.product_id=p.id) AND (rp.service_id IS NULL OR rp.service_id=s.id) AND (rp.message_category IS NULL OR rp.message_category=cat.category)
         AND pi.status='verified' AND pa.status='active' AND rt.status='active' AND we.status='active' AND we.security_configured) AS observable,
       EXISTS(SELECT 1 FROM messages m JOIN deliveries d ON d.message_id=m.id JOIN delivery_events e ON e.delivery_id=d.id WHERE m.service_id=s.id AND m.sending_domain_id=sd.id AND m.message_category=cat.category AND e.raw_provider_event_id IS NOT NULL) AS event_seen
-      FROM service_domain_grants sg JOIN services s ON s.id=sg.service_id JOIN products p ON p.id=s.product_id JOIN sending_domains sd ON sd.id=sg.sending_domain_id
+      FROM services s JOIN products p ON p.id=s.product_id CROSS JOIN sending_domains sd
+      JOIN LATERAL (${effectiveDomainGrants("s.id", "sd.id")}) sg ON true
       CROSS JOIN LATERAL (SELECT 'transactional'::text AS category UNION SELECT rp.message_category FROM routing_policies rp WHERE rp.sending_domain_id=sd.id AND (rp.product_id IS NULL OR rp.product_id=p.id) AND (rp.service_id IS NULL OR rp.service_id=s.id) AND rp.message_category IS NOT NULL) cat
       WHERE p.status='active' AND sd.status='active' ORDER BY p.name,s.name,sd.domain LIMIT 100`),
     workerHeartbeatAlive()
@@ -166,7 +168,7 @@ const adminQueries = {
     LEFT JOIN provider_identities pi ON pi.sending_domain_id=sd.id
     LEFT JOIN provider_accounts pa ON pa.id=pi.provider_account_id
     GROUP BY sd.id ORDER BY sd.domain`),
-  grants:()=>query(`SELECT g.*,s.product_id,p.name AS product,s.name AS service,d.domain FROM service_domain_grants g JOIN services s ON s.id=g.service_id JOIN products p ON p.id=s.product_id JOIN sending_domains d ON d.id=g.sending_domain_id ORDER BY p.name,s.name,d.domain`),
+  grants:()=>query(`SELECT g.*,s.product_id,p.name AS product,s.name AS service,COALESCE(d.domain,'ALL (current and future domains)') AS domain FROM service_domain_grants g JOIN services s ON s.id=g.service_id JOIN products p ON p.id=s.product_id LEFT JOIN sending_domains d ON d.id=g.sending_domain_id ORDER BY p.name,s.name,d.domain NULLS FIRST`),
   policies: () => query(`SELECT rp.id,rp.name,rp.priority,rp.status,rp.product_id,rp.service_id,rp.sending_domain_id,p.name AS product,s.name AS service,sd_policy.domain AS sending_domain,rp.message_category,
     json_agg(json_build_object('id',rt.id,'accountId',pa.id,'account',pa.name,'type',pa.type,'identityId',pi.id,'domain',sd.domain,'priority',rt.priority,'weight',rt.weight,'rateLimit',rt.rate_limit_per_minute,'status',rt.status,'circuitOpenUntil',rt.circuit_open_until) ORDER BY rt.priority)
       FILTER(WHERE rt.id IS NOT NULL) AS targets
