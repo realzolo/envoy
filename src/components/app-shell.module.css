@@ -108,6 +108,11 @@
   padding: 12px;
 }
 
+.siderFooter :global(.arco-btn) {
+  width: 32px;
+  height: 32px;
+}
+
 .body {
   min-width: 0;
   min-height: calc(100vh - 60px);
@@ -123,6 +128,7 @@
 }
 
 .body .content {
+  container: workspace / inline-size;
   width: 100%;
   min-width: 0;
   padding: 0;
@@ -154,15 +160,38 @@
 
   .headerLeft,
   .headerRight {
-    gap: 12px;
+    gap: 8px;
   }
 
   .healthLabel {
-    display: none;
+    font-size: 13px;
+    white-space: nowrap;
   }
+
+  .brand :global(.envoy-logo) { gap: 8px; font-size: 18px; }
 
   .body {
     padding: 16px;
+  }
+
+  .header .mobileTrigger,
+  .header .accountTrigger {
+    width: 36px;
+    height: 36px;
+    padding: 0;
+  }
+
+  .header .healthTrigger {
+    width: auto;
+    height: 36px;
+    gap: 6px;
+    padding: 0 6px;
+  }
+
+  .healthTrigger :global(.arco-badge-status-dot) { width: 8px; height: 8px; }
+
+  .mobileTrigger :global(.arco-icon) {
+    font-size: 18px;
   }
 }
 

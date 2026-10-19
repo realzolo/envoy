@@ -108,7 +108,7 @@ export function DeliveryDetailView({ detail, back = "/emails" }: { detail: Deliv
           </Tabs.TabPane>
           <Tabs.TabPane key="content" title="Message content">
             {detail.content.content_policy === "sensitive" ? <Alert showIcon type="info" content="Sensitive message content is encrypted for delivery and is never available for preview. Delivery status and receipt history remain available." /> : detail.content.content_purged_at ? <Alert showIcon type="info" content="Message content has expired under the retention policy. Identifiers and delivery history are retained." /> : <div className={styles.tabPanel}>
-              <Descriptions className={styles.descriptions} column={{ xs: 1, md: 2 }} data={[
+              <Descriptions className={styles.descriptions} layout="vertical" tableLayout="fixed" column={{ xs: 1, md: 2 }} data={[
                 { label: "From", value: detail.from },
                 ...([ ["To", detail.content.to_recipients], ["Cc", detail.content.cc_recipients], ["Bcc", detail.content.bcc_recipients], ["Reply-To", detail.content.reply_to] ] as const).map(([label, addresses]) => ({ label, value: addresses.map(address => address.name ? `${address.name} <${address.email}>` : address.email).join(", ") || "Not set" })),
                 { label: "Attachments", value: detail.content.attachment_snapshot.map(item => String(item.fileName ?? item.fileId)).join(", ") || "None" },

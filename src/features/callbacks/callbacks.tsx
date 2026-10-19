@@ -112,7 +112,7 @@ export function Callbacks({ data }: { data: Data }) {
       </TableCard>
       {editing && <EditCallback key={value(editing, "id")} callback={callbacks.find(item => item.id === editing.id) ?? editing} onClose={() => setEditing(null)} />}
       {selectedDeliveryId && <ResourceDetail key={selectedDeliveryId} title="Callback delivery" path={`/api/admin/callback-deliveries/${encodeURIComponent(selectedDeliveryId)}`} onClose={() => setSelectedDeliveryId(null)}>{item => <>
-        <Descriptions column={1} labelStyle={{ width: 112 }} data={[
+        <Descriptions column={1} layout="vertical" tableLayout="fixed" data={[
           { label: "Status", value: <StatusTag>{value(item, "status")}</StatusTag> },
           { label: "Endpoint", value: value(item, "endpoint") },
           { label: "URL", value: value(item, "url") },
@@ -143,7 +143,7 @@ function EditCallback({ callback, onClose }: { callback: Row; onClose: () => voi
   }} okButtonProps={{ disabled: !events.length }}>
     <ActionForm fieldErrors={action.fields} form={form} layout="vertical" initialValues={{ name: callback.name, url: callback.url }}>
       <Typography.Text>Event callback URL: {value(callback, "url")}</Typography.Text>
-      <Field label="Subscribed events" required><Checkbox.Group value={events} onChange={next => setEvents(next.map(String))} options={["email.accepted", "email.delivered", "email.bounced", "email.failed", "email.suppressed", "inbound.received", "service.permissions_changed"]} /></Field>
+      <Field label="Subscribed events" required><Checkbox.Group className={styles.eventChoices} value={events} onChange={next => setEvents(next.map(String))} options={["email.accepted", "email.delivered", "email.bounced", "email.failed", "email.suppressed", "inbound.received", "service.permissions_changed"]} /></Field>
     </ActionForm><Notice notice={action.notice} />
     <ReplaceCallback callback={callback} />
   </Modal>;

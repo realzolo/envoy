@@ -62,7 +62,7 @@ export function Domains({ data }: { data: Data }) {
                     return {
                       value: value(provider, "id"),
                       disabled: incompatible,
-                      label: <Space size="mini"><Typography.Text>{value(provider, "name")}</Typography.Text><Typography.Text type="secondary">{incompatible ? `(uses ${mailgunDomain})` : managedTypes.has(type) ? "(DNS records here)" : "(verify at provider)"}</Typography.Text></Space>,
+                      label: <Space size="mini" wrap><Typography.Text>{value(provider, "name")}</Typography.Text><Typography.Text type="secondary">{incompatible ? `(uses ${mailgunDomain})` : managedTypes.has(type) ? "(DNS records here)" : "(verify at provider)"}</Typography.Text></Space>,
                     };
                   })}
                 /> : <Space direction="vertical" size="small" align="start">
@@ -83,15 +83,15 @@ export function Domains({ data }: { data: Data }) {
           className={styles.card}
           key={value(domain, "id")}
           title={<Typography.Text code>{value(domain, "domain")}</Typography.Text>}
-          extra={<Space><Button size="small" onClick={() => setAddingProvider(domain)}>Add provider</Button><ActionButton body={{method:"PATCH",path:`/api/admin/domains/${encodeURIComponent(String(domain.id))}`,payload:{id: domain.id, enabled: domain.status !== "active"}}}>{domain.status === "active" ? "Disable" : "Enable"}</ActionButton></Space>}
+          extra={<Space wrap><Button size="small" onClick={() => setAddingProvider(domain)}>Add provider</Button><ActionButton body={{method:"PATCH",path:`/api/admin/domains/${encodeURIComponent(String(domain.id))}`,payload:{id: domain.id, enabled: domain.status !== "active"}}}>{domain.status === "active" ? "Disable" : "Enable"}</ActionButton></Space>}
         >
           <Collapse bordered>
             {rows(domain.identities).map(identity => (
               <Collapse.Item
                 key={value(identity, "id")}
                 name={value(identity, "id")}
-                header={<Space size="small"><Typography.Text>{value(identity, "account")}</Typography.Text><StatusTag>{value(identity, "status")}</StatusTag></Space>}
-                extra={<Space size="small">{managedTypes.has(value(identity, "type")) ? <ActionButton body={{method:"POST",path:`/api/admin/provider-identities/${encodeURIComponent(String(identity.id))}/refresh`,payload:{id: identity.id}}}><IconRefresh />Refresh DNS</ActionButton> : <Typography.Text type="secondary">Verified in provider dashboard</Typography.Text>}<ActionButton body={{method:"PATCH",path:`/api/admin/provider-identities/${encodeURIComponent(String(identity.id))}`,payload:{id: identity.id, enabled: identity.status === "disabled"}}}>{identity.status === "disabled" ? "Enable" : "Disable"}</ActionButton></Space>}
+                header={<Space size="small" wrap><Typography.Text>{value(identity, "account")}</Typography.Text><StatusTag>{value(identity, "status")}</StatusTag></Space>}
+                extra={<Space size="small" wrap>{managedTypes.has(value(identity, "type")) ? <ActionButton body={{method:"POST",path:`/api/admin/provider-identities/${encodeURIComponent(String(identity.id))}/refresh`,payload:{id: identity.id}}}><IconRefresh />Refresh DNS</ActionButton> : <Typography.Text type="secondary">Verified in provider dashboard</Typography.Text>}<ActionButton body={{method:"PATCH",path:`/api/admin/provider-identities/${encodeURIComponent(String(identity.id))}`,payload:{id: identity.id, enabled: identity.status === "disabled"}}}>{identity.status === "disabled" ? "Enable" : "Disable"}</ActionButton></Space>}
               >
                 <Space direction="vertical" size="small" style={{ width: "100%" }}>
                   <Typography.Text type="secondary">Provider identity</Typography.Text>

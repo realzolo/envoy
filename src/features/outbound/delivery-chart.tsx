@@ -8,6 +8,7 @@ import { EmailTable } from "@/features/outbound/email-table";
 import type { EmailRecord } from "@/lib/types";
 import { Link as ArcoLink,Badge,Card,Empty,List,Space,Statistic,Tooltip,Typography } from "@arco-design/web-react";
 import { IconArrowRight } from "@arco-design/web-react/icon";
+import { useEffect, useRef, useState } from "react";
 
 export type DeliveryTrendPoint = {
   label: string;
@@ -49,11 +50,28 @@ function ChartTimeLabel({value}:{value:string}) {
 }
 
 export function DeliveryChart({ data }: { data: DeliveryTrendPoint[] }) {
+  const containerRef = useRef<HTMLElement>(null);
+  const [{ width, height }, setSize] = useState({ width: 640, height: 240 });
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const observer = new ResizeObserver(([entry]) => {
+      const width = Math.round(entry.contentRect.width);
+      const height = Math.round(entry.contentRect.height);
+      if (!width || !height) return;
+      setSize((size) => size.width === width && size.height === height ? size : { width, height });
+    });
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, []);
+
   const maximum = Math.max(4, ...data.flatMap((item) => [item.sent, item.delivered]));
-  const width = Math.max(640, data.length * 108 + 64);
-  const plot = { top: 28, right: width - 32, bottom: 184, left: 48 };
+  const plot = { top: 16, right: width - 28, bottom: height - 32, left: 48 };
   const chartHeight = plot.bottom - plot.top;
   const chartWidth = plot.right - plot.left;
+  const labelInterval = Math.max(1, Math.ceil(((data.length - 1) * 56) / chartWidth));
   const xAt = (index: number) => (
     data.length <= 1 ? width / 2 : plot.left + (index * chartWidth) / (data.length - 1)
   );
@@ -63,22 +81,19 @@ export function DeliveryChart({ data }: { data: DeliveryTrendPoint[] }) {
   );
 
   return (
-    <section aria-label="Accepted and delivered messages over seven days">
+    <section ref={containerRef} className={styles.chart} aria-label="Accepted and delivered messages over seven days">
       {data.length ? (
-        <div className={styles.chart}>
-          <svg
-            aria-label="Accepted and delivered messages over seven days"
-
-            height="230"
-            preserveAspectRatio="xMinYMin meet"
-            role="img"
-            viewBox={`0 0 ${width} 230`}
-            width="100%"
-          >
-            {[0, 0.25, 0.5, 0.75, 1].map((ratio) => {
-              const y = plot.bottom - chartHeight * ratio;
-              return (
-                <g key={ratio}>
+        <svg
+          aria-label="Accepted and delivered messages over seven days"
+          height="100%"
+          role="img"
+          viewBox={`0 0 ${width} ${height}`}
+          width="100%"
+        >
+          {[0, 0.25, 0.5, 0.75, 1].map((ratio) => {
+            const y = plot.bottom - chartHeight * ratio;
+            return (
+              <g key={ratio}>
                 <text x={plot.left - 12} y={y + 4} textAnchor="end" fill="var(--color-text-3)" fontSize="11">{Math.round(maximum * ratio)}</text>
                 <line
                   stroke="var(--color-border-1)"
@@ -88,47 +103,46 @@ export function DeliveryChart({ data }: { data: DeliveryTrendPoint[] }) {
                   y1={y}
                   y2={y}
                 />
-                </g>
-              );
-            })}
-            <polyline
-
-              fill="none"
-              points={points("sent")}
-              stroke="rgb(var(--arcoblue-6))"
-              strokeWidth="1.5"
-            />
-            <polyline
-              fill="none"
-              points={points("delivered")}
-              stroke="rgb(var(--green-6))"
-              strokeWidth="2"
-            />
-            {data.map((item, index) => (
-              <g key={item.label}>
-                <title>{`${item.sent} queued · ${item.delivered} delivered`}</title>
-                <circle
-                  cx={xAt(index)}
-                  cy={yAt(item.delivered)}
-                  fill="var(--color-bg-1)"
-                  r="3"
-                  stroke="rgb(var(--green-6))"
-                  strokeWidth="1.5"
-                />
+              </g>
+            );
+          })}
+          <polyline
+            fill="none"
+            points={points("sent")}
+            stroke="rgb(var(--arcoblue-6))"
+            strokeWidth="1.5"
+          />
+          <polyline
+            fill="none"
+            points={points("delivered")}
+            stroke="rgb(var(--green-6))"
+            strokeWidth="2"
+          />
+          {data.map((item, index) => (
+            <g key={item.label}>
+              <title>{`${item.sent} queued · ${item.delivered} delivered`}</title>
+              <circle
+                cx={xAt(index)}
+                cy={yAt(item.delivered)}
+                fill="var(--color-bg-1)"
+                r="3"
+                stroke="rgb(var(--green-6))"
+                strokeWidth="1.5"
+              />
+              {(index === data.length - 1 || (index % labelInterval === 0 && data.length - 1 - index >= labelInterval)) && (
                 <text
-
-                  fill="var(--color-text-4)"
-                  fontSize="11"
+                  fill="var(--color-text-3)"
+                  fontSize="12"
                   textAnchor="middle"
                   x={xAt(index)}
-                  y="216"
+                  y={height - 8}
                 >
                   <ChartTimeLabel value={item.label}/>
                 </text>
-              </g>
-            ))}
-          </svg>
-        </div>
+              )}
+            </g>
+          ))}
+        </svg>
       ) : (
         <Empty description="No delivery data is available yet." />
       )}
@@ -225,8 +239,8 @@ export function DashboardOverview({ stats, health, trend, recent, setup }: Dashb
         </Tooltip>
       </div>
       <div className={styles.overview}>
-        <Card title="Delivery trend" extra={<Space wrap size="medium"><Badge color="arcoblue" text="Queued"/><Badge color="green" text="Delivered"/></Space>}>
-          <Typography.Paragraph type="secondary">Daily queued cohorts · delivered counts update as events arrive</Typography.Paragraph>
+        <Card className={styles.trendCard} title="Delivery trend" extra={<Space wrap size="medium"><Badge color="arcoblue" text="Queued"/><Badge color="green" text="Delivered"/></Space>}>
+          <Typography.Paragraph className={styles.trendDescription} type="secondary">Daily queued cohorts · delivered counts update as events arrive</Typography.Paragraph>
           <DeliveryChart data={trend} />
         </Card>
         <Card title="Pipeline health" extra={<Badge status={healthItems.every(item=>item.healthy) ? "success" : "warning"} text={healthItems.every(item=>item.healthy) ? "Healthy" : "Attention"}/> }>

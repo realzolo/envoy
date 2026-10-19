@@ -18,6 +18,7 @@
 }
 
 .form {
+  container: admin-form / inline-size;
   width: 100%;
   max-width: 1120px;
 }
@@ -83,7 +84,57 @@
 
 .choices {
   max-width: 100%;
-  overflow-x: auto;
+}
+
+.choices > :global(.arco-radio-group),
+.permissionChoices {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px;
+  width: 100%;
+  padding: 0;
+}
+
+.choices :global(.arco-radio-button),
+.permissionChoices :global(.arco-radio-button) {
+  display: flex;
+  align-items: center;
+  min-height: 40px;
+  margin: 0;
+  border: 1px solid var(--color-border-2);
+  background: var(--color-bg-2);
+  white-space: normal;
+  line-height: 22px;
+}
+
+.choices :global(.arco-radio-button-inner),
+.permissionChoices :global(.arco-radio-button-inner) { padding: 8px 12px; }
+.choices :global(.arco-radio-button)::before,
+.choices :global(.arco-radio-button)::after,
+.permissionChoices :global(.arco-radio-button)::before,
+.permissionChoices :global(.arco-radio-button)::after { display: none; }
+.choices :global(.arco-radio-checked),
+.permissionChoices :global(.arco-radio-checked) { border-color: rgb(var(--primary-6)); background: var(--color-primary-light-1); }
+
+.summary { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px 20px; }
+.summary > :first-child { flex: 1 1 300px; min-width: 0; }
+.collapseHeading { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.collapseHeading > span:first-child { display: inline-flex; align-items: center; gap: 8px; }
+.secretHint { display: flex; align-items: flex-start; gap: 8px; color: var(--color-text-3); }
+.secretHint > svg { flex: none; margin-top: 4px; }
+.eventChoices { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 8px 16px; }
+.eventChoices :global(.arco-checkbox) { display: flex; align-items: flex-start; margin: 0; line-height: 22px; }
+.eventChoices :global(.arco-checkbox-icon-hover) { flex: none; margin-top: 3px; }
+.eventChoices :global(.arco-checkbox-text) { min-width: 0; overflow-wrap: anywhere; }
+
+@container admin-form (max-width: 799px) {
+  .form :global(.arco-col-md-8) { flex: 0 0 50%; max-width: 50%; width: 50%; }
+}
+@container admin-form (max-width: 559px) {
+  .form :global(.arco-col-md-8), .form :global(.arco-col-md-12) { flex: 0 0 100%; max-width: 100%; width: 100%; }
+}
+@container admin-form (max-width: 399px) {
+  .permissionChoices { grid-template-columns: minmax(0, 1fr); }
 }
 
 .actions {

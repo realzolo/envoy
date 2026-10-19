@@ -108,12 +108,12 @@ export function EmailTable({ records, compact = false, variant = "page", filters
         <Form className={styles.filters} layout="vertical" onSubmit={() => navigate({ q: query, status })}>
           <div className={styles.filterGrid}>
             <Form.Item label="Search messages">
-              <Input allowClear placeholder="ID, reference, recipient, subject, or service" prefix={<IconSearch />} value={query} onChange={setQuery} />
+              <Input allowClear aria-label="Search by ID, reference, recipient, subject, or service" placeholder="Recipient, subject, or ID" prefix={<IconSearch />} value={query} onChange={setQuery} />
             </Form.Item>
             <Form.Item label="Delivery status">
               <Select options={statusOptions} value={status} onChange={setStatus} />
             </Form.Item>
-            <Space className={styles.filterActions}>
+            <Space className={styles.filterActions} wrap>
               <Button htmlType="submit" icon={<IconSearch />} loading={pending} type="primary">Search</Button>
               <Button icon={<IconRefresh />} onClick={reset} disabled={pending}>Reset</Button>
             </Space>
@@ -133,7 +133,7 @@ export function EmailTable({ records, compact = false, variant = "page", filters
         noDataElement={emptyState}
         pagination={false}
         rowKey="id"
-        scroll={{ x: 1180 }}
+        scroll={{ x: compact ? 1000 : 1180 }}
         tableLayoutFixed
         size={compact ? "small" : "default"}
       />

@@ -7,22 +7,74 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .envoy-logo { display: inline-flex; align-items: center; gap: 10px; color: var(--color-text-1); font-size: 20px; white-space: nowrap; }
 .envoy-mark { display: block; flex: none; width: 30px; height: 30px; }
 .page-stack { display: flex; min-width: 0; flex-direction: column; gap: 16px; }
-.page-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding: 0 0 4px; }
-.page-header__main { display: flex; min-width: 0; align-items: flex-start; gap: 12px; }
+.page-header { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 16px 24px; padding: 0 0 4px; }
+.page-header__main { display: flex; min-width: 0; flex: 1 1 320px; align-items: flex-start; gap: 12px; }
 .page-header__copy { min-width: 0; }
 .page-header__title.arco-typography { margin: 0; overflow-wrap: anywhere; }
 .page-header__description.arco-typography { margin: 6px 0 0; color: var(--color-text-3); font-size: 14px; line-height: 22px; }
-.page-header__actions { flex: none; padding-top: 2px; }
+.page-header__actions { max-width: 100%; flex: 0 1 auto; padding-top: 2px; }
 .route-enter { min-width: 0; width: 100%; }
 .arco-table-cell { overflow-wrap: anywhere; }
 .table-summary { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin: 0 0 16px; color: var(--color-text-3); font-size: 12px; line-height: 20px; }
 .dashboard-loading, .admin-stack, .provider-account-list { width: 100%; align-items: stretch; }
 .admin-stack > *, .provider-account-list > *, .admin-panel, .admin-panel__content { width: 100%; min-width: 0; }
 @media (max-width: 767px) {
-  .page-header { flex-direction: column; gap: 12px; }
+  .page-header { gap: 12px; }
+  .page-header__main { flex-basis: 100%; }
   .page-header__actions { width: 100%; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
 }
 .login-page { display: flex; min-height: 100vh; align-items: center; justify-content: center; padding: 24px; background: var(--color-fill-2); }
+
+/* Shared surfaces keep long names, actions, and explanatory text readable. */
+.arco-typography { word-break: normal; overflow-wrap: anywhere; }
+.app-content .arco-card { min-width: 0; container: panel / inline-size; }
+.app-content .arco-card-header { height: auto; min-height: 48px; flex-wrap: wrap; gap: 8px 16px; padding-block: 8px; }
+.app-content .arco-card-header-title { flex: 1 0 auto; max-width: 100%; white-space: normal; overflow-wrap: anywhere; line-height: 24px; }
+.app-content .arco-card-header-extra { max-width: 100%; white-space: normal; }
+.app-content .arco-card-header .arco-space-horizontal,
+.arco-collapse-item-header .arco-space-horizontal { flex-wrap: wrap; max-width: 100%; gap: 8px 12px; }
+/* Arco Space sets item margins inline; gaps avoid trailing space in wrapped headers. */
+.app-content .arco-card-header .arco-space-horizontal > .arco-space-item,
+.arco-collapse-item-header .arco-space-horizontal > .arco-space-item { margin: 0 !important; }
+.arco-collapse-item-header { min-height: 44px; flex-wrap: wrap; gap: 8px 12px; }
+.arco-collapse-item-header-title { flex: 1 1 180px; min-width: 0; overflow-wrap: anywhere; }
+.arco-collapse-item-header-extra { min-width: 0; max-width: 100%; }
+.arco-space-item { min-width: 0; }
+.arco-descriptions-item-label { white-space: normal; }
+.arco-descriptions-item-value { overflow-wrap: anywhere; }
+.arco-btn { max-width: 100%; }
+.arco-btn:not(.arco-btn-circle):not(.arco-btn-only-icon) { height: auto; min-height: 32px; padding-block: 5px; white-space: normal; line-height: 20px; }
+.arco-btn > span > .arco-icon { margin-inline-end: 6px; }
+.arco-empty .arco-empty-description { color: var(--color-text-3); overflow-wrap: anywhere; }
+.arco-table-content { scrollbar-width: thin; }
+.arco-modal { max-width: calc(100vw - 32px); }
+.arco-modal-header, .arco-drawer-header { height: auto; min-height: 48px; padding-block: 12px; }
+.arco-modal:not(.arco-modal-simple) .arco-modal-title, .arco-drawer-title { padding-inline-end: 24px; overflow-wrap: anywhere; }
+.arco-modal-footer, .arco-drawer-footer { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.arco-modal-footer > .arco-btn { margin-left: 0; }
+.arco-drawer-footer .arco-space-horizontal { flex-wrap: wrap; }
+.arco-drawer-footer .arco-space-horizontal:not(.arco-space-wrap) { row-gap: 8px; }
+
+@container panel (max-width: 479px) {
+  .arco-collapse-item-header-extra { flex-basis: 100%; }
+  .arco-collapse-item-header-extra .arco-space-horizontal { column-gap: 8px; }
+  .arco-collapse-item-header-extra .arco-btn { padding-inline: 10px; }
+}
+
+@media (max-width: 575px) {
+  .page-header__title.arco-typography { font-size: 22px; line-height: 30px; }
+  .page-header__main { flex-basis: auto; width: 100%; }
+  .app-content .arco-card-body, .arco-drawer-body { padding: 16px; }
+  .arco-btn:not(.arco-btn-circle):not(.arco-btn-only-icon) { min-height: 38px; padding-block: 8px; }
+  .arco-btn-only-icon { width: 36px; height: 36px; }
+  .arco-input, .arco-input-wrapper, .arco-select-view { min-height: 38px; }
+  .arco-form-item { margin-bottom: 20px; }
+  .arco-empty { padding-inline: 8px; }
+  .arco-modal-header, .arco-modal-content, .arco-modal-footer { padding-inline: 16px; }
+  .arco-modal { top: 24px; margin-bottom: 24px; }
+  .arco-drawer-header, .arco-drawer-footer { padding-inline: 16px; }
+  .login-page { padding: 16px; }
+}

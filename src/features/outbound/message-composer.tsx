@@ -118,7 +118,7 @@ export function MessageComposer({ services }: { services: Service[] }) {
             </Form.Item>
             <Form.Item field="fromEmail" label="From address" rules={[{ required: true, type: "email", message: "Enter an authorized sender address." }]}><Input type="email" placeholder="orders@mail.company.com" /></Form.Item>
             <Form.Item field="fromName" label="From name"><Input placeholder="Order service" /></Form.Item>
-            <Form.Item field="to" label="To"><Input placeholder="customer@example.com, colleague@example.com" /></Form.Item>
+            <Form.Item field="to" label="To"><Input placeholder="customer@example.com" /></Form.Item>
             <Form.Item field="cc" label="Cc"><Input placeholder="manager@company.com" /></Form.Item>
             <Form.Item field="bcc" label="Bcc"><Input placeholder="archive@company.com" /></Form.Item>
             <Form.Item field="replyTo" label="Reply-To"><Input placeholder="support@company.com" /></Form.Item>
@@ -130,7 +130,7 @@ export function MessageComposer({ services }: { services: Service[] }) {
             </Form.Item>
           </div>
           <Form.Item label="Attachments" extra="Up to 20 files, 10 MB each, 20 MB combined. Files belong to the selected service.">
-            <input aria-label="Upload attachments" type="file" multiple disabled={pending || uploading || !serviceId} onChange={event => { void upload(event.target.files); event.target.value = ""; }} />
+            <input className={styles.fileInput} aria-label="Upload attachments" type="file" multiple disabled={pending || uploading || !serviceId} onChange={event => { void upload(event.target.files); event.target.value = ""; }} />
             {attachments.map(file => <Space key={file.fileId}><Typography.Text>{file.fileName}</Typography.Text><Button type="text" size="small" onClick={() => setAttachments(current => current.filter(item => item.fileId !== file.fileId))}>Remove</Button></Space>)}
           </Form.Item>
           <Divider />

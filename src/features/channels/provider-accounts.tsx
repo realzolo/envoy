@@ -403,7 +403,7 @@ function CreateProvider({ onClose, alwaysOpen = false }: { onClose: () => void; 
                 <FormColumn span={24}>
                   <Space size="small" wrap>
                     <SubmitButton pending={action.pending}>Connect account</SubmitButton>
-                    <Space size="mini"><IconLock /><Typography.Text type="secondary">Secrets are encrypted and never shown again</Typography.Text></Space>
+                    <div className={styles.secretHint}><IconLock /><span>Secrets are encrypted and never shown again</span></div>
                   </Space>
                 </FormColumn>
               </Grid.Row>
@@ -687,7 +687,9 @@ function Account({ account }: { account: Row }) {
     >
       <Space direction="vertical" size="large" className={styles.stack}>
         <Descriptions
-          column={{ xs: 1, sm: 1, md: 1, lg: 1, xl: 2, xxl: 2, xxxl: 2 }}
+          layout="vertical"
+          tableLayout="fixed"
+          column={{ xs: 1, md: 2 }}
           data={[
             {
               label: "Provider",
@@ -722,10 +724,10 @@ function Account({ account }: { account: Row }) {
           {!waitingForTest && <ActionButton body={{method:"PATCH",path:`/api/admin/provider-accounts/${encodeURIComponent(String(account.id))}`,payload:{id: account.id, enabled: !active}}} success={active ? "Account disabled" : "Account enabled for testing"} danger={active}><IconPoweroff />{active ? "Disable" : "Enable for test"}</ActionButton>}
         </Space>
         <Collapse bordered>
-          <Collapse.Item name="webhook" header={<Space size="small"><IconSettings />Provider event webhook <Typography.Text type="secondary">{configured ? "Verification configured" : "Setup required"}</Typography.Text></Space>}>
+          <Collapse.Item name="webhook" header={<div className={styles.collapseHeading}><span><IconSettings />Provider event webhook</span><Typography.Text type="secondary">{configured ? "Verification configured" : "Setup required"}</Typography.Text></div>}>
             <WebhookForm account={account} />
           </Collapse.Item>
-          <Collapse.Item name="credentials" header={<Space size="small"><IconRefresh />Rotate credential <Typography.Text type="secondary">v{value(account, "credential_version")}</Typography.Text></Space>}>
+          <Collapse.Item name="credentials" header={<div className={styles.collapseHeading}><span><IconRefresh />Rotate credential</span><Typography.Text type="secondary">v{value(account, "credential_version")}</Typography.Text></div>}>
             <CredentialForm account={account} />
           </Collapse.Item>
           <Collapse.Item name="quota" header={<Space size="small"><IconRotateLeft />Routing limits</Space>}>
@@ -743,15 +745,13 @@ export function ProviderAccounts({ data }: { data: Data }) {
 
   return (
     <Space direction="vertical" size="large" className={styles.stack}>
-      <Grid.Row align="center" justify="space-between" gutter={16}>
-        <Grid.Col flex="auto">
+      <div className={styles.summary}>
           <Space direction="vertical" size="mini">
             <Typography.Text>{providers.length} connected {providers.length === 1 ? "account" : "accounts"}</Typography.Text>
             <Typography.Text type="secondary">Provider API credentials and event webhook verification are managed independently.</Typography.Text>
           </Space>
-        </Grid.Col>
-        {!showCreate && <Grid.Col flex="none"><Button type="primary" icon={<IconPlus />} onClick={() => setShowCreate(true)}>Add provider</Button></Grid.Col>}
-      </Grid.Row>
+        {!showCreate && <Button type="primary" icon={<IconPlus />} onClick={() => setShowCreate(true)}>Add provider</Button>}
+      </div>
       {showCreate && <CreateProvider onClose={() => setShowCreate(false)} alwaysOpen={providers.length === 0} />}
       {providers.length > 0 ? <div className={styles.accountList}>{providers.map(provider => <Account key={value(provider, "id")} account={provider} />)}</div> : (
         <Empty description="No provider accounts yet. Connect one above to start configuring domains and routes." />

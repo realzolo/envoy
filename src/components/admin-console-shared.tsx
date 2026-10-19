@@ -37,7 +37,7 @@ export function statusColor(status: string) {
 
 export function StatusTag({ children }: { children: ReactNode }) {
   const status = String(children ?? "Unknown");
-  return <Tag color={statusColor(status)} size="small">{status || "Unknown"}</Tag>;
+  return <Tag color={statusColor(status)}>{status || "Unknown"}</Tag>;
 }
 
 export class AdminActionError extends Error {
@@ -253,7 +253,7 @@ export function ActionButton({
     <Button
       type={danger ? "outline" : "secondary"}
       status={danger ? "danger" : "default"}
-      size="small"
+      size="default"
       loading={action.pending}
       onClick={event => {
         event.stopPropagation();
@@ -326,7 +326,7 @@ export function DataTable({
         <Typography.Text type="secondary">{term ? `${filtered.length} of ${data.length}` : data.length} {data.length === 1 ? "record" : "records"} loaded</Typography.Text>
       </div>}
     <Table<Row>
-      size="small"
+      size="default"
       tableLayoutFixed
       border={bordered}
       data={filtered}
@@ -384,10 +384,10 @@ export function DnsRecords({ records }: { records: unknown }) {
       data={entries}
       minWidth="620px"
       columns={[
-        { title: "Type", render: (_, entry) => <Typography.Text>{value(entry, "type") || "DNS"}</Typography.Text> },
-        { title: "Name", render: (_, entry) => <CopyableValue text={value(entry, "name")} label="DNS name" /> },
-        { title: "Value", render: (_, entry) => <CopyableValue text={value(entry, "dnsValue")} label="DNS value" /> },
-        { title: "Status", render: (_, entry) => <StatusTag>{value(entry, "status") || "Not reported"}</StatusTag> },
+        { title: "Type", width: 80, render: (_, entry) => <Typography.Text>{value(entry, "type") || "DNS"}</Typography.Text> },
+        { title: "Name", width: 220, render: (_, entry) => <CopyableValue text={value(entry, "name")} label="DNS name" /> },
+        { title: "Value", width: 400, render: (_, entry) => <CopyableValue text={value(entry, "dnsValue")} label="DNS value" /> },
+        { title: "Status", width: 120, render: (_, entry) => <StatusTag>{value(entry, "status") || "Not reported"}</StatusTag> },
       ]}
     />
   );

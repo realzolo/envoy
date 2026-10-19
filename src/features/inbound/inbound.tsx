@@ -98,7 +98,7 @@ export function Inbound({ data }: { data: Data }) {
       {selectedId && <ResourceDetail key={selectedId} title="Inbound message" path={`/api/admin/inbound/${encodeURIComponent(selectedId)}`} onClose={() => setSelectedId(null)}>{item => <>
         <div className={styles.section}>
         <Typography.Text bold>{value(item, "subject") || "(No subject)"}</Typography.Text>
-        <Descriptions column={1} labelStyle={{ width: 112 }} data={[
+        <Descriptions column={1} layout="vertical" tableLayout="fixed" data={[
           { label: "Status", value: <StatusTag>{value(item, "status")}</StatusTag> },
           { label: "Stored", value: date(item.received_at) },
           { label: "Author Date", value: item.author_date ? date(item.author_date) : "Not supplied / invalid" },

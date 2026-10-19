@@ -22,7 +22,7 @@ function PermissionEditor({ domains, value: permission = { mode: "none", domainI
 }) {
   const activeIds = domains.filter(domain => domain.status === "active").map(domain => value(domain, "id"));
   return <Space direction="vertical" size="small" className={styles.stack}>
-    <Radio.Group type="button" value={permission.mode} options={[
+    <Radio.Group className={styles.permissionChoices} type="button" value={permission.mode} options={[
       { value: "none", label: "No permission" }, { value: "selected", label: "Selected domains" }, { value: "all", label: "All domains" },
     ]} onChange={next => {
       const mode = String(next) as DomainPermission["mode"];
@@ -86,7 +86,7 @@ function ServiceEditor({ service, data, onClose, onSaved }: { service?: Row; dat
   }
 
   return <Drawer className={styles.readable} title={service ? `Edit configuration · ${value(service, "name")}` : "Create service"} visible width="min(760px, 100vw)" onCancel={onClose} autoFocus focusLock
-    footer={<Space><Button onClick={onClose}>Cancel</Button><Button type="primary" loading={action.pending} onClick={() => form.submit()}>Review configuration</Button></Space>}>
+    footer={<Space wrap><Button onClick={onClose}>Cancel</Button><Button type="primary" loading={action.pending} onClick={() => form.submit()}>Review configuration</Button></Space>}>
     <Space direction="vertical" size="large" className={styles.stack}>
       <Typography.Text type="secondary">Permissions belong to the service and apply to all its API keys. Sending and receiving routes are configured separately.</Typography.Text>
       <ActionForm fieldErrors={{ ...action.fields, ...validationErrors }} form={form} initialValues={initial} layout="vertical" onValuesChange={(_, input) => { const values = input as Partial<ServiceConfiguration>; setValidationErrors({}); setDraft({ ...initial, ...values, sending: values.sending ?? initial.sending, receiving: values.receiving ?? initial.receiving }); }} onSubmit={values => review(values as ServiceConfiguration)}>
