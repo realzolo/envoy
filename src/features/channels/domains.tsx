@@ -3,7 +3,7 @@ import { ActionButton,ActionForm,type Data,DnsRecords,Field,formValue,type FormV
 import styles from "@/components/admin-views.module.css";
 import { AddDomainProvider } from "@/features/outbound/config-editors";
 import { Button,Card,Checkbox,Collapse,Grid,Input,Space,Typography } from "@arco-design/web-react";
-import { IconRefresh } from "@arco-design/web-react/icon";
+import { IconRefresh,IconSettings } from "@arco-design/web-react/icon";
 import { useState } from "react";
 export function Domains({ data }: { data: Data }) {
   const [addingProvider, setAddingProvider] = useState<Row | null>(null);
@@ -12,7 +12,8 @@ export function Domains({ data }: { data: Data }) {
   const domains = rows(data.domains);
   const descriptors = rows(data.descriptors);
   const managedTypes = new Set(descriptors.filter(item => record(item.capabilities).domainManagement === true).map(item => value(item, "type")));
-  const providers = rows(data.providers).filter(provider => provider.status === "active");
+  const allProviders = rows(data.providers);
+  const providers = allProviders.filter(provider => provider.status === "active");
 
   async function submit(values: FormValues) {
     const allowedAccountIds = new Set(providers.filter(provider => {
@@ -31,7 +32,7 @@ export function Domains({ data }: { data: Data }) {
     <Space direction="vertical" size="large" className={styles.stack}>
       <Panel
         title="Register domain"
-        description="Register an inbound domain, or select providers to provision outbound identities"
+        description="Add a domain for inbound mail, or select provider accounts for outbound sending"
         defaultExpanded={domains.length === 0}
       >
         <ActionForm fieldErrors={action.fields}
@@ -49,11 +50,11 @@ export function Domains({ data }: { data: Data }) {
             </Grid.Col>
             <Grid.Col xs={24}>
               <Field
-                field="accountIds"
+                field={providers.length ? "accountIds" : undefined}
                 label="Provider accounts"
-                hint="Leave providers unselected for an inbound-only domain. Resend reuses an existing domain or creates one if needed. Amazon SES creates the provider identity. Both show DNS records. For SendGrid, Mailgun, and Postmark, select only an account where this domain is already verified in its official dashboard. A Mailgun account can use only its configured sending domain."
+                hint={providers.length ? "Optional for inbound-only domains. Resend and Amazon SES set up the identity and show the DNS records to verify. For SendGrid, Mailgun, and Postmark, verify the domain in the provider dashboard first. Mailgun must use its configured sending domain." : "You can register an inbound-only domain now and add a provider later."}
               >
-                <Checkbox.Group
+                {providers.length ? <Checkbox.Group
                   options={providers.map(provider => {
                     const type = value(provider, "type");
                     const mailgunDomain = type === "mailgun" ? String(record(provider.public_config).sendingDomain ?? "").toLowerCase() : "";
@@ -61,10 +62,13 @@ export function Domains({ data }: { data: Data }) {
                     return {
                       value: value(provider, "id"),
                       disabled: incompatible,
-                      label: <Space size="mini"><Typography.Text>{value(provider, "name")}</Typography.Text><Typography.Text type="secondary">{incompatible ? `(uses ${mailgunDomain})` : managedTypes.has(type) ? "(Envoy-managed)" : "(Already verified)"}</Typography.Text></Space>,
+                      label: <Space size="mini"><Typography.Text>{value(provider, "name")}</Typography.Text><Typography.Text type="secondary">{incompatible ? `(uses ${mailgunDomain})` : managedTypes.has(type) ? "(DNS records here)" : "(verify at provider)"}</Typography.Text></Space>,
                     };
                   })}
-                />
+                /> : <Space direction="vertical" size="small" align="start">
+                  <Typography.Text type="secondary">{allProviders.length ? "No provider accounts are ready. Enable an account if needed, then run Test connection on the Provider Accounts page." : "No provider accounts connected yet. Connect one and run Test connection to use it for outbound mail."}</Typography.Text>
+                  <Button href="/providers" type="text" icon={<IconSettings />}>Manage provider accounts</Button>
+                </Space>}
               </Field>
             </Grid.Col>
             <Grid.Col xs={24}>

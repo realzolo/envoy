@@ -279,7 +279,7 @@ function ProviderFields({ type, authMode }: { type: ProviderType; authMode: stri
   if (type === "postmark") {
     return <>
       <FormColumn><SecretField field="serverToken" label="Server API token" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" /></FormColumn>
-      <FormColumn><Field field="messageStream" label="Message stream" initialValue="outbound" required rules={requiredRule} hint="Postmark uses outbound for transactional email by default."><Input /></Field></FormColumn>
+      <FormColumn><Field field="messageStream" label="Message stream" initialValue="outbound" required rules={requiredRule} hint="Postmark uses outbound for transactional email by default."><Input placeholder="outbound" /></Field></FormColumn>
     </>;
   }
   return <SesFields authMode={authMode} />;
@@ -296,12 +296,12 @@ function SesFields({ authMode }: { authMode: string }) {
       </Field></FormColumn>
       {authMode === "role" && <>
         <FormColumn><Field field="roleArn" label="Role ARN" required rules={requiredRule}><Input placeholder="arn:aws:iam::123456789012:role/envoy" /></Field></FormColumn>
-        <FormColumn><SecretField field="externalId" label="External ID" required={false} hint="Optional. Use the value required by the role trust policy." /></FormColumn>
+        <FormColumn><SecretField field="externalId" label="External ID" placeholder="Optional external ID" required={false} hint="Optional. Use the value required by the role trust policy." /></FormColumn>
       </>}
       {authMode === "keys" && <>
         <FormColumn><Field field="accessKeyId" label="Access key ID" required rules={requiredRule}><Input placeholder="AKIA..." /></Field></FormColumn>
-        <FormColumn><SecretField field="secretAccessKey" label="Secret access key" /></FormColumn>
-        <FormColumn><SecretField field="sessionToken" label="Session token" required={false} /></FormColumn>
+        <FormColumn><SecretField field="secretAccessKey" label="Secret access key" placeholder="Enter AWS secret access key" /></FormColumn>
+        <FormColumn><SecretField field="sessionToken" label="Session token" placeholder="Optional temporary session token" required={false} /></FormColumn>
       </>}
       <FormColumn><Field field="configurationSet" label="Configuration set" hint="Optional. Set this when SES delivery events are published from a configuration set."><Input placeholder="envoy-events" /></Field></FormColumn>
     </>
@@ -538,10 +538,10 @@ function WebhookForm({ account }: { account: Row }) {
               <FormColumn span={24}><Field field="eventWebhookPublicKey" label="Event Webhook public key" required rules={requiredRule} hint="Required for delivery and engagement events."><Input.TextArea autoSize={{ minRows: 5, maxRows: 8 }} placeholder="-----BEGIN PUBLIC KEY-----" /></Field></FormColumn>
               <FormColumn span={24}><Field field="inboundParsePublicKey" label="Inbound Parse public key" hint="Add the separate Parse security-policy key only when receiving inbound email."><Input.TextArea autoSize={{ minRows: 5, maxRows: 8 }} placeholder="-----BEGIN PUBLIC KEY-----" /></Field></FormColumn>
             </>}
-            {type === "mailgun" && <FormColumn><SecretField field="webhookSigningKey" label="Webhook signing key" /></FormColumn>}
+            {type === "mailgun" && <FormColumn><SecretField field="webhookSigningKey" label="Webhook signing key" placeholder="Paste Mailgun webhook signing key" /></FormColumn>}
             {type === "postmark" && <>
-              <FormColumn><Field field="username" label="Basic Auth username" initialValue="envoy" required rules={requiredRule} hint="Included in the generated Postmark provider webhook URL after saving."><Input autoComplete="off" /></Field></FormColumn>
-              <FormColumn><SecretField field="password" label="Basic Auth password" hint="Use a new random value; it is encoded into the one-time provider webhook URL." /></FormColumn>
+              <FormColumn><Field field="username" label="Basic Auth username" initialValue="envoy" required rules={requiredRule} hint="Included in the generated Postmark provider webhook URL after saving."><Input placeholder="envoy" autoComplete="off" /></Field></FormColumn>
+              <FormColumn><SecretField field="password" label="Basic Auth password" placeholder="Enter a new random password" hint="Use a new random value; it is encoded into the one-time provider webhook URL." /></FormColumn>
               <FormColumn span={24}><Field field="ipAllowlist" label="Postmark source IPs" hint="Optional. Separate exact IP addresses with commas."><Input placeholder="3.134.147.250, 50.31.156.6" /></Field></FormColumn>
             </>}
             {type === "ses" && <FormColumn span={24}><Field field="expectedTopicArn" label="Expected SNS topic ARN" required rules={requiredRule} hint="The exact SNS topic configured as the SES event destination."><Input placeholder="arn:aws:sns:us-east-1:123456789012:envoy-events" /></Field></FormColumn>}
@@ -608,11 +608,11 @@ function CredentialForm({ account }: { account: Row }) {
     <ActionForm fieldErrors={action.fields} layout="vertical" onSubmit={values => void submit(values as FormValues)}>
       <Grid.Row gutter={16}>
         {(type === "resend" || type === "sendgrid" || type === "mailgun") && <FormColumn><SecretField field="apiKey" label="New API key" placeholder={type === "resend" ? "re_..." : type === "sendgrid" ? "SG...." : "key-..."} /></FormColumn>}
-        {type === "postmark" && <FormColumn><SecretField field="serverToken" label="New server API token" /></FormColumn>}
+        {type === "postmark" && <FormColumn><SecretField field="serverToken" label="New server API token" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" /></FormColumn>}
         {type === "ses" && <>
           <FormColumn><Field field="accessKeyId" label="Access key ID" hint="Leave both key fields blank to return to runtime IAM credentials."><Input placeholder="AKIA..." /></Field></FormColumn>
-          <FormColumn><SecretField field="secretAccessKey" label="Secret access key" required={false} /></FormColumn>
-          <FormColumn><SecretField field="sessionToken" label="Session token" required={false} /></FormColumn>
+          <FormColumn><SecretField field="secretAccessKey" label="Secret access key" placeholder="Enter AWS secret access key" required={false} /></FormColumn>
+          <FormColumn><SecretField field="sessionToken" label="Session token" placeholder="Optional temporary session token" required={false} /></FormColumn>
         </>}
         <FormColumn span={24}><SubmitButton pending={action.pending} icon={<IconRotateLeft />}>Rotate credential</SubmitButton></FormColumn>
         {action.notice && <FormColumn span={24}><InlineNotice notice={action.notice} /></FormColumn>}
@@ -649,8 +649,8 @@ function QuotaForm({ account }: { account: Row }) {
       onSubmit={values => void submit(values as FormValues)}
     >
       <Grid.Row gutter={16}>
-        <FormColumn><Field field="dailyLimit" label="Daily messages" hint="Blank means unlimited."><Input type="number" min="0" step="1" /></Field></FormColumn>
-        <FormColumn><Field field="monthlyLimit" label="Monthly messages" hint="Blank means unlimited."><Input type="number" min="0" step="1" /></Field></FormColumn>
+        <FormColumn><Field field="dailyLimit" label="Daily messages" hint="Blank means unlimited."><Input type="number" min="0" step="1" placeholder="Unlimited" /></Field></FormColumn>
+        <FormColumn><Field field="monthlyLimit" label="Monthly messages" hint="Blank means unlimited."><Input type="number" min="0" step="1" placeholder="Unlimited" /></Field></FormColumn>
         <FormColumn span={24}><SubmitButton pending={action.pending}>Save limits</SubmitButton></FormColumn>
         {action.notice && <FormColumn span={24}><InlineNotice notice={action.notice} /></FormColumn>}
       </Grid.Row>
