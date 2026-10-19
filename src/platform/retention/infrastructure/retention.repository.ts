@@ -96,19 +96,24 @@ function retentionRepository(client: PoolClient): RetentionRepository {
         purgeCallback(id: string) { return client.query<Record<string, unknown>>("UPDATE callback_deliveries SET payload='{}',payload_purged_at=now() WHERE id=$1", [id]); },
         deleteRequestLog(id: string) { return client.query<Record<string, unknown>>("DELETE FROM request_logs WHERE id=$1", [id]); },
         purgeAuditDetails(id: string) { return client.query<Record<string, unknown>>("UPDATE audit_logs SET details='{}' WHERE id=$1", [id]); },
-        listExpiredStreams(limit: number) { return client.query<{
-            service_id: string;
-        }>("SELECT service_id FROM inbound_streams s WHERE EXISTS(SELECT 1 FROM inbound_changes c WHERE c.service_id=s.service_id AND c.recorded_at<now()-interval '90 days') ORDER BY service_id LIMIT $1", [limit]); },
-        lockStream(serviceId: string) { return client.query<Record<string, unknown>>("SELECT service_id FROM inbound_streams WHERE service_id=$1 FOR UPDATE", [serviceId]); },
-        pruneStream(serviceId: string, limit: number) {
+        listExpiredStreams(limit: number, kind: "inbound" | "outbound") {
+            const streams = kind === "outbound" ? "outbound_streams" : "inbound_streams", changes = kind === "outbound" ? "outbound_changes" : "inbound_changes";
+            return client.query<{ service_id: string }>(`SELECT service_id FROM ${streams} s WHERE EXISTS(SELECT 1 FROM ${changes} c WHERE c.service_id=s.service_id AND c.recorded_at<now()-interval '90 days') ORDER BY service_id LIMIT $1`, [limit]);
+        },
+        lockStream(serviceId: string, kind: "inbound" | "outbound") {
+            const streams = kind === "outbound" ? "outbound_streams" : "inbound_streams";
+            return client.query<Record<string, unknown>>(`SELECT service_id FROM ${streams} WHERE service_id=$1 FOR UPDATE`, [serviceId]);
+        },
+        pruneStream(serviceId: string, limit: number, kind: "inbound" | "outbound") {
+            const streams = kind === "outbound" ? "outbound_streams" : "inbound_streams", changes = kind === "outbound" ? "outbound_changes" : "inbound_changes";
             return client.query<Record<string, unknown>>(`WITH prefix AS (
-              SELECT position FROM inbound_changes WHERE service_id=$1
-                AND position<COALESCE((SELECT min(position) FROM inbound_changes WHERE service_id=$1 AND recorded_at>=clock_timestamp()-interval '90 days'),9223372036854775807)
+              SELECT position FROM ${changes} WHERE service_id=$1
+                AND position<COALESCE((SELECT min(position) FROM ${changes} WHERE service_id=$1 AND recorded_at>=clock_timestamp()-interval '90 days'),9223372036854775807)
               ORDER BY position LIMIT $2
             ), boundary AS (
-              SELECT COALESCE(max(position),(SELECT floor FROM inbound_streams WHERE service_id=$1)) AS floor FROM prefix
-            ), removed AS (DELETE FROM inbound_changes WHERE service_id=$1 AND position<=(SELECT floor FROM boundary) RETURNING position)
-            UPDATE inbound_streams SET floor=GREATEST(floor,(SELECT floor FROM boundary)) WHERE service_id=$1`, [serviceId, limit]);
+              SELECT COALESCE(max(position),(SELECT floor FROM ${streams} WHERE service_id=$1)) AS floor FROM prefix
+            ), removed AS (DELETE FROM ${changes} WHERE service_id=$1 AND position<=(SELECT floor FROM boundary) RETURNING position)
+            UPDATE ${streams} SET floor=GREATEST(floor,(SELECT floor FROM boundary)) WHERE service_id=$1`, [serviceId, limit]);
         },
         selectCandidates(category, days, limit) { return client.query<{
             id: string;

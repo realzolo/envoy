@@ -10,7 +10,11 @@ import { createMessageSchema } from "@/lib/contracts";
 const network = vi.hoisted(() => ({ resolve: vi.fn(), post: vi.fn() }));
 vi.mock("@/modules/callbacks/infrastructure/http-transport", async importOriginal => {
   const original = await importOriginal<typeof import("@/modules/callbacks/infrastructure/http-transport")>();
-  return { ...original, resolveCallbackTarget: network.resolve, postCallback: network.post };
+  return { ...original, resolveCallbackTarget: network.resolve, postCallback: network.post,
+    async sendCallback(url: string, body: string, headers: Record<string, string>, beforeSend: () => Promise<void>) {
+      const target = await network.resolve(url); await beforeSend(); return network.post(target, body, headers);
+    },
+  };
 });
 import { deliverCallback } from "@/modules/callbacks/public";
 

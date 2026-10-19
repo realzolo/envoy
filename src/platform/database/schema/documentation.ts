@@ -269,6 +269,12 @@ export const schemaDocumentation = {
     statusCode: "HTTP response status code", durationMs: "Request processing duration in milliseconds", actor: "Request actor identifier; null when unknown",
     details: "Request diagnostic JSON containing only permitted redacted information; Authorization, credentials and sensitive bodies are forbidden", createdAt: created,
   } },
+  outboundStreams: { table: "Service-owned committed outbound change prefix and retention boundary", columns: {
+    serviceId: "Owning Service and primary key", generation: "Stream identity rejecting cursors from replaced streams", position: "Latest per-Service bigint position allocated under a transaction row lock", floor: "Last removed prefix position; cursors below it require reconciliation",
+  } },
+  outboundChanges: { table: "Content-free committed outbound event references for incremental reconciliation", columns: {
+    serviceId: "Owning Service; composite primary key with position", position: "Per-Service committed stream position independent of provider occurrence time", id: "Canonical delivery or submission event identifier", messageId: "Owning outbound message", type: "Canonical event type", recordedAt: "Local insertion time used for 90-day prefix retention",
+  } },
   workerHeartbeats: { table: "Asynchronous worker liveness heartbeats used by health checks to detect recent activity", columns: {
     workerId: "Unique worker instance identifier", lastSeenAt: "Latest heartbeat time (timestamptz); indicates liveness, not process start time",
   } },

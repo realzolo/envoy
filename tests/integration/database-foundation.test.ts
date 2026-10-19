@@ -1,20 +1,20 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { Client, Pool } from "pg";
 import { describe, expect, it } from "vitest";
-import { initializeV1 } from "@/platform/database/initialization";
-import { database, query, transaction, transactionClient, transactionContext } from "@/platform/database";
+import { initializeDatabase } from "@/platform/database/initialization";
+import { applicationSchemaHealth, database, query, transaction, transactionClient, transactionContext } from "@/platform/database";
 import { services } from "@/platform/database/schema";
 import type { TransactionContext } from "@/platform/transactions";
-import { checkBaseline } from "../../db/baseline";
+import { assertCompleteSchema, checkBaseline } from "../../db/baseline";
 import { schemaDocumentation } from "@/platform/database/schema/documentation";
 
-describe("V1 database foundation", () => {
-  it("keeps the single baseline identical to typed schema and native database behaviors", async () => {
-    expect(await checkBaseline()).toBe(await readFile("db/migrations/001_initial.sql", "utf8"));
+describe("database migration foundation", () => {
+  it("keeps the schema snapshot identical to typed definitions and native behaviors", async () => {
+    expect(await checkBaseline()).toBe(await readFile("db/schema.sql", "utf8"));
   });
 
-  it("initializes empty databases, validates V1 and refuses schema drift without modifying existing objects", async () => {
+  it("initializes empty databases, validates the schema and refuses schema drift without modifying existing objects", async () => {
     const adminUrl = process.env.TEST_DATABASE_ADMIN_URL ?? "postgresql://envoy:envoy@localhost:5432/postgres";
     const name = `envoy_foundation_${randomUUID().replaceAll("-", "")}`;
     const url = new URL(adminUrl);
@@ -25,9 +25,9 @@ describe("V1 database foundation", () => {
     const isolatedPool = new Pool({ connectionString: url.toString() });
     const client = await isolatedPool.connect();
     try {
-      expect(await initializeV1(client)).toBe("initialized");
-      expect(await initializeV1(client)).toBe("validated");
-      expect((await client.query("SELECT to_regclass('public.schema_migrations') AS journal")).rows[0].journal).toBeNull();
+      expect(await initializeDatabase(client)).toBe("initialized");
+      expect(await initializeDatabase(client)).toBe("validated");
+      expect((await client.query("SELECT to_regclass('envoy_meta.migrations') AS journal")).rows[0].journal).toBe("envoy_meta.migrations");
       const descriptions = await client.query<{ table_count: string; column_count: string; described_tables: string; described_columns: string }>(`
         SELECT count(DISTINCT c.oid)::text AS table_count,count(*)::text AS column_count,
           count(DISTINCT c.oid) FILTER (WHERE nullif(btrim(obj_description(c.oid,'pg_class')),'') IS NOT NULL)::text AS described_tables,
@@ -38,20 +38,20 @@ describe("V1 database foundation", () => {
       const columnCount = Object.values(schemaDocumentation).reduce((count, entry) => count + Object.keys(entry.columns).length, 0).toString();
       expect(descriptions.rows[0]).toEqual({ table_count: tableCount, column_count: columnCount, described_tables: tableCount, described_columns: columnCount });
       await client.query("COMMENT ON TABLE services IS 'unexpected table description'");
-      await expect(initializeV1(client)).rejects.toThrow("does not match");
+      await expect(initializeDatabase(client)).rejects.toThrow("does not match");
       expect((await client.query("SELECT obj_description('services'::regclass,'pg_class') AS description")).rows[0].description).toBe("unexpected table description");
       await client.query(`COMMENT ON TABLE services IS '${schemaDocumentation.services.table.replaceAll("'", "''")}'`);
       await client.query("COMMENT ON COLUMN services.name IS NULL");
-      await expect(initializeV1(client)).rejects.toThrow("does not match");
+      await expect(initializeDatabase(client)).rejects.toThrow("does not match");
       expect((await client.query("SELECT col_description('services'::regclass,2) AS description")).rows[0].description).toBeNull();
       await client.query(`COMMENT ON COLUMN services.name IS '${schemaDocumentation.services.columns.name.replaceAll("'", "''")}'`);
-      expect(await initializeV1(client)).toBe("validated");
+      expect(await initializeDatabase(client)).toBe("validated");
       await client.query("CREATE TYPE public.unexpected_status AS ENUM ('new')");
-      await expect(initializeV1(client)).rejects.toThrow("does not match");
+      await expect(initializeDatabase(client)).rejects.toThrow("does not match");
       await client.query("DROP TYPE public.unexpected_status");
       await client.query("ALTER TABLE services DROP CONSTRAINT services_configuration_revision_check");
-      await expect(initializeV1(client)).rejects.toThrow("does not match");
-      expect((await client.query("SELECT count(*) AS count FROM pg_namespace WHERE nspname LIKE 'envoy_v1_%'")).rows[0].count).toBe("0");
+      await expect(initializeDatabase(client)).rejects.toThrow("does not match");
+      expect((await client.query("SELECT count(*) AS count FROM pg_namespace WHERE nspname LIKE 'envoy_schema_%'")).rows[0].count).toBe("0");
       // The rejected initializer must not restore, remove or otherwise change the existing schema.
       expect((await client.query("SELECT count(*) AS count FROM pg_constraint WHERE conname='services_configuration_revision_check'")).rows[0].count).toBe("0");
     } finally {
@@ -60,6 +60,27 @@ describe("V1 database foundation", () => {
       await admin.query(`DROP DATABASE "${name}" WITH (FORCE)`);
       await admin.end();
     }
+  });
+
+  it("preserves the applied V1 SQL bytes", async () => {
+    expect(createHash("sha256").update(await readFile("db/migrations/001_initial.sql")).digest("hex")).toBe("67b0bf001b78c6cf2f8bf169f305dd7d556319f3c6fba6c64366cd6e681b7e13");
+  });
+
+  it("rejects incomplete exporter output before snapshot publication", async () => {
+    const sql = await readFile("db/schema.sql", "utf8");
+    expect(() => assertCompleteSchema(sql)).not.toThrow();
+    expect(() => assertCompleteSchema("Compilation failed")).toThrow("incomplete");
+    expect(() => assertCompleteSchema(sql.replace(/CREATE TABLE "messages" \([\s\S]*?\n\);/, ""))).toThrow("incomplete");
+    expect(() => assertCompleteSchema(sql.replace('\t"subject" text NOT NULL,', ""))).toThrow("columns");
+  });
+
+  it("requires current migration records for runtime readiness", async () => {
+    await applicationSchemaHealth();
+    const row = (await query<{ file: string; sha256: string; applied_at: Date }>("SELECT * FROM envoy_meta.migrations ORDER BY file DESC LIMIT 1")).rows[0];
+    await query("DELETE FROM envoy_meta.migrations WHERE file=$1", [row.file]);
+    try { await expect(applicationSchemaHealth()).rejects.toThrow("migrations are required"); }
+    finally { await query("INSERT INTO envoy_meta.migrations(file,sha256,applied_at) VALUES($1,$2,$3)", [row.file, row.sha256, row.applied_at]); }
+    await applicationSchemaHealth();
   });
 
   it("shares a real transaction across typed repositories, rolls back atomically and expires its opaque context", async () => {

@@ -31,11 +31,11 @@ export interface RetentionRepository {
     purgeCallback(id: string): Promise<RetentionRows<Record<string, unknown>>>;
     deleteRequestLog(id: string): Promise<RetentionRows<Record<string, unknown>>>;
     purgeAuditDetails(id: string): Promise<RetentionRows<Record<string, unknown>>>;
-    listExpiredStreams(limit: number): Promise<RetentionRows<{
+    listExpiredStreams(limit: number, kind: "inbound" | "outbound"): Promise<RetentionRows<{
         service_id: string;
     }>>;
-    lockStream(serviceId: string): Promise<RetentionRows<Record<string, unknown>>>;
-    pruneStream(serviceId: string, limit: number): Promise<RetentionRows<Record<string, unknown>>>;
+    lockStream(serviceId: string, kind: "inbound" | "outbound"): Promise<RetentionRows<Record<string, unknown>>>;
+    pruneStream(serviceId: string, limit: number, kind: "inbound" | "outbound"): Promise<RetentionRows<Record<string, unknown>>>;
     selectCandidates(category: RetentionCategory, days: number, limit: number): Promise<RetentionRows<{
         id: string;
     }>>;

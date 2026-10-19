@@ -138,33 +138,68 @@ function pinnedLookup(target: ResolvedCallbackTarget): LookupFunction {
   }) as LookupFunction;
 }
 
-export async function postCallback(target: ResolvedCallbackTarget, body: string, headers: Record<string, string>) {
+export const CALLBACK_TIMEOUT_MS = 10_000;
+type CallbackResponse = { status: number; statusText: string; body: string };
+type DeliveryOptions = { signal?: AbortSignal; beforeSend?: () => Promise<void> };
+
+export async function postCallback(target: ResolvedCallbackTarget, body: string, headers: Record<string, string>, options: DeliveryOptions = {}) {
   const request = target.url.protocol === "https:" ? httpsRequest : httpRequest;
-  return new Promise<{ status: number; statusText: string; body: string }>((resolve, reject) => {
+  return new Promise<CallbackResponse>((resolve, reject) => {
+    let settled = false;
     const client = request(target.url, {
       method: "POST",
       headers: { ...headers, "content-length": String(Buffer.byteLength(body)) },
-      lookup: pinnedLookup(target),
-      agent: false,
-      timeout: 10_000
+      lookup: pinnedLookup(target), agent: false, signal: options.signal,
     }, response => {
+      const status = response.statusCode ?? 0, statusText = response.statusMessage ?? "";
       const chunks: Buffer[] = [];
       let length = 0;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        resolve({ status, statusText, body: Buffer.concat(chunks).toString("utf8") });
+        response.destroy();
+      };
+      // HTTP success acknowledges receipt; the target body has no protocol meaning.
+      if (status >= 200 && status < 300) { finish(); return; }
       response.on("data", (chunk: Buffer) => {
-        if (length >= 500) return;
-        const remaining = 500 - length;
-        chunks.push(chunk.subarray(0, remaining));
-        length += Math.min(chunk.length, remaining);
+        const part = chunk.subarray(0, 500 - length);
+        chunks.push(part); length += part.length;
+        if (length >= 500) finish();
       });
-      response.on("end", () => resolve({
-        status: response.statusCode ?? 0,
-        statusText: response.statusMessage ?? "",
-        body: Buffer.concat(chunks).toString("utf8")
-      }));
-      response.on("error", reject);
+      response.on("end", finish);
+      response.on("error", error => { if (!settled) { settled = true; reject(error); } });
     });
-    client.on("timeout", () => client.destroy(new Error("Callback request timed out")));
-    client.on("error", reject);
-    client.end(body);
+    client.on("error", error => { if (!settled) { settled = true; reject(error); } });
+    client.once("socket", socket => {
+      socket.once(target.url.protocol === "https:" ? "secureConnect" : "connect", () => {
+        void (async () => {
+          options.signal?.throwIfAborted();
+          await options.beforeSend?.();
+          options.signal?.throwIfAborted();
+          client.end(body);
+        })().catch(error => client.destroy(error instanceof Error ? error : new Error("Callback authorization failed")));
+      });
+    });
   });
+}
+
+/** One execution budget covers resolution, connection, authorization and response. */
+export async function sendCallback(url: string, body: string, headers: Record<string, string>, beforeSend: () => Promise<void>,
+  options: { timeoutMs?: number; resolver?: HostResolver } = {}) {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout>;
+  const expired = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      const error = new Error("Callback execution deadline exceeded");
+      controller.abort(error); reject(error);
+    }, options.timeoutMs ?? CALLBACK_TIMEOUT_MS);
+  });
+  try {
+    return await Promise.race([expired, (async () => {
+      const target = await resolveCallbackTarget(url, options.resolver);
+      controller.signal.throwIfAborted();
+      return postCallback(target, body, headers, { signal: controller.signal, beforeSend });
+    })()]);
+  } finally { clearTimeout(timer!); }
 }

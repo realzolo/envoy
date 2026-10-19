@@ -15,3 +15,6 @@ export const getRetryEligibility = getDeliveryRetryEligibility;
 import { createManagementReadRepository } from "./infrastructure/management.read-repository";
 export const { listEmailPage, listEmails, getDeliveryDetail } = createManagementReadRepository(getRetryEligibility);
 export { serializeVerification } from "@/integrations/providers/verification";
+
+export { listOutboundChanges } from "@/bootstrap/outbound";
+export { OutboundCursorError } from "./application/changes";

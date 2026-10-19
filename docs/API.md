@@ -121,7 +121,8 @@ Wait until `usage.canSend` is true before referencing its `id` as `fileId`. Unap
 | `GET /messages/{id}/events` | Canonical timeline, with event scope and diagnostics |
 | `GET /messages/{id}/attempts` | Submission attempts, affected recipients, outcome certainty, and structured errors |
 | `GET /deliveries` and `GET /deliveries/{id}` | Recipient role, lifecycle, engagement, compliance, attempts, and events |
-| `GET /events` | Cursor-paginated outbound canonical events (scope unchanged) |
+| `GET /events` | Descending historical browse of outbound canonical events |
+| `GET /outbound-changes` | Committed-order outbound event references for incremental reconciliation |
 | `GET /inbound-changes` | Durable inbound availability/purge changes, scoped to the service |
 | `DELETE /{messages,inbound-messages,files}/{id}/content` | Idempotent guarded content erasure |
 | `GET /requests/{requestId}` | Request result and problem details, including failures before a message ID was created |
@@ -178,6 +179,33 @@ API timestamps use UTC ISO 8601. The console formats them in the browser timezon
 request diagnostics, and audit details have separately configured retention. Active or unknown mail is protected from
 content cleanup; identifiers, state, errors, and idempotency summaries remain useful after body removal. Check
 `contentAvailable` and content-purge fields before depending on stored content.
+
+## Outbound incremental reconciliation
+
+Use `GET /outbound-changes?limit=50&cursor=<nextCursor>` to compensate for missed outbound callbacks. `limit` is 1–100.
+The response is `{data:[{id,messageId,type,recordedAt,cursor}],nextCursor,hasMore,watermark,retention}`. `id` is the
+canonical delivery/submission event ID also returned by `/events`; `type` is its unprefixed canonical type, such as
+`delivered`. `recordedAt` is the local stream insertion time. The feed contains no subject, body or provider payload.
+Fetch the owned `/messages/{messageId}` to reconcile current business state.
+
+Persist `nextCursor` only after the whole page is durably accepted, including an empty page. Each entry's cursor can
+checkpoint a processed prefix. `hasMore:false` reaches the committed head at that read; keep the returned cursor and
+poll again for later appends. Positions are scoped to the Service, ordered under a row lock through commit, independent
+of provider `occurredAt`. Transaction rollback cannot publish a gap or let an uncommitted lower position appear after
+a consumer has advanced. Credential rotation preserves the stream. Current domain permissions hide unauthorized
+messages; the page still advances past filtered positions. Restoring a grant does not replay skipped references;
+reconcile owned message snapshots when authorization changes.
+
+Retention is `{earliestCursor,historyTruncated,days:90}`. Omitting a cursor starts at the retained floor; inspect
+`historyTruncated` before treating this as complete history. Invalid, cross-Service or future cursors return 400
+`INVALID_OUTBOUND_CURSOR`; expired positions or replaced stream generations return 410 `OUTBOUND_CURSOR_EXPIRED`.
+Both errors include `errors.resetCursor`; 410 also includes `errors.gap:true`. Reconcile known owned messages (or
+browse retained `/messages` when reconstructing a consumer), then adopt the reset cursor and resume. History beyond
+the retention floor cannot be recreated from this feed. Cursors are opaque and cannot be shared with `/events`,
+`/inbound-changes` or message browsing. `/events` retains descending historical pagination and is not a recovery cursor.
+
+V2 backfills retained canonical delivery/submission events with their IDs, Service/message ownership and a local
+insertion clock before installing change triggers. Existing mail facts remain queryable and participate in the feed.
 
 ## Business mail connection and discovery
 
@@ -238,7 +266,7 @@ ready state, retained bytes, and the current scanning policy.
 
 `inbound.received` callbacks have a stable event ID and include `serviceId`,
 `envelopeRecipients`, `messageId`, `replyTo`, `inReplyTo`, and `references` under `data`. Fetch sanitized content and
-private attachment IDs through the service API. `GET /events` remains the outbound delivery-event feed; recover inbound
+private attachment IDs through the service API. `GET /events` browses outbound history; recover outbound through `/outbound-changes` and inbound
 mail through `/inbound-changes`; `/inbound-messages` is a stored-time browse/snapshot API, not an incremental recovery feed. Use the RFC fields to construct a standard
 reply (`inReplyTo` and `references`); conversation matching and ticket state remain business rules. Outbound RFC IDs are available per attempt when confirmed; unconfirmed IDs remain null (see below).
 
@@ -334,7 +362,11 @@ The stored-time list uses `inbound.` browse cursors. Malformed cursors return 40
 
 Subscribe to `service.permissions_changed` to invalidate cached authorization. This signed event has `{id,apiVersion:"v1",type:"service.permissions_changed",occurredAt,data:{serviceId}}`; it is committed atomically with grant updates/revocation and a durable outbox command. Refresh capabilities to observe the new truth. This notification is independent of now-revoked domain mail access. A bounded cache expiry is still needed if notification delivery fails.
 
-Subscription removal dead-letters affected pending/retrying callbacks; already in-flight HTTP requests may finish. A 2xx acknowledges receipt, not completion of the caller's business processing.
+Subscription removal dead-letters affected pending/retrying callbacks; already in-flight HTTP requests may finish. A 2xx acknowledges receipt, not completion of the caller's business processing. Callback attempts have a 10-second total execution deadline,
+including DNS, connection, TLS, final authorization and response. Expiry cancels the request; a delayed DNS or
+authorization result cannot send after the deadline. A 2xx response is accepted at its headers and the connection is
+closed immediately; non-success response summaries are bounded to 500 bytes. This execution deadline is separate
+from the 2-minute claim lease and from message sending deadlines.
 
 Administrator `credential.rotate` creates a **new credential ID for the same service**, returns the plaintext once,
 `previousCredentialId`, `serviceId` and `overlapUntil`. The old key remains valid until its existing expiry or at most
@@ -355,8 +387,8 @@ To replace a callback secret, pause the endpoint, wait until its in-flight count
 in both Envoy and the consumer, then resume and replay failed callbacks. Administrator `callback.replace_secret` rejects
 active endpoints and endpoints with in-flight attempts; it accepts a supplied 16–512 character secret or generates one
 shown once. Pausing prevents new dispatches without hiding already in-flight HTTP attempts. Expired attempts are closed
-by recovery while paused. Failed callbacks remain replayable after resuming, and `/inbound-changes` provides receive
-compensation. Callers must reconcile outgoing message/event resources when notification delivery was paused. The example
+by recovery while paused. Failed callbacks remain replayable after resuming. `/inbound-changes` and `/outbound-changes`
+provide independent inbound and outbound compensation. The example
 uses only `ENVOY_CALLBACK_SECRET`. This operation never changes the Service Key or its Service identity.
 
 ## Outbound RFC Message-ID and standard replies
@@ -417,9 +449,8 @@ copies and permits raw-content age cleanup. A terminated raw event cannot be rep
 business deletion request; use the content endpoint/policy to erase retained copies. Restoration from backups requires
 preserving/reapplying tombstones and external deletion records before replay.
 
-Verification-code delivery deadlines remain an explicit contract gap: `scheduling:false`, no business expiry/deadline
-parameter or deadline-enforced send guarantee exists. The worker's transport timeout is not a code expiry guarantee.
-No general scheduling system is added here.
+`sendBefore` bounds provider submission as defined above; callback transport and Worker execution timeouts do not
+represent the validity period of a business verification code. `scheduling:false` does not add a scheduling system.
 
 ## Unified attachment availability
 

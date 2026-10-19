@@ -39,9 +39,11 @@ Requirements: Node.js 22+, pnpm, and PostgreSQL 14+ configured in `.env.local`.
 Create `.env.local` from `.env.example` and set an explicit administrator email, password, session secret, and KEK before
 starting the application.
 
-Create an empty PostgreSQL database, then run `pnpm db:setup`. The initializer applies the complete application V1
-and invokes BullMQ's official PostgreSQL initializer. Re-running setup validates the same V1. A database with another
-application structure is rejected; setup never upgrades, repairs or deletes existing application data.
+Run `pnpm db:setup` against the target PostgreSQL database before starting Web or Worker. Setup initializes an empty
+database or applies missing ordered migrations to an existing supported schema, then invokes BullMQ's official
+PostgreSQL initializer. Application migrations run under one advisory transaction lock with checksum and complete
+catalog verification. Re-running setup validates without replaying SQL; schema drift is rejected without repair or
+business-data removal. A deployed V1 is recognized by its exact catalog and upgraded through V2 with its data retained.
 
 ```bash
 pnpm install
@@ -146,7 +148,7 @@ publishes it. Copy `docker-compose.example.yml` to the Git-ignored `docker-compo
 ## Commands
 
 ```bash
-pnpm db:check           # verify complete V1 matches typed schema + database behaviors
+pnpm db:check           # verify current schema snapshot and immutable migration checksums
 pnpm typecheck
 pnpm lint
 pnpm test
@@ -183,12 +185,14 @@ a dot and the original UTF-8 body within a fixed 300-second window, then durably
 secret only by pausing delivery, waiting for in-flight requests to finish, updating both sides and resuming; replay and
 incremental recovery remain available. See [callback operations](docs/OPERATIONS.md).
 
-The only application migration is `db/migrations/001_initial.sql`: a complete V1 schema with domain permissions,
-configuration revisions, constraints, indexes, functions and triggers. Before the first release, edit the typed table
-definitions in `src/platform/database/schema/` or native database behaviors in `src/platform/database/schema/behaviors.ts`, then run
-`pnpm db:generate` and `pnpm db:check`. Review the resulting complete V1; do not add incremental migrations, journals,
-or compatibility paths. Point `DATABASE_URL` at a new empty database after a structure change. BullMQ manages its own
-schema through its official API; its third-party bookkeeping is separate from the application V1.
+Application SQL migrations under `db/migrations/` are immutable once executed. `001_initial.sql` remains unchanged;
+`002_outbound_changes.sql` adds and backfills the Service outbound recovery stream. Maintain their ordered SHA-256
+entries in `db/migrations/checksums.json`. Change typed definitions or native behaviors, add the next SQL migration,
+then run `pnpm db:generate` and `pnpm db:check`. Generation writes the complete current `db/schema.sql` snapshot,
+checks every typed table/column, and leaves migration files untouched. Setup verifies recorded checksums and the
+complete catalog before and after upgrading, and records successful versions in `envoy_meta.migrations` in the same
+transaction. BullMQ manages its separate schema through its official API. Health and Worker startup require the
+current application migration checksums.
 English table and column comments are maintained in `src/platform/database/schema/documentation.ts`; generation
 requires a nonempty description for every typed table and column, and initialization validates the stored comments.
 

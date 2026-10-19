@@ -6,11 +6,15 @@ Read `docs/ARCHITECTURE.md` and `docs/API.md` for the final domain-permission co
 
 `service_domain_grants` is the sole business mail authorization authority. Service is the sole business identity and isolation boundary for credentials, messages, files, domain permissions, callbacks and recipient suppression rules. Every protected resource and background network operation must check ownership and current frozen domain permissions, including after storage or DNS waits at the final network boundary. Files require `X-Sending-Domain`; incoming ownership comes only from trusted envelope recipients. Suppression management is an independent Service permission, false by default. Grant changes produce durable signed `service.permissions_changed` events.
 
-`db/migrations/001_initial.sql` is the sole complete application V1 schema. Typed Drizzle definitions under
-`src/platform/database/schema` and `pnpm db:generate` regenerate this same file; `pnpm db:check` detects drift.
-Keep no incremental patches, application migration journal or old-schema compatibility paths. Initialization accepts
-an empty database or validates the identical final V1 by catalog comparison. Tests use uniquely named temporary
-databases derived from `TEST_DATABASE_ADMIN_URL`; never use a deployment business database.
+Application migrations are immutable, contiguous SQL versions under `db/migrations`, with SHA-256 entries in
+`db/migrations/checksums.json`. Preserve executed V1 bytes; append changes in V2 and subsequent versions. Typed
+Drizzle definitions under `src/platform/database/schema` and `pnpm db:generate` produce `db/schema.sql`, never
+rewrite migration files. `pnpm db:check` validates that snapshot and all migration checksums. Setup serializes on
+one advisory transaction lock, verifies the full catalog of the recorded version, applies missing migrations and
+checks the target snapshot atomically. A matching unjournaled V1 is adopted before V2; drift or checksum changes
+are rejected without repairs or data removal. Migration records live in `envoy_meta.migrations`, independently of
+BullMQ's official schema. Runtime health and Worker startup require the current migration checksums. Tests use
+uniquely named disposable databases derived from `TEST_DATABASE_ADMIN_URL`, never a deployment database.
 
 The modular monolith uses `src/modules/<business>/{domain,application,infrastructure}`, `public.ts`/`contracts.ts`
 module boundaries, `src/platform` infrastructure and `src/integrations/providers` adapters. SQL and Drizzle belong
@@ -32,4 +36,17 @@ Callback secret replacement is manual: pause, drain in-flight attempts, replace 
 
 Sensitive free-form content is envelope-encrypted and public/admin columns are redacted. Only send preparation decrypts; no API/admin preview, event, callback, provider-response blob, diagnostic or serialized request copy may expose it. Independent reusable files retain their own lifecycle; callers must keep secrets out of retained email envelopes, opaque IDs/category and reusable files. Provider raw bodies/headers/verified receipts are encrypted for all mail, content-free outbound facts are frozen before association, raw copies are removed after normalization or 900 seconds pending, and normalized replay survives; unknown/inbound classifications keep independent recovery.
 
-Enforce `sendBefore` at acceptance, claim, retry/failover/reconciliation and after asynchronous attachment/credential/DNS/TLS waits at the final HTTP write. Deadline-bound adapters use one bounded HTTPS request and SES uses the same transport after signing, with hidden SDK retries disabled. Expiry before submission records `SEND_DEADLINE_EXCEEDED`/not_accepted; accepted or ambiguous sends retain facts and reconcile without automatic resend. Mandatory worker privacy cleanup runs every 10 seconds independently of optional normal retention and retries object deletion intents. Message `acceptedAt` is local queue acceptance; per-recipient acceptedAt/deliveredAt are nullable real facts, and succeeded means all delivered. The initial V1 is authoritative before launch. Preserve these business guarantees during the architecture refactor; retain no schema compatibility paths or historical migration chain.
+Enforce `sendBefore` at acceptance, claim, retry/failover/reconciliation and after asynchronous attachment/credential/DNS/TLS waits at the final HTTP write. Deadline-bound adapters use one bounded HTTPS request and SES uses the same transport after signing, with hidden SDK retries disabled. Expiry before submission records `SEND_DEADLINE_EXCEEDED`/not_accepted; accepted or ambiguous sends retain facts and reconcile without automatic resend. Mandatory worker privacy cleanup runs every 10 seconds independently of optional normal retention and retries object deletion intents. Message `acceptedAt` is local queue acceptance; per-recipient acceptedAt/deliveredAt are nullable real facts, and succeeded means all delivered. Preserve these business guarantees across ordered application upgrades.
+
+# Incremental outbound reconciliation and callback execution
+
+`GET /api/v1/outbound-changes` exposes content-free canonical event IDs/message IDs in per-Service committed order.
+Database triggers on both delivery and submission events allocate positions under a stream-head row lock. Readers
+hold a shared head lock and advance past current-authorization filtering, including empty tails. Event occurrence
+time never controls stream position. Retain the always-present nextCursor after durable processing; 400/410 cursor
+errors provide errors.resetCursor and gaps require reconciling owned messages first. Prefix retention is 90 days.
+V2 locks event writes, backfills existing facts with local recordedAt, then installs triggers in one transaction.
+`/events` remains a descending historical browse API and must not serve as an incremental synchronization cursor.
+Callback delivery has one 10-second execution deadline from DNS through TLS, final authorization and response;
+expiry cancels the request and late asynchronous work cannot write it. A 2xx header acknowledges receipt immediately;
+failure summaries are limited to 500 bytes and connections are closed. The 2-minute work lease is independent.

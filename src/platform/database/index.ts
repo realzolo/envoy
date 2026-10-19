@@ -1,6 +1,7 @@
 import { Pool, type PoolClient, type QueryResultRow } from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
 import type { TransactionContext, UnitOfWork } from "../transactions";
+import { loadApplicationMigrations } from "../../../db/migrations";
 import * as schema from "./schema";
 
 const globalDatabase = globalThis as typeof globalThis & { __envoyPool?: Pool };
@@ -50,7 +51,14 @@ export async function transaction<T>(work: (client: PoolClient) => Promise<T>) {
   }
 }
 
+export async function applicationSchemaHealth() {
+  const expected = await loadApplicationMigrations();
+  const actual = (await query<{ file: string; sha256: string }>("SELECT file,sha256 FROM envoy_meta.migrations ORDER BY file")).rows;
+  if (actual.length !== expected.length || actual.some((row, index) => row.file !== expected[index].file || row.sha256 !== expected[index].sha256)) throw new Error("Application database migrations are required before starting this release");
+}
+
 export async function databaseHealth() {
+  await applicationSchemaHealth();
   const result = await query<{ now: Date }>("SELECT now()");
   return result.rows[0].now;
 }

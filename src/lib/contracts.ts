@@ -177,3 +177,7 @@ export const inboundChangeSchema = z.object({ id:z.string(),inboundMessageId:z.s
 export const inboundChangePageSchema = z.object({ data:z.array(inboundChangeSchema),nextCursor:z.string(),hasMore:z.boolean(),watermark:z.string(),
   retention:z.object({ earliestCursor:z.string(),historyTruncated:z.boolean(),days:z.literal(90) }) });
 export const contentPurgeSchema = z.object({ id:z.string(),contentPurgedAt:iso,objectDeletion:z.literal("pending_or_complete") });
+
+export const outboundChangeSchema = z.object({ id: z.string(), messageId: z.string(), type: z.enum(eventTypes), recordedAt: iso, cursor: z.string() });
+export const outboundChangePageSchema = z.object({ data: z.array(outboundChangeSchema), nextCursor: z.string(), hasMore: z.boolean(), watermark: z.string(),
+  retention: z.object({ earliestCursor: z.string(), historyTruncated: z.boolean(), days: z.literal(90) }) });

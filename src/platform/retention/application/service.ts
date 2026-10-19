@@ -83,8 +83,10 @@ export function createRetentionService(dependencies: RetentionDependencies) {
                 }
             }
             if (options.apply) {
-                for (const { service_id: serviceId } of (await client.listExpiredStreams(options.batchSize)).rows) {
-                    await client.transaction(async (repository) => { await repository.lockStream(serviceId); await repository.pruneStream(serviceId, options.batchSize); });
+                for (const kind of ["inbound", "outbound"] as const) {
+                    for (const { service_id: serviceId } of (await client.listExpiredStreams(options.batchSize, kind)).rows) {
+                        await client.transaction(async (repository) => { await repository.lockStream(serviceId, kind); await repository.pruneStream(serviceId, options.batchSize, kind); });
+                    }
                 }
             }
             result.objectDeletions = await dependencies.cleanupObjects(options.apply, options.batchSize);

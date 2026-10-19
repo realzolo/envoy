@@ -137,14 +137,14 @@ for (const [file, source] of sources) {
     if (source.statements.some(statement => ts.isExpressionStatement(statement) && ts.isStringLiteral(statement.expression) && statement.expression.text === 'use client'))
         checkReachability(file, 'client');
 }
-// Pre-release V1 is a complete empty-database snapshot, never a patch chain.
-const migrations = fs.readdirSync(path.join(root, 'db/migrations')).filter(file => file.endsWith('.sql'));
-if (migrations.length !== 1 || migrations[0] !== '001_initial.sql')
-    violations.push('db/migrations: exactly one application migration, 001_initial.sql, is required before V1 release.');
+// Application SQL files are immutable, contiguous, ordered migration versions.
+const migrations = fs.readdirSync(path.join(root, 'db/migrations')).filter(file => file.endsWith('.sql')).sort();
+if (!migrations.length || migrations.some((file, index) => !new RegExp(`^${String(index + 1).padStart(3, '0')}_[a-z0-9_]+\\.sql$`).test(file)))
+    violations.push('db/migrations: contiguous ordered SQL migration files are required.');
 if (violations.length) {
     console.error([...new Set(violations)].sort().join('\n'));
     console.error(`\nArchitecture check failed (${new Set(violations).size} violations).`);
     process.exitCode = 1;
 }
 else
-    console.log(`Architecture verified: ${files.length} source files; dependency boundaries, runtime cycles, client/worker isolation and one V1 schema.`);
+    console.log(`Architecture verified: ${files.length} source files; dependency boundaries, runtime cycles, client/worker isolation and ordered application migrations.`);

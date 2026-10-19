@@ -111,10 +111,10 @@ port, timeout, concurrency and policy version belong only in Envoy deployment co
 [Operations](OPERATIONS.md#attachment-safety-operations). All instances must switch policies together with admission and
 sending workers stopped/drained. No mixed-policy rolling deployment or automatic history resend is supported.
 
-Only `db/migrations/001_initial.sql` is authoritative. Fresh installation uses `pnpm db:setup`;
-`pnpm db:generate` regenerates the complete V1 from the typed schema and `pnpm db:check` verifies consistency.
-Initialization accepts an empty database or validates an identical complete V1. It refuses a different schema without
-changing it. The application maintains no migration ledger or incremental patch history. Unverified bytes are never
+Executed SQL migrations are immutable and changes append ordered versions with checksums. `pnpm db:setup` applies
+missing versions under a transaction lock after catalog verification. `pnpm db:generate` updates the typed
+`db/schema.sql` snapshot; `pnpm db:check` validates it and migration checksums. Setup rejects drift and preserves
+business records; V2 upgrades matching V1 installations with no content reset. Unverified bytes are never
 backfilled clean.
 
 ## Minimal business flow

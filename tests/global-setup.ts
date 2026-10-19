@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { Client, Pool, type PoolClient } from "pg";
-import { initializeV1 } from "../src/platform/database/initialization";
+import { initializeDatabase } from "../src/platform/database/initialization";
 
 const adminUrl = process.env.TEST_DATABASE_ADMIN_URL ?? "postgresql://envoy:envoy@localhost:5432/postgres";
 const databaseName = `envoy_test_${randomUUID().replaceAll("-", "")}`;
@@ -29,7 +29,7 @@ export default async function setup() {
   let database: PoolClient | undefined;
   try {
   database = await testPool.connect();
-  await initializeV1(database);
+  await initializeDatabase(database);
 
   const [{ hashApiKey }, { sealSecret }] = await Promise.all([
     import("../src/platform/crypto/hash"),

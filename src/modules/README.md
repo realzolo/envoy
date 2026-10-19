@@ -20,6 +20,6 @@ infrastructure/ repositories and adapters
 - Keep Next.js sessions and `server-only` in the web adapter. Shared use cases must run in the standalone worker.
 - Return an explicit DTO selected for the use case. Never expose credential ciphertext or a whole database row to a client component.
 - Keep resource HTTP handlers thin; add management operations to their owning business module.
-- During pre-release V1, update the final schema and `db/migrations/001_initial.sql` together. Do not add incremental migrations or preserve old schema compatibility.
+- Preserve executed migrations. Update typed definitions, append the next ordered SQL migration and checksum, and regenerate `db/schema.sql`. Validate populated upgrades and rollback.
 
 See [the full architecture](../../docs/ARCHITECTURE.md) for ownership, permitted dependencies, transactions and verification. Run `pnpm architecture:check` before submitting changes.

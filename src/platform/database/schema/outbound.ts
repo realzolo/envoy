@@ -1,4 +1,4 @@
-import { type PgTableExtraConfigValue, pgTable, unique, check, text, jsonb, integer, timestamp, foreignKey, boolean, index, primaryKey } from "drizzle-orm/pg-core"
+import { type PgTableExtraConfigValue, pgTable, unique, check, text, jsonb, integer, timestamp, foreignKey, boolean, index, primaryKey, bigint, uuid } from "drizzle-orm/pg-core"
 import { sql } from "drizzle-orm";
 import { services } from "./identity";
 import { providerAccounts, providerIdentities, providerWebhookEndpoints, sendingDomains } from "./channels";
@@ -381,3 +381,19 @@ export const messageRetries = pgTable("message_retries", {
 	primaryKey({ columns: [table.messageId, table.idempotencyKey], name: "message_retries_pkey"}),
 ]);
 
+
+export const outboundStreams = pgTable("outbound_streams", {
+  serviceId: text("service_id").primaryKey().notNull().references(() => services.id, { onDelete: "cascade" }),
+  generation: uuid().defaultRandom().notNull(),
+  position: bigint({ mode: "bigint" }).default(sql`0`).notNull(),
+  floor: bigint({ mode: "bigint" }).default(sql`0`).notNull(),
+});
+
+export const outboundChanges = pgTable("outbound_changes", {
+  serviceId: text("service_id").notNull().references(() => services.id, { onDelete: "cascade" }),
+  position: bigint({ mode: "bigint" }).notNull(),
+  id: text().notNull(),
+  messageId: text("message_id").notNull().references(() => messages.id, { onDelete: "cascade" }),
+  type: text().notNull(),
+  recordedAt: timestamp("recorded_at", { withTimezone: true, mode: "string" }).default(sql`clock_timestamp()`).notNull(),
+}, table => [primaryKey({ columns: [table.serviceId, table.position] }), unique().on(table.id)]);

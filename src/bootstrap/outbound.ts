@@ -1,3 +1,6 @@
+import { createUnitOfWork } from "@/platform/database";
+import { createOutboundChanges } from "@/modules/outbound/application/changes";
+import { outboundChangesRepository } from "@/modules/outbound/infrastructure/changes.read-repository";
 import { safeDiagnostic } from "@/integrations/providers/shared";
 import type { ProviderType } from "@/integrations/providers/contracts";
 import { providerRegistry } from "@/integrations/providers/registry";
@@ -40,3 +43,5 @@ export function projectDeliveryEvent(context: TransactionContext, deliveryId: st
     const client = transactionClient(context);
     return events.applyDeliveryEvent(createOutboundRepositories(client, client), deliveryId, event, sourceKey, options);
 }
+
+export const listOutboundChanges = createOutboundChanges(createUnitOfWork(outboundChangesRepository));

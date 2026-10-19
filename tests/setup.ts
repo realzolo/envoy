@@ -2,7 +2,7 @@ import { loadEnvConfig } from "@next/env";
 
 loadEnvConfig(process.cwd(), true);
 const databaseUrl = process.env.ENVOY_TEST_DATABASE_URL;
-if (!databaseUrl) throw new Error("Run tests through the isolated V1 database global setup");
+if (!databaseUrl) throw new Error("Run tests through the isolated database global setup");
 process.env.DATABASE_URL = databaseUrl;
 process.env.ENVOY_KEK_BASE64 = "xNKUJulg5w3Uf+hmV9yWMPa6BxUJbUVvJFBquKimvnc=";
 process.env.OBJECT_STORAGE_DRIVER = "local";

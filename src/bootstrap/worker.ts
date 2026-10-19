@@ -6,7 +6,7 @@ import { ATTACHMENT_QUEUE, CALLBACK_QUEUE, closeQueues, createQueueWorker, DELIV
 import { cleanupRuntimeStore, removeWorkerHeartbeat, writeWorkerHeartbeat } from "@/platform/runtime-store";
 import { dispatchOutboxBatch, markOutboxJobFailed } from "@/platform/outbox/public";
 import { recoverWorkBatch } from "@/platform/outbox/public";
-import { db } from "@/platform/database";
+import { applicationSchemaHealth, db } from "@/platform/database";
 import { deadLetterCallback } from "@/modules/callbacks/public";
 import { processDelivery } from "@/worker/delivery";
 import { processEvent } from "@/worker/event";
@@ -15,6 +15,7 @@ import { processReconciliation } from "@/worker/reconciliation";
 
 
 export async function runWorker() {
+  await applicationSchemaHealth();
   await queueSchemaHealth();
   const workers = [
     createQueueWorker(ATTACHMENT_QUEUE, job => processAttachmentScan(job.data.resourceId), scanPolicy().concurrency),

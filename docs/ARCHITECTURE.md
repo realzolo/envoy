@@ -1,4 +1,4 @@
-# V1 architecture
+# Application architecture
 
 Envoy is a modular monolith with a Next.js web application and a separate asynchronous worker. PostgreSQL is the authority for business state. The web and worker entry points compose the same framework-independent application services.
 
@@ -59,11 +59,24 @@ Application services define the transaction boundary through `UnitOfWork<Reposit
 
 Accepting a message persists its message, recipient/submission state and Outbox intents atomically. Network requests occur outside the sending state transaction. Workers recover interrupted attempts and treat indeterminate provider acceptance as `unknown`; automatic retries must not risk duplicate delivery. Queue delivery can repeat, so handlers recheck authoritative database state and current permissions.
 
-## One V1 database snapshot
+## Ordered database upgrades
 
-`db/migrations/001_initial.sql` is the only application migration. It creates the complete final V1 structure on an empty database, including indexes, constraints and database functions. No `002`/`003` patches, historical migration log or compatibility data transformations are retained.
+`db/migrations/001_initial.sql` is an executed immutable schema. Append structure changes as contiguous SQL versions;
+`002_outbound_changes.sql` adds the committed outbound event stream and backfills existing canonical facts. The
+SHA-256 manifest records each migration. `pnpm db:generate` writes a current `db/schema.sql` from typed definitions,
+native invariants and table/column descriptions; it checks exporter completeness and never modifies migration SQL.
 
-Before V1 is released, change the final Drizzle schema and V1 SQL together, then rebuild disposable development/test databases. The initialization command creates the application and queue structures; long-running web/worker processes check readiness instead of changing tables. Business audit logs, delivery attempts and provider event evidence are operational records and remain part of the V1 model.
+Setup runs application upgrades under a transaction-scoped advisory lock. It compares the full catalog with the
+recorded schema, verifies recorded checksums, applies missing versions and compares the result with the current
+snapshot before committing. Existing exact V1 catalogs without a journal are adopted and upgraded in the same
+transaction. Any failed SQL, schema drift, changed checksum or unexpected recorded version rejects the operation
+without changing business data. `envoy_meta.migrations` stores deployment checksums; BullMQ's official schema has
+independent bookkeeping. Runtime health and Worker startup check the application version without executing DDL.
+
+Outbound event triggers allocate a per-Service bigint position under a row lock held through commit. A reader's
+shared head lock exposes a complete committed prefix, independent of provider occurrence time or transaction start.
+The stream contains canonical event/message references, respects current domain grants and advances past invisible
+records. Prefix cleanup atomically advances its retained floor; clients must reconcile message snapshots after gaps.
 
 ## Enforcement and verification
 
@@ -73,9 +86,9 @@ Before V1 is released, change the final Drizzle schema and V1 SQL together, then
 2. Cross-module imports respect the public/contracts boundary and the narrow permission-predicate exception.
 3. The actual runtime import graph has no cycles; explicit type-only imports do not create runtime dependencies.
 4. Worker dependency paths cannot reach Next.js or `server-only`, and client components cannot reach server modules or platform infrastructure.
-5. Exactly one application migration, `001_initial.sql`, exists.
+5. SQL migration versions are contiguous and ordered; schema generation and checksum checks preserve executed SQL.
 
-Type checking verifies DTO and application-port contracts. Unit tests cover pure policies; PostgreSQL integration tests cover constraints, rollback, concurrency, idempotency and permissions. Pipeline/recovery tests cover repeated work, interruption, reconciliation and callback retries. A clean-database test executes the same V1 initialization used by setup/deployment.
+Type checking verifies DTO and application-port contracts. Unit tests cover pure policies; PostgreSQL integration tests cover constraints, rollback, concurrency, idempotency and permissions. Pipeline/recovery tests cover repeated work, interruption, reconciliation and callback retries. A clean-database test executes the same ordered migration path used by setup/deployment, including populated upgrades and transactional rollback.
 
 ## References
 

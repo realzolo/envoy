@@ -9,7 +9,7 @@ The Compose configuration runs three services from the same application image:
 | --- | --- |
 | `web` | Next.js application, operations console, API, and provider event ingress |
 | `worker` | Delivery, event processing, callbacks, attachment scanning jobs, and background maintenance |
-| `migrate` | Complete application V1 initialization/validation and official BullMQ initialization |
+| `migrate` | Ordered application schema initialization/upgrades and official BullMQ initialization |
 
 ## Requirements
 
@@ -119,17 +119,19 @@ After validation succeeds, build and start the services:
 docker compose up -d --build
 ```
 
-Compose builds the shared `envoy:production` image, runs `migrate`, and starts Web and Worker after the migration
-completes successfully. This step initializes an empty database from the single complete
-`db/migrations/001_initial.sql`, then initializes BullMQ through its official API. On subsequent runs it compares the
-application's actual tables, columns, comments, constraints, indexes, functions and triggers with V1. An unknown or changed
-application schema is rejected without applying upgrades or deleting data. No application migration journal is kept.
+Compose builds the shared `envoy:production` image, runs `migrate`, and starts Web and Worker only after migration
+success. Setup initializes empty databases or validates and applies missing ordered application migrations, then
+initializes BullMQ through its official API. Each applied file has a SHA-256 record in `envoy_meta.migrations`.
+One transaction-scoped advisory lock serializes upgrades; full catalog comparison detects schema/comment drift before
+and after SQL execution. Failed SQL rolls the application upgrade back without clearing business data.
 
-Envoy is currently an unreleased V1. Schema changes update the typed definitions and regenerate this same V1 with
-`pnpm db:generate`; `pnpm db:check` verifies consistency. Use a new empty database when the V1 structure changes.
-There are no historical application migration patches or compatibility transformations.
-Maintain the English table and column descriptions in `src/platform/database/schema/documentation.ts` and regenerate
-the same V1. Generation rejects undocumented tables or columns; setup also rejects comment drift.
+Executed `001_initial.sql` remains unchanged. V2 adds the outbound stream, takes an event-table write lock, backfills
+retained facts and installs triggers atomically. Stop and drain writers during this maintenance step. Lock acquisition
+is limited to 5 seconds; a conflict fails safely and can be retried. Existing unjournaled V1 deployments are adopted
+only when their complete catalog matches V1. Unknown structures or changed applied checksums are rejected.
+
+Maintain typed schema and English comments, add the next migration and checksum, then run `pnpm db:generate` to
+update `db/schema.sql` and `pnpm db:check`. Generation checks every table/column and never rewrites migration files.
 
 The default port mapping exposes the application on the server at `http://127.0.0.1:6178`. Public HTTPS access is
 configured separately.
@@ -156,7 +158,7 @@ Expected service states:
 | `web` | Running; health changes from `starting` to `healthy` after checks pass |
 | `worker` | Running; logs include `Envoy PostgreSQL workers started` |
 
-The health endpoint checks database access, queue schema compatibility, and the outbox query. It does not confirm
+The health endpoint checks database access, application migration checksums, queue schema compatibility, and the outbox query. It does not confirm
 that Worker is running, storage is accessible, attachments can be scanned, or a provider can send mail. Check Worker
 logs and its heartbeat in the operations console separately.
 
@@ -167,9 +169,9 @@ Provider API keys and webhook secrets belong in the operations console, where th
 ## 5. Update an Existing Deployment
 
 Before updating, back up PostgreSQL, including its `bullmq` schema, and preserve the production environment, KEKs,
-and required object storage data. Review configuration changes and verify that the source uses the same complete V1
-structure. While V1 is unreleased, a changed structure requires a new empty database; this setup command does not
-perform an in-place data migration.
+and required object storage data. Review configuration changes, ordered migrations and their checksums. Stop and drain
+writers before a migration requiring table locks. Apply the migration task successfully before starting the matching
+Web and Worker processes; no empty replacement database is required for a supported V1-to-V2 upgrade.
 
 Pull the source without overwriting the server's configuration files:
 
@@ -229,7 +231,7 @@ in PostgreSQL or object storage.
 | --- | --- |
 | Build fails | Check Docker build output, registry access, package downloads, and available disk space and memory. |
 | `migrate` exits with a nonzero code | Read migration logs; check the database URL, database permissions, and schema compatibility before starting Web or Worker. |
-| Setup reports that the database does not match V1 | Use a new empty database for the current complete V1. The initializer deliberately does not upgrade or reset an unknown structure. |
+| Setup reports catalog or checksum drift | Inspect the mismatch and restore the expected recorded schema/source through a reviewed repair; do not delete the database or alter executed migration files. |
 | Web remains unhealthy or `/api/health` returns `503` | Inspect Web logs and verify database connectivity and both application and queue schemas. |
 | Worker exits or messages remain queued | Inspect Worker logs, its console heartbeat, database connectivity, provider configuration, and routing. |
 | Administrator login fails | Verify the configured email and password and recreate containers after environment changes. |

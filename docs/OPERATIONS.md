@@ -110,12 +110,19 @@ before enabling business receipt; this does not change Resend outbound support.
 
 ## Authoritative schema
 
-This is an unreleased V1 project. `db/migrations/001_initial.sql` is the complete application schema, including
-all constraints, indexes, functions and triggers. Use `pnpm db:setup` for a fresh installation. Update the typed schema
-and regenerate the same V1 with `pnpm db:generate`; `pnpm db:check` verifies the snapshot. Keep no incremental migration
-scripts or application migration ledger. Initialization validates an already identical V1 and refuses a different
-existing schema without modifying it. For development schema changes, select a fresh empty database. BullMQ manages
-its own internal schema through its official API.
+Executed application SQL is immutable. `001_initial.sql` is preserved; subsequent changes append contiguous versions
+and checksums. `pnpm db:generate` writes the typed `db/schema.sql` snapshot, and `pnpm db:check` verifies it and all
+migration checksums. Setup serializes migrations, validates the recorded catalog, applies missing versions and records
+checksums in `envoy_meta.migrations` atomically. It upgrades an exact unjournaled V1 by adopting V1 then applying V2.
+Drift is rejected without repairing schema or deleting business records. BullMQ manages its independent schema.
+
+Before V2, back up the database and stop Web/Worker writers. V2 takes a 5-second-bounded event-table lock, backfills
+all retained delivery/submission event references, creates per-Service heads, and installs triggers in one transaction.
+Lock conflicts or SQL failures roll the application upgrade back; inspect and retry after draining writers. Run setup
+successfully before starting the matching Web/Worker build, whose readiness requires current migration checksums.
+Observe both `/outbound-changes` and `/inbound-changes`; after a 410 or initial historyTruncated flag, reconcile known
+owned resources before adopting the returned reset cursor. A 2xx callback acknowledges durable receipt; downstream
+business processing remains the consumer's responsibility.
 
 ## Inbound recovery and lifecycle operations
 

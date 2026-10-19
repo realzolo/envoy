@@ -1,0 +1,10 @@
+[
+  {
+    "file": "001_initial.sql",
+    "sha256": "67b0bf001b78c6cf2f8bf169f305dd7d556319f3c6fba6c64366cd6e681b7e13"
+  },
+  {
+    "file": "002_outbound_changes.sql",
+    "sha256": "95846832de1b4a25981dc16507e7ac3005b25bc7fc0fd739c0ccec7e885bb312"
+  }
+]
