@@ -1,6 +1,8 @@
 import { Resend } from "resend";
 import { Webhook } from "svix";
+import { MAX_FILE_BYTES } from "@/lib/contracts";
 import { type CanonicalEventType, type ManagedIdentityStatus, type ProviderModule } from "../contracts";
+import { inboundHeaders, smtpRecipients } from "../inbound-fields";
 import { accepted, assertMessageCapabilities, checkedJson, event, eventDate, formatAddress, header, messageHeaders, nativeMailCapabilities, safeDiagnostic, stableEventId, submitRequest } from "../shared";
 function client(secret: {
     type: string;
@@ -14,7 +16,43 @@ const eventMap: Record<string, CanonicalEventType> = {
     "email.sent": "accepted", "email.delivered": "delivered", "email.delivery_delayed": "deferred",
     "email.bounced": "bounced", "email.failed": "failed", "email.opened": "opened",
     "email.clicked": "clicked", "email.complained": "complained", "email.suppressed": "suppressed",
+    "email.received": "inbound.received",
 };
+function inboundRoutingReceipt(verified: { nativeType: string; parsed: unknown }) {
+    if (verified.nativeType !== "email.received") return null;
+    const payload = verified.parsed as { data?: Record<string, unknown> };
+    const data = payload?.data;
+    if (!data || typeof data.email_id !== "string" || !data.email_id) return null;
+    const receivedFor = smtpRecipients(data.received_for);
+    const envelopeRecipients = receivedFor?.length ? receivedFor : [
+        ...(smtpRecipients(data.to) ?? []),
+        ...(smtpRecipients(data.cc) ?? []),
+        ...(smtpRecipients(data.bcc) ?? []),
+    ];
+    return { externalMessageId: data.email_id, envelopeRecipients };
+}
+async function downloadInboundAttachment(url: string) {
+    if (new URL(url).protocol !== "https:") throw new Error("Resend attachment URL must use HTTPS");
+    const response = await fetch(url, { redirect: "error", signal: AbortSignal.timeout(30_000) });
+    if (!response.ok || !response.body) throw new Error(`Resend attachment download failed: ${response.status}`);
+    const contentLength = Number(response.headers.get("content-length"));
+    if (contentLength > MAX_FILE_BYTES) throw new Error("Resend attachment exceeds the size limit");
+    const reader = response.body.getReader();
+    const chunks: Buffer[] = [];
+    let size = 0;
+    try {
+        for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            size += value.byteLength;
+            if (size > MAX_FILE_BYTES) throw new Error("Resend attachment exceeds the size limit");
+            chunks.push(Buffer.from(value));
+        }
+    } finally {
+        reader.releaseLock();
+    }
+    return Buffer.concat(chunks, size);
+}
 // Resend exposes richer domain states than Envoy's routing model. A partially
 // verified domain must remain ineligible for sending until all required DNS is ready.
 export function resendIdentityStatus(status: string): ManagedIdentityStatus {
@@ -30,12 +68,12 @@ export const resendModule: ProviderModule = {
         displayName: "Resend",
         capabilities: {
             nativeIdempotency: true,
-            inboundMode: "none",
+            inboundMode: "webhook-fetch",
             domainManagement: true,
             webhookSecurity: "Svix HMAC",
             eventTypes: Object.keys(eventMap),
             ...nativeMailCapabilities,
-            inboundEnvelopeRecipients: false,
+            inboundEnvelopeRecipients: true,
             maxMessageBytes: 40000000,
             tagValuePattern: "^[A-Za-z0-9_-]{0,256}$",
             scheduling: false
@@ -105,6 +143,17 @@ export const resendModule: ProviderModule = {
             if (!type)
                 return [];
             const data = payload.data ?? {};
+            if (type === "inbound.received") {
+                const routing = inboundRoutingReceipt(verified);
+                if (!routing) return [];
+                return [event({
+                    id: verified.providerEventId ?? stableEventId(payload),
+                    externalMessageId: routing.externalMessageId,
+                    type,
+                    occurredAt: eventDate(payload.created_at),
+                    inboundReference: routing.externalMessageId
+                })];
+            }
             const bounce = data.bounce as {
                 type?: string;
                 message?: string;
@@ -124,10 +173,53 @@ export const resendModule: ProviderModule = {
                         classification: bounce?.type === "Permanent" ? "hard" : "soft",
                         message: bounce?.message
                     } : undefined,
-                    inboundReference: type === "inbound.received" ? String(data.email_id) : undefined,
                     metadata: failed?.reason ? { reason: safeDiagnostic(failed.reason), providerCode: failed.reason } : {}
                 })];
         },
+    },
+    inbound: {
+        routingReceipt: inboundRoutingReceipt,
+        async receive(verified, context) {
+            const routing = inboundRoutingReceipt(verified);
+            if (!routing) return null;
+            const resend = client(context.secret);
+            const result = await resend.emails.receiving.get(routing.externalMessageId, { html_format: "cid" });
+            if (result.error || !result.data) throw new Error(result.error?.message ?? "Resend received email retrieval failed");
+            const message = result.data;
+            if (message.id !== routing.externalMessageId) throw new Error("Resend received email ID changed");
+            const fields = await inboundHeaders(message.headers);
+            const attachments = [];
+            for (const item of message.attachments ?? []) {
+                if (item.size > MAX_FILE_BYTES) throw new Error("Resend attachment exceeds the size limit");
+                const detail = await resend.emails.receiving.attachments.get({ emailId: message.id, id: item.id });
+                if (detail.error || !detail.data) throw new Error(detail.error?.message ?? "Resend attachment retrieval failed");
+                if (detail.data.id !== item.id) throw new Error("Resend attachment ID changed");
+                attachments.push({
+                    fileName: item.filename ?? detail.data.filename ?? "attachment",
+                    contentType: item.content_type || detail.data.content_type || "application/octet-stream",
+                    contentId: item.content_id ?? undefined,
+                    content: await downloadInboundAttachment(detail.data.download_url)
+                });
+            }
+            return {
+                externalMessageId: message.id,
+                messageId: fields.messageId ?? message.message_id,
+                envelopeRecipients: routing.envelopeRecipients,
+                from: message.from,
+                to: smtpRecipients(message.to) ?? [],
+                cc: smtpRecipients(message.cc) ?? [],
+                bcc: smtpRecipients(message.bcc) ?? [],
+                replyTo: fields.replyTo.length ? fields.replyTo : smtpRecipients(message.reply_to) ?? [],
+                inReplyTo: fields.inReplyTo,
+                references: fields.references,
+                subject: message.subject,
+                html: message.html ?? undefined,
+                text: message.text ?? undefined,
+                attachments,
+                authorDate: fields.authorDate,
+                receivedAt: eventDate(message.created_at)
+            };
+        }
     },
     identity: {
         async createIdentity(domain, context) {

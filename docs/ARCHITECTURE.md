@@ -23,7 +23,7 @@ The structure follows the Next.js recommendation to use a server-side data acces
 - `identity`: business services, credentials, domain bindings, capability discovery and service-owned content access.
 - `channels`: registered domains, provider accounts and credentials, provider identities and ingress security configuration.
 - `outbound`: message acceptance, routing, submissions, attempts, recipient delivery state, retries and reconciliation.
-- `inbound`: trustworthy envelope processing, service fanout, retained copies and incremental change discovery.
+- `inbound`: provider recipient processing, service fanout, retained copies and incremental change discovery.
 - `attachments`: private file ownership, scans, byte access and retention.
 - `callbacks`: callback endpoints, signing, delivery, replay and dead letters.
 - `suppressions`: scoped recipient protection and authorized management.
@@ -42,7 +42,7 @@ Each domain selects one inbound provider account, or none to disable new inbound
 ```mermaid
 flowchart LR
   P[Provider webhook] --> V[Verify signature and endpoint]
-  V --> E[Read trusted envelope recipients]
+  V --> E[Read provider reported recipients]
   E --> D[Match exact domain and its inbound provider]
   D --> B[Find all receiving Service bindings]
   B --> R[Persist frozen receipt and route before 202]
@@ -52,7 +52,7 @@ flowchart LR
   S2 --> N2[Callback or polling]
 ```
 
-The mailbox local part does not select a Service. Without trusted envelope recipients, ingress is quarantined; the visible `To` header is never used as a substitute. Route ownership is frozen when the verified webhook is accepted, so later provider changes do not discard accepted mail. Resend's current adapter cannot supply trusted envelope recipients, so it is unavailable for inbound domain selection.
+The mailbox local part does not select a Service. Route ownership is frozen when the verified webhook is accepted, so later provider changes do not discard accepted mail. Resend uses `received_for` from the signed `email.received` event, falling back to its signed `to/cc/bcc` lists when absent. The worker fetches the body and attachments through the Resend API. All Services bound to a recipient domain receive separate copies.
 
 ### Outbound
 

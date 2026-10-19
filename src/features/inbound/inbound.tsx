@@ -46,7 +46,7 @@ export function Inbound({ data }: { data: Data }) {
           { label: "Readable since", value: item.ready_at ? date(item.ready_at) : "Unknown / not ready" },
           { label: "Envoy ID", value: <CopyableValue text={value(item, "id")} label="inbound message ID" /> },
           { label: "RFC Message-ID", value: value(item, "message_id") || "Not supplied" },
-          { label: "SMTP recipients", value: Array.isArray(item.envelope_recipients) && item.envelope_recipients.length ? item.envelope_recipients.join(", ") : "Unknown / unverified" },
+          { label: "Routing recipients", value: Array.isArray(item.envelope_recipients) && item.envelope_recipients.length ? item.envelope_recipients.join(", ") : "Unknown / unverified" },
           { label: "Reply-To", value: Array.isArray(item.reply_to) ? item.reply_to.join(", ") : "" },
           { label: "In-Reply-To", value: value(item, "in_reply_to") || "Not supplied" },
           { label: "References", value: Array.isArray(item.references_ids) ? item.references_ids.join(" ") : "" },

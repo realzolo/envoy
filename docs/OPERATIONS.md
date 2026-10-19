@@ -29,6 +29,7 @@ Use a direct or session-pooled connection and reserve the documented connection 
 | API rejects a request before message creation | Save `requestId` and query `/api/v1/requests/{requestId}` with the same service credential. Check field errors and sender authorization. |
 | Messages remain queued or deferred | Check structured delivery errors and submission attempts, Worker heartbeat/logs, overdue work, the Service-domain binding, its verified outbound provider identity, and provider account health. |
 | Provider webhook is rejected | Verify the provider event URL, provider-specific signature material, allowed source configuration, and server clock. For Postmark, use the credential-bearing URL generated when Basic Auth is saved. |
+| Resend shows received mail but Inbound is empty | Confirm the Resend webhook subscribes to `email.received`, its Provider Event is verified, the domain selects that Resend account as Inbound provider, and at least one active Service binding has Receive enabled. Check Worker processing errors. Previously processed events can be replayed from Provider Events after configuration only while their verified receipts are retained. |
 | Outbound callback delivery fails | Inspect the event callback endpoint URL, signing secret, consumer response, and dead-letter/replay state in the operations console. |
 | Credentials cannot be read after deployment | Verify that `ENVOY_KEK_BASE64`, `ENVOY_KEK_VERSION`, and any `ENVOY_KEK_KEYRING_JSON` entries match the keys used to encrypt existing envelopes. |
 
@@ -89,7 +90,7 @@ configuration, canonical send facts, actual inbound observation and callback del
 operator diagnostics; callers receive stable reason codes and Envoy request/resource IDs.
 
 In **Provider Accounts → Provider event webhook**, configure verification once per provider webhook endpoint. For Resend,
-add Envoy's public HTTPS Provider webhook URL in Resend → Webhooks, select events, then open that webhook's details and
+add Envoy's public HTTPS Provider webhook URL in Resend → Webhooks, select `email.received` and the desired delivery events, then open that webhook's details and
 copy its `whsec_...` Signing secret into **Resend webhook signing secret**. See the
 [official verification guide](https://resend.com/docs/webhooks/verify-webhooks-requests). The other providers retain their
 own public-key, SNS-topic, signing-key or Basic Auth settings. These credentials verify provider → Envoy traffic; the
@@ -103,12 +104,12 @@ the form untouched preserves the current configuration. Saving shows configured/
 event with the current settings produces a valid-event timestamp. A working provider API can submit mail before
 webhook verification is configured, but API acceptance alone does not establish recipient delivery.
 
-The Inbound detail drawer distinguishes the Envoy ID, RFC Message-ID, SMTP recipients, standard reply/thread fields,
+The Inbound detail drawer distinguishes the Envoy ID, RFC Message-ID, provider-reported recipients, standard reply/thread fields,
 and the recipient domains matched for each private Service copy. Inspect the full verified raw provider event when diagnosing
-quarantined mail. `ENVELOPE_RECIPIENT_UNAVAILABLE` requires a trusted provider recipient source, not adding guessed
-headers or widening patterns. Resend inbound currently remains quarantined because the reviewed retrieval contract
-does not explicitly establish an envelope-recipient source. Configure a supported alternative ingress inside Envoy
-before enabling business receipt; this does not change Resend outbound support.
+quarantined mail. For Resend, select the Resend account as the domain's **Inbound provider** and enable receiving on each
+Service binding that should get a copy. The signed `email.received` webhook supplies recipients; Envoy retrieves the
+message body and attachments through the Resend API. Resend's `received_for` comes from a `Received` header; if missing,
+Envoy uses the webhook's `to/cc/bcc` fields. Its recipient metadata may differ from the SMTP envelope.
 
 ## Authoritative schema
 

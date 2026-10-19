@@ -238,8 +238,10 @@ Key rotation keeps the same Service, domain bindings, resource ownership, cursor
 
 ## Inbound ownership, standard fields and callbacks
 
-Routing uses provider-authenticated SMTP recipients, never visible To/Cc/Bcc, `Delivered-To`, `X-Original-To`, arbitrary
-MIME headers, or a provider's outbound domain verification status. An outbound identity does not confer receiving permission. The domain's inbound provider account must match the authenticated ingress, and each receiving Service needs an enabled binding.
+Routing uses recipient metadata from the verified provider webhook. Resend prefers `received_for` and falls back to the
+signed `to/cc/bcc` fields; other providers use their own recipient source. A provider's outbound domain verification
+does not confer receiving permission. The domain's inbound provider account must match the authenticated ingress, and
+each receiving Service needs an enabled binding.
 
 Every matching Service-domain binding participates. One domain may deliver to several Services. Matched domains in one provider delivery unit for the same Service merge into one copy with the union of that Service's envelope addresses; Postmark sends separate inbound webhook deliveries per original recipient, so those are separate units. The Service's active
 callback endpoint receives one event. Other services receive separate IDs and private
@@ -260,7 +262,7 @@ a digest of its authenticated JSON receipt for deduplication rather than an untr
 ```
 
 Missing scalar RFC fields are `null`, missing lists are `[]`. A provider's opaque message ID is never substituted for
-RFC Message-ID. To/Cc remain visible content headers, not proof of ownership; Bcc and `envelopeRecipients` expose only
+RFC Message-ID. To/Cc remain visible content headers; Resend can also use its signed To/Cc fields as a routing fallback. Bcc and `envelopeRecipients` expose only
 addresses matched for the current service. Raw MIME, full provider payloads, and other services' private recipients are
 not exposed through the business API. Attachment downloads require that both mail and attachment belong to this service,
 ready state, retained bytes, and the current scanning policy.
@@ -271,19 +273,20 @@ private attachment IDs through the service API. `GET /events` browses outbound h
 mail through `/inbound-changes`; `/inbound-messages` is a stored-time browse/snapshot API, not an incremental recovery feed. Use the RFC fields to construct a standard
 reply (`inReplyTo` and `references`); conversation matching and ticket state remain business rules. Outbound RFC IDs are available per attempt when confirmed; unconfirmed IDs remain null (see below).
 
-Missing/invalid trusted envelopes are quarantined as administrator-only rejected records with
+Missing/invalid routing recipients are quarantined as administrator-only rejected records with
 `ENVELOPE_RECIPIENT_UNAVAILABLE`; no matching receiving Service yields `NO_RECEIVING_SERVICE`. No service callback is emitted.
 Terminal content rejection reasons are stable codes: `INBOUND_MESSAGE_TOO_LARGE`, `INBOUND_ATTACHMENT_TOO_LARGE`,
 `INBOUND_MALWARE_DETECTED`. Transient storage/scanner failures remain retryable, rather than becoming a false rejection.
 
-Provider contracts and current adapter behavior are documented in [Architecture](ARCHITECTURE.md#inbound-safety).
-In particular, Resend's current adapter deliberately quarantines incoming messages because the retrieved contract does
-not unambiguously identify SMTP recipients. Its outbound sending support is unchanged.
+Provider contracts and current adapter behavior are documented in [Architecture](ARCHITECTURE.md#inbound).
+For Resend, Envoy routes from the signed `email.received` event's `received_for` list, or its `to/cc/bcc` lists when
+`received_for` is absent, then retrieves content through the Resend API. Resend's recipient metadata may differ from
+the SMTP envelope.
 
 ## Business connection
 
-Use provider-neutral `mail` discovery for explicit permissions and states. Ownership comes from `envelopeRecipients`,
-never visible To. Multiple services receive private resources; null RFC fields/evidence remain unknown. Domain/DNS and
+Use provider-neutral `mail` discovery for explicit permissions and states. Ownership comes from the provider-derived
+`envelopeRecipients` routing list. Multiple services receive private resources; null RFC fields/evidence remain unknown. Domain/DNS and
 provider configuration stay in Envoy. An outbound identity does not authorize receiving data.
 
 A runnable minimal connection example is [examples/service-mail.mjs](../examples/service-mail.mjs):

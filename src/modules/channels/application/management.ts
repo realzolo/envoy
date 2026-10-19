@@ -236,7 +236,7 @@ async function createDomain(input: {
 async function validateInboundProvider(accountId: string) {
   const account = await loadProviderAccount(accountId);
   if (!account.module.descriptor.capabilities.inboundEnvelopeRecipients) {
-    throw new Error("This provider does not supply trusted envelope recipients for inbound routing");
+    throw new Error("This provider does not supply recipients for inbound routing");
   }
 }
 async function setDomainInboundProvider(id: string, providerAccountId: string | null, actor: string) {
