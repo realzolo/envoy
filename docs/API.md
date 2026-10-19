@@ -224,7 +224,7 @@ A Service has a globally unique name (case-insensitive). **Pause** disables all 
 
 For outbound mail, Envoy checks the authenticated Service's binding to the From domain and uses that binding's single provider identity. The identity must belong to the same domain and its provider must be available. Message category does not select a different provider.
 
-Under **Services**, create or edit one configuration containing the Service name, domain bindings, Event callback URL, and advanced permissions. Each domain binding has a receiving switch and an optional outbound provider identity. Remove a binding to disable both directions. Saving atomically replaces that Service's bindings and applies to every active key without reissuance. A domain can have several receiving Services, each with a separate private copy. The domain itself selects one inbound provider account; leaving it empty disables new inbound mail without changing the Service's receiving permission or hiding historical mail. Disabled domains and suspended Services remain unusable. Subdomains must be registered and bound separately.
+Under **Services**, create or edit one configuration containing the Service name, domain bindings, Event callback URL, and advanced permissions. Each domain binding has a receiving switch and an optional outbound provider identity. Remove a binding to disable both directions. Saving atomically replaces that Service's bindings and applies to every active key without reissuance. A domain can have several receiving Services, each with a separate private copy. The incoming provider account is identified by its verified webhook; receiving requires no per-domain provider selection. Disabled domains and suspended Services remain unusable. Subdomains must be registered and bound separately.
 
 **Manage credentials** only issues, rotates, or revokes keys of the same Service. The first key is issued on Service creation and plaintext is shown once. Changes to names, callbacks, domain bindings, or Service suppression management belong in **Edit configuration**. Service suppression management is disabled by default; enabling it allows the API to list, add, and remove Service recipient and list suppression rules, affecting that Service across its sending domains. Editors save against the configuration revision they loaded; stale saves are rejected so a previous form cannot restore revoked access. Service configuration changes and domain provider/status changes affecting a bound Service increment its revision and send `service.permissions_changed` through the current active callback subscription. An empty Event callback URL selects polling only; removing a URL disables delivery while retaining callback history.
 
@@ -240,8 +240,8 @@ Key rotation keeps the same Service, domain bindings, resource ownership, cursor
 
 Routing uses recipient metadata from the verified provider webhook. Resend prefers `received_for` and falls back to the
 signed `to/cc/bcc` fields; other providers use their own recipient source. A provider's outbound domain verification
-does not confer receiving permission. The domain's inbound provider account must match the authenticated ingress, and
-each receiving Service needs an enabled binding.
+does not confer receiving permission. The verified webhook identifies the provider account, and each receiving Service
+needs an enabled binding for the exact recipient domain.
 
 Every matching Service-domain binding participates. One domain may deliver to several Services. Matched domains in one provider delivery unit for the same Service merge into one copy with the union of that Service's envelope addresses; Postmark sends separate inbound webhook deliveries per original recipient, so those are separate units. The Service's active
 callback endpoint receives one event. Other services receive separate IDs and private
@@ -274,7 +274,7 @@ mail through `/inbound-changes`; `/inbound-messages` is a stored-time browse/sna
 reply (`inReplyTo` and `references`); conversation matching and ticket state remain business rules. Outbound RFC IDs are available per attempt when confirmed; unconfirmed IDs remain null (see below).
 
 Missing/invalid routing recipients are quarantined as administrator-only rejected records with
-`ENVELOPE_RECIPIENT_UNAVAILABLE`; no matching receiving Service yields `NO_RECEIVING_SERVICE`. No service callback is emitted.
+`ENVELOPE_RECIPIENT_UNAVAILABLE`. Valid mail without a matching receiving Service is retained for administrators as received, without Service copies or callbacks. Enabling Receive affects new mail automatically. Older `NO_RECEIVING_SERVICE` rejected records can be replayed by an administrator while their verified receipts are retained; replay does not expand previously successful Service copies.
 Terminal content rejection reasons are stable codes: `INBOUND_MESSAGE_TOO_LARGE`, `INBOUND_ATTACHMENT_TOO_LARGE`,
 `INBOUND_MALWARE_DETECTED`. Transient storage/scanner failures remain retryable, rather than becoming a false rejection.
 

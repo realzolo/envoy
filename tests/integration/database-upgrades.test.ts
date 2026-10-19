@@ -35,7 +35,7 @@ async function preserved(client: PoolClient) {
     'submissionEvent',(SELECT to_jsonb(e) FROM submission_events e WHERE id='submission_event_upgrade')) AS facts`)).rows[0].facts;
 }
 
-describe("V1 application initialization", () => {
+describe("application database migrations", () => {
   it("preserves populated data across repeated setup", async () => {
     await isolated(async pool => {
       const client = await pool.connect();
@@ -49,25 +49,66 @@ describe("V1 application initialization", () => {
         expect(changes.every(row => row.message_id === "msg_upgrade" && row.recorded_at.getTime() > Date.now() - 10_000)).toBe(true);
         expect((await client.query("SELECT position::text,floor::text FROM outbound_streams WHERE service_id='svc_upgrade'")).rows[0]).toEqual({ position: "2", floor: "0" });
         const journal = (await client.query("SELECT * FROM envoy_meta.migrations ORDER BY file")).rows;
-        expect(journal).toHaveLength(1); expect(await initializeDatabase(client)).toBe("validated");
+        expect(journal).toHaveLength(2); expect(await initializeDatabase(client)).toBe("validated");
         expect((await client.query("SELECT * FROM envoy_meta.migrations ORDER BY file")).rows).toEqual(journal);
         await client.query("INSERT INTO delivery_events(id,delivery_id,event_type,source_key,occurred_at,canonical_payload) VALUES('next_event','delivery_upgrade','opened','next-source','1800-01-01','{}')");
         expect((await client.query("SELECT position::text FROM outbound_changes WHERE id='next_event'")).rows[0].position).toBe("3");
       } finally { client.release(); }
     });
   });
-  it("serializes concurrent V1 initialization without duplicate journal entries", async () => {
+  it("serializes concurrent initialization without duplicate journal entries", async () => {
     await isolated(async pool => {
       const first = await pool.connect(), second = await pool.connect();
       try {
         expect((await Promise.all([initializeDatabase(first), initializeDatabase(second)])).sort()).toEqual(["initialized", "validated"]);
         await seed(first);
-        expect((await first.query("SELECT count(*)::int AS count FROM envoy_meta.migrations")).rows[0].count).toBe(1);
+        expect((await first.query("SELECT count(*)::int AS count FROM envoy_meta.migrations")).rows[0].count).toBe(2);
         expect((await first.query("SELECT count(*)::int AS count FROM outbound_changes")).rows[0].count).toBe(2);
       } finally { first.release(); second.release(); }
     });
   });
-  it("rolls back a failed V1 initialization and can retry", async () => {
+  it("upgrades populated V1 databases without changing retained business data", async () => {
+    await isolated(async pool => {
+      const client = await pool.connect();
+      try {
+        const migrations = await loadApplicationMigrations();
+        expect(await initializeApplicationSchema(client, migrations.slice(0, 1), migrations[0].sql)).toBe("initialized");
+        await seed(client);
+        await client.query("INSERT INTO provider_accounts(id,type,name,status,public_config) VALUES('provider_upgrade','mock','Upgrade Provider','active','{}')");
+        await client.query("UPDATE sending_domains SET inbound_provider_account_id='provider_upgrade' WHERE id='domain_upgrade'");
+        const before = await preserved(client);
+
+        expect(await initializeDatabase(client)).toBe("upgraded");
+        expect(await preserved(client)).toEqual(before);
+        expect((await client.query("SELECT id,domain FROM sending_domains WHERE id='domain_upgrade'")).rows[0])
+          .toEqual({ id: "domain_upgrade", domain: "upgrade.example.test" });
+        expect((await client.query("SELECT id FROM provider_accounts WHERE id='provider_upgrade'")).rowCount).toBe(1);
+        expect((await client.query("SELECT id FROM service_domain_bindings WHERE id='binding_upgrade'")).rowCount).toBe(1);
+        expect((await client.query("SELECT count(*)::int AS count FROM information_schema.columns WHERE table_schema='public' AND table_name='sending_domains' AND column_name='inbound_provider_account_id'")).rows[0].count).toBe(0);
+        expect((await client.query("SELECT file FROM envoy_meta.migrations ORDER BY file")).rows.map(row => row.file))
+          .toEqual(migrations.map(row => row.file));
+        expect(await initializeDatabase(client)).toBe("validated");
+      } finally { client.release(); }
+    });
+  });
+  it("rolls back a failed V2 upgrade and can retry", async () => {
+    await isolated(async pool => {
+      const client = await pool.connect();
+      try {
+        const migrations = await loadApplicationMigrations();
+        await initializeApplicationSchema(client, migrations.slice(0, 1), migrations[0].sql);
+        await seed(client);
+        const before = await preserved(client);
+        const failing = [migrations[0], { ...migrations[1], sql: `${migrations[1].sql}\nSELECT missing_migration_function();` }];
+        await expect(initializeApplicationSchema(client, failing, await readFile("db/schema.sql", "utf8"))).rejects.toThrow("missing_migration_function");
+        expect(await preserved(client)).toEqual(before);
+        expect((await client.query("SELECT count(*)::int AS count FROM information_schema.columns WHERE table_schema='public' AND table_name='sending_domains' AND column_name='inbound_provider_account_id'")).rows[0].count).toBe(1);
+        expect((await client.query("SELECT file FROM envoy_meta.migrations ORDER BY file")).rows.map(row => row.file)).toEqual([migrations[0].file]);
+        expect(await initializeDatabase(client)).toBe("upgraded");
+      } finally { client.release(); }
+    });
+  });
+  it("rolls back a failed empty-database initialization and can retry", async () => {
     await isolated(async pool => {
       const client = await pool.connect();
       try {

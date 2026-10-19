@@ -42,7 +42,7 @@ async function ready(service=a) { const id=await scanning(service);await query("
 
 beforeAll(async()=>{
  for (const service of [a,b,c]) await query("INSERT INTO services(id,name) VALUES($1,$1)",[service]);
- await query("INSERT INTO sending_domains(id,domain,inbound_provider_account_id) VALUES($1,$2,'pa_mock')",[domainId,domain]);
+ await query("INSERT INTO sending_domains(id,domain) VALUES($1,$2)",[domainId,domain]);
  await query("INSERT INTO service_credentials(id,service_id,key_prefix,key_hash) VALUES($1,$2,'test',$3)",[credential,a,hashApiKey(oldKey)]);
  const sealed=sealSecret({secret:"test-recovery-callback"},callback,1);
  await query("INSERT INTO callback_endpoints(id,service_id,name,url,secret_ciphertext,encrypted_dek,key_version,subscribed_events) VALUES($1,$2,'recovery','https://callback.test/events',$3,$4,$5,ARRAY['inbound.received'])",[callback,a,sealed.secretCiphertext,sealed.encryptedDek,sealed.keyVersion]);

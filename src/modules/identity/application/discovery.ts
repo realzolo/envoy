@@ -1,4 +1,3 @@
-import { providerRegistry } from "@/integrations/providers/public";
 import type { ServiceIdentity } from "../contracts";
 import type { DiscoveryRepository } from './discovery-ports';
 
@@ -15,8 +14,7 @@ export function createDiscoveryService(repository:DiscoveryRepository){return as
     domains:bindings.map(row=>{
       const active=row.status==='active';
       const sendingReasons=[...(!active||!row.send_allowed?['DOMAIN_SEND_NOT_AUTHORIZED']:[]),...(row.domain_status!=='active'?['SENDING_DOMAIN_DISABLED']:[]),...(!row.sending_configured?['PROVIDER_UNAVAILABLE']:[])];
-      const ingress=row.inbound_ready && row.inbound_provider_type !== null && providerRegistry(row.inbound_provider_type).descriptor.capabilities.inboundEnvelopeRecipients;
-      const receivingReasons=[...(!active||!row.receive_allowed?['DOMAIN_RECEIVE_NOT_AUTHORIZED']:[]),...(row.domain_status!=='active'?['INBOUND_DOMAIN_DISABLED']:[]),...(!ingress?['INBOUND_INGRESS_UNAVAILABLE']:[])];
+      const receivingReasons=[...(!active||!row.receive_allowed?['DOMAIN_RECEIVE_NOT_AUTHORIZED']:[]),...(row.domain_status!=='active'?['INBOUND_DOMAIN_DISABLED']:[]),...(!row.ingress_ready?['INBOUND_INGRESS_UNAVAILABLE']:[])];
       const notificationReasons=callback?[...(callback.status!=='active'?['CALLBACK_DISABLED']:[]),...(!callback.subscribed_events.includes('inbound.received')?['CALLBACK_EVENT_NOT_SUBSCRIBED']:[])]:[];
       return {id:row.id,domain:row.domain,authorization:active?'granted' as const:'revoked' as const,revision:row.revision,
         permissions:{send:active&&row.send_allowed,receive:active&&row.receive_allowed},

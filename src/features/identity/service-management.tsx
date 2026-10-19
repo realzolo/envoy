@@ -22,7 +22,6 @@ function DomainBindingsEditor({ domains, value: bindings = [], onChange }: {
         <Space wrap align="center">
           <Typography.Text code>{value(domain ?? {}, "domain")}</Typography.Text>
           <Checkbox checked={binding.receive} onChange={receive => update(binding.domainId, { receive })}>Receive</Checkbox>
-          {binding.receive && !domain?.inbound_ready && <StatusTag>Ingress unavailable</StatusTag>}
           <Select style={{ minWidth: 190 }} placeholder="No sending provider" allowClear value={binding.outboundIdentityId ?? undefined}
             options={identities.map(identity => ({ value: value(identity, "id"), label: `${value(identity, "account")} (${value(identity, "status")})` }))}
             onChange={identityId => update(binding.domainId, { outboundIdentityId: identityId ? String(identityId) : null })} />

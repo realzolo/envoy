@@ -10,7 +10,7 @@ export interface InboundRepository {
   insertRejected(input: { id: string; accountId: string; rawEventId: string; externalId: string; messageId: string | null; from: string; to: string[]; cc: string[]; bcc: string[]; subject: string; html: string | null; text: string | null; reason: "NO_RECEIVING_SERVICE" | "ENVELOPE_RECIPIENT_UNAVAILABLE"; receivedAt: Date | undefined; envelope: string[]; replyTo: string[]; inReplyTo: string | null; references: string[]; authorDate: string | null }): Promise<RepositoryResult<{ id: string }>>;
   allowedDomains(input: { serviceId: string }): Promise<RepositoryResult<{domain:string}>>;
   findCopy(input: { accountId: string; externalId: string; scope: string }): Promise<RepositoryResult<{ id: string; status: string; content_purged_at: Date | null }>>;
-  insertCopy(input: { id: string; serviceId: string; accountId: string; rawEventId: string; externalId: string; messageId: string | null; from: string; to: string[]; cc: string[]; bcc: string[]; subject: string; html: string | null; text: string | null; receivedAt: Date | undefined; scope: string; envelope: string[]; replyTo: string[]; inReplyTo: string | null; references: string[] }): Promise<RepositoryResult<Record<string, unknown>>>;
+  insertCopy(input: { id: string; serviceId: string | null; accountId: string; rawEventId: string; externalId: string; messageId: string | null; from: string; to: string[]; cc: string[]; bcc: string[]; subject: string; html: string | null; text: string | null; receivedAt: Date | undefined; scope: string; envelope: string[]; replyTo: string[]; inReplyTo: string | null; references: string[] }): Promise<RepositoryResult<Record<string, unknown>>>;
   findConcurrentCopy(input: { accountId: string; externalId: string; scope: string }): Promise<RepositoryResult<{
       id: string;
       status: string
@@ -27,7 +27,7 @@ export interface InboundRepository {
   enqueueCallback(input: { outboxId: string; id: string; payload: Record<string, unknown> }): Promise<RepositoryResult<Record<string, unknown>>>;
   rejectCopy(input: { id: string; reason: string; token: string }): Promise<RepositoryResult<Record<string, unknown>>>;
   releaseClaim(input: { id: string; token: string }): Promise<RepositoryResult<Record<string, unknown>>>;
-  registerAttachment(id: string, kind: "inbound", serviceId: string, digest: string): Promise<void>;
+  registerAttachment(id: string, kind: "inbound", serviceId: string | null, digest: string): Promise<void>;
   completeUploads(keys: string[]): Promise<void>;
 }
 export interface InboundDependencies {

@@ -23,10 +23,10 @@ async function persistInbound(input: InboundInput) {
   const routes = receipt.routes;
   input = { ...input, ingressReceivedAt: receipt.ingress_received_at };
   if (!routes.length) {
+    if (recipients.length) return persistInboundCopy({ ...input, message: { ...input.message, envelopeRecipients: recipients } }, "quarantine", null);
     const tombstone = (await dependencies.repository.findTombstone({ accountId: input.providerAccountId, externalId: input.message.externalMessageId })).rows[0];
     if (tombstone) return tombstone.id;
-    const reason = recipients.length ? "NO_RECEIVING_SERVICE" : "ENVELOPE_RECIPIENT_UNAVAILABLE";
-    const stored = await dependencies.repository.insertRejected({ id: dependencies.id("inb"), accountId: input.providerAccountId, rawEventId: input.rawEventId, externalId: input.message.externalMessageId, messageId: input.message.messageId??null, from: address(input.message.from), to: input.message.to, cc: input.message.cc, bcc: input.message.bcc, subject: input.message.subject, html: input.message.html?dependencies.sanitizeHtml(input.message.html):null, text: input.message.text??null, reason: reason, receivedAt: input.ingressReceivedAt, envelope: recipients, replyTo: input.message.replyTo??[], inReplyTo: input.message.inReplyTo??null, references: input.message.references??[], authorDate: authorDate(input.message.authorDate) });
+    const stored = await dependencies.repository.insertRejected({ id: dependencies.id("inb"), accountId: input.providerAccountId, rawEventId: input.rawEventId, externalId: input.message.externalMessageId, messageId: input.message.messageId??null, from: address(input.message.from), to: input.message.to, cc: input.message.cc, bcc: input.message.bcc, subject: input.message.subject, html: input.message.html?dependencies.sanitizeHtml(input.message.html):null, text: input.message.text??null, reason: "ENVELOPE_RECIPIENT_UNAVAILABLE", receivedAt: input.ingressReceivedAt, envelope: recipients, replyTo: input.message.replyTo??[], inReplyTo: input.message.inReplyTo??null, references: input.message.references??[], authorDate: authorDate(input.message.authorDate) });
     return stored.rows[0].id;
   }
   // One private projection per Service, even when several Services share a domain.
@@ -42,7 +42,7 @@ async function persistInbound(input: InboundInput) {
     const message = { ...input.message, envelopeRecipients: ownRecipients,
       bcc: input.message.bcc.filter(item => ownRecipients.includes(address(item))) };
     try {
-      const id = await persistRoutedInbound({ ...input, message }, scope, matching);
+      const id = await persistInboundCopy({ ...input, message }, scope, scope);
       firstId ||= id;
     } catch (error) {
       if (error instanceof InboundTerminalError && error.code === "DOMAIN_RECEIVE_NOT_AUTHORIZED") continue;
@@ -54,19 +54,20 @@ async function persistInbound(input: InboundInput) {
   return firstId;
 }
 
-async function persistRoutedInbound(input: InboundInput, scope: string, routes: InboundDispatch[]) {
-  const route = routes[0];
-  const allowed=(await dependencies.repository.allowedDomains({ serviceId: route.service_id })).rows.map(row=>row.domain);
+async function persistInboundCopy(input: InboundInput, scope: string, serviceId: string | null) {
   const envelopeRecipients=input.message.envelopeRecipients??[];
-  if(!envelopeRecipients.length || envelopeRecipients.some(recipient=>!allowed.includes(recipient.split('@')[1])))
-    throw new InboundTerminalError("Domain receiving permission was revoked","DOMAIN_RECEIVE_NOT_AUTHORIZED");
+  if (serviceId) {
+    const allowed=(await dependencies.repository.allowedDomains({ serviceId })).rows.map(row=>row.domain);
+    if(!envelopeRecipients.length || envelopeRecipients.some(recipient=>!allowed.includes(recipient.split('@')[1])))
+      throw new InboundTerminalError("Domain receiving permission was revoked","DOMAIN_RECEIVE_NOT_AUTHORIZED");
+  }
   const message = {...input.message,envelopeRecipients,bcc:input.message.bcc.filter(item=>envelopeRecipients.includes(address(item)))};
   const duplicate = (await dependencies.repository.findCopy({ accountId: input.providerAccountId, externalId: message.externalMessageId, scope: scope })).rows[0];
   if (duplicate?.content_purged_at) return duplicate.id;
   if (duplicate && duplicate.status !== "scanning") return duplicate.id;
   let id = duplicate?.id ?? dependencies.id("inb");
   const recipients = message.to.map(address);
-  const inserted = duplicate ? null : await dependencies.repository.insertCopy({ id: id, serviceId: route.service_id, accountId: input.providerAccountId, rawEventId: input.rawEventId, externalId: message.externalMessageId, messageId: message.messageId ?? null, from: address(message.from), to: recipients, cc: message.cc.map(address), bcc: message.bcc.map(address), subject: message.subject, html: message.html ? dependencies.sanitizeHtml(message.html) : null, text: message.text ?? null, receivedAt: input.ingressReceivedAt, scope: scope, envelope: message.envelopeRecipients, replyTo: message.replyTo??[], inReplyTo: message.inReplyTo??null, references: message.references??[] });
+  const inserted = duplicate ? null : await dependencies.repository.insertCopy({ id: id, serviceId, accountId: input.providerAccountId, rawEventId: input.rawEventId, externalId: message.externalMessageId, messageId: message.messageId ?? null, from: address(message.from), to: recipients, cc: message.cc.map(address), bcc: message.bcc.map(address), subject: message.subject, html: message.html ? dependencies.sanitizeHtml(message.html) : null, text: message.text ?? null, receivedAt: input.ingressReceivedAt, scope: scope, envelope: message.envelopeRecipients, replyTo: message.replyTo??[], inReplyTo: message.inReplyTo??null, references: message.references??[] });
   if (inserted && !inserted.rowCount) {
     const existing = (await dependencies.repository.findConcurrentCopy({ accountId: input.providerAccountId, externalId: message.externalMessageId, scope: scope })).rows[0];
     if (!existing) throw new Error("Inbound message was not persisted");
@@ -112,7 +113,7 @@ async function persistRoutedInbound(input: InboundInput, scope: string, routes: 
       await dependencies.uploads.put(file.objectKey, file.content, file.contentType);
     }
     await dependencies.unitOfWork.run(async client => {
-      if (!(await client.authorizeCompletion({ id: id })).rowCount) {
+      if (serviceId && !(await client.authorizeCompletion({ id: id })).rowCount) {
         throw new InboundTerminalError("Domain receiving permission was revoked", "DOMAIN_RECEIVE_NOT_AUTHORIZED");
       }
       const completed = await client.completeCopy({ id: id, rawKey: rawKey, token: token });
@@ -120,10 +121,10 @@ async function persistRoutedInbound(input: InboundInput, scope: string, routes: 
       for (const file of attachments) {
         const attachmentId=dependencies.id("ina");
         await client.insertAttachment({ id: attachmentId, messageId: id, fileName: file.fileName, contentType: file.contentType, sizeBytes: file.content.byteLength, objectKey: file.objectKey, contentId: file.contentId ?? null, digest: file.sha256 });
-        await client.registerAttachment(attachmentId,"inbound",route.service_id,file.sha256);
+        await client.registerAttachment(attachmentId,"inbound",serviceId,file.sha256);
       }
       await client.completeUploads( writtenKeys);
-      const callback = await client.subscribedCallbacks({ serviceId: route.service_id });
+      const callback = serviceId ? await client.subscribedCallbacks({ serviceId }) : { rows: [] };
       for (const {id:callbackEndpointId} of callback.rows) {
         const callbackId = dependencies.id("cbx");
         const payload = {
@@ -137,7 +138,7 @@ async function persistRoutedInbound(input: InboundInput, scope: string, routes: 
             ingressReceivedAt: receivedAt.toISOString(),
             readyAt: completed.rows[0].ready_at.toISOString(),
 
-            serviceId: route.service_id,
+            serviceId,
             envelopeRecipients: message.envelopeRecipients,
             messageId: message.messageId ?? null,
             replyTo: message.replyTo ?? [],

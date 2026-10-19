@@ -12,12 +12,11 @@ return {
     SELECT b.service_id,array_agg(DISTINCT recipient ORDER BY recipient) AS recipients
     FROM provider_webhook_endpoints e
     JOIN provider_accounts a ON a.id=e.provider_account_id AND a.status='active'
-    JOIN sending_domains d ON d.inbound_provider_account_id=a.id AND d.status='active'
+    CROSS JOIN unnest($2::text[]) recipient
+    JOIN sending_domains d ON d.domain=split_part(recipient,'@',2) AND d.status='active'
     JOIN service_domain_bindings b ON b.sending_domain_id=d.id AND b.receive_enabled
     JOIN services s ON s.id=b.service_id AND s.status='active'
-    CROSS JOIN unnest($2::text[]) recipient
     WHERE e.id=$1 AND e.provider_account_id=$3 AND e.status='active' AND e.security_configured
-      AND split_part(recipient,'@',2)=d.domain
     GROUP BY b.service_id ORDER BY b.service_id`, [input.endpointId, input.recipients, input.accountId]); },
     freezeReceipt(input: { accountId: string; externalId: string; routesJson: string; rawEventId: string }) { return client.query<Record<string, unknown>>(`INSERT INTO inbound_receipts(provider_account_id,external_message_id,routes,ingress_received_at)
       VALUES($1,$2,$3,COALESCE((SELECT received_at FROM raw_provider_events WHERE id=$4),clock_timestamp()))
@@ -30,7 +29,7 @@ return {
       ON CONFLICT(provider_account_id,external_message_id,delivery_scope) DO UPDATE SET external_message_id=EXCLUDED.external_message_id RETURNING id`, [input.id, input.accountId, input.rawEventId, input.externalId, input.messageId, input.from, input.to, input.cc, input.bcc, input.subject, input.html, input.text, input.reason, input.receivedAt, input.envelope, input.replyTo, input.inReplyTo, input.references, input.authorDate]); },
     allowedDomains(input: { serviceId: string }) { return client.query<{domain:string}>(`SELECT d.domain FROM sending_domains d JOIN service_domain_bindings b ON b.sending_domain_id=d.id AND b.service_id=$1 AND b.receive_enabled JOIN services s ON s.id=b.service_id AND s.status='active' WHERE d.status='active'`, [input.serviceId]); },
     findCopy(input: { accountId: string; externalId: string; scope: string }) { return client.query<{ id: string; status: string; content_purged_at: Date | null }>("SELECT id,status,content_purged_at FROM inbound_messages WHERE provider_account_id=$1 AND external_message_id=$2 AND delivery_scope=$3", [input.accountId, input.externalId, input.scope]); },
-    insertCopy(input: { id: string; serviceId: string; accountId: string; rawEventId: string; externalId: string; messageId: string | null; from: string; to: string[]; cc: string[]; bcc: string[]; subject: string; html: string | null; text: string | null; receivedAt: Date | undefined; scope: string; envelope: string[]; replyTo: string[]; inReplyTo: string | null; references: string[] }) { return client.query<Record<string, unknown>>(`INSERT INTO inbound_messages(id, service_id,
+    insertCopy(input: { id: string; serviceId: string | null; accountId: string; rawEventId: string; externalId: string; messageId: string | null; from: string; to: string[]; cc: string[]; bcc: string[]; subject: string; html: string | null; text: string | null; receivedAt: Date | undefined; scope: string; envelope: string[]; replyTo: string[]; inReplyTo: string | null; references: string[] }) { return client.query<Record<string, unknown>>(`INSERT INTO inbound_messages(id, service_id,
                                                              provider_account_id, raw_provider_event_id,
                                                              external_message_id, message_id, from_email, to_emails,
                                                              cc_emails, bcc_emails, subject, sanitized_html, text_body,

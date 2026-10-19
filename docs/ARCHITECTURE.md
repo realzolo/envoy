@@ -35,7 +35,7 @@ Modules import each other's `public.ts` or `contracts.ts`. A `policy.ts` facet m
 
 Service is the business isolation boundary. Its globally unique name, active/suspended status, domain bindings, callback and suppression management permission are configured independently. API keys belong to one Service and authenticate against its current status. Messages, inbound copies, files and business suppression rules carry only service ownership. Pausing a Service invalidates all its keys and prevents mail content access, inbound delivery and new outbound submission until it is resumed.
 
-Each domain selects one inbound provider account, or none to disable new inbound delivery. A `service_domain_bindings` row connects one Service to one exact domain. Its receive switch grants that Service a private copy and access to its retained mail; multiple Services may receive the same domain. Its optional outbound provider identity selects the single provider account used when that Service sends from the domain. A missing identity disables sending. Suppression scopes are global, Service, or a list within one Service; a Service can manage only its own rules when explicitly authorized.
+The verified webhook identifies the incoming provider account; no per-domain inbound provider selection is needed. A `service_domain_bindings` row connects one Service to one exact domain. Its receive switch grants that Service a private copy and access to its retained mail; multiple Services may receive the same domain. Its optional outbound provider identity selects the single provider account used when that Service sends from the domain. A missing identity disables sending. Suppression scopes are global, Service, or a list within one Service; a Service can manage only its own rules when explicitly authorized.
 
 ### Inbound
 
@@ -43,16 +43,17 @@ Each domain selects one inbound provider account, or none to disable new inbound
 flowchart LR
   P[Provider webhook] --> V[Verify signature and endpoint]
   V --> E[Read provider reported recipients]
-  E --> D[Match exact domain and its inbound provider]
+  E --> D[Match exact recipient domain]
   D --> B[Find all receiving Service bindings]
-  B --> R[Persist frozen receipt and route before 202]
-  R --> S1[Private copy for Service A]
-  R --> S2[Private copy for Service B]
+  B --> R[Freeze receipt and routes before 202]
+  R -->|No Service| A[Store in Envoy for administrators]
+  R -->|Service A| S1[Private copy for Service A]
+  R -->|Service B| S2[Private copy for Service B]
   S1 --> N1[Callback or polling]
   S2 --> N2[Callback or polling]
 ```
 
-The mailbox local part does not select a Service. Route ownership is frozen when the verified webhook is accepted, so later provider changes do not discard accepted mail. Resend uses `received_for` from the signed `email.received` event, falling back to its signed `to/cc/bcc` lists when absent. The worker fetches the body and attachments through the Resend API. All Services bound to a recipient domain receive separate copies.
+The mailbox local part does not select a Service. Route ownership is frozen when the verified webhook is accepted. Resend uses `received_for` from the signed `email.received` event, falling back to its signed `to/cc/bcc` lists when absent. The worker fetches the body and attachments through the Resend API. All active Services with Receive enabled for a recipient domain receive separate copies. If no Service matches, Envoy retains the message for administrators without forwarding it; this is a normal received state. Older `NO_RECEIVING_SERVICE` rejected records can be explicitly replayed after enabling Receive while their verified receipts are retained. Existing successful copies are never redistributed.
 
 ### Outbound
 
@@ -92,8 +93,9 @@ Accepting a message persists its message, recipient/submission state and Outbox 
 
 ## Ordered database upgrades
 
-This fresh-project baseline includes the complete application schema and outbound event stream in
-`db/migrations/001_initial.sql`. Future structure changes append contiguous SQL versions. The
+`db/migrations/001_initial.sql` is the original application baseline. The ordered V2 migration removes
+the per-domain inbound provider column while retaining existing domains, bindings and mail. Future structure
+changes append contiguous SQL versions. The
 SHA-256 manifest records each migration. `pnpm db:generate` writes a current `db/schema.sql` from typed definitions,
 native invariants and table/column descriptions; it checks exporter completeness and never modifies migration SQL.
 

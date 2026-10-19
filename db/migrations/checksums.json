@@ -2,5 +2,9 @@
   {
     "file": "001_initial.sql",
     "sha256": "610afb19e5ab5354979923951e5c4994c9735c79f3d0407baf96d03af8c2c9eb"
+  },
+  {
+    "file": "002_remove_inbound_provider_account.sql",
+    "sha256": "cde6d2445f584d067d47329d16b49846de547249892fd4c585e23edfb65b2b10"
   }
 ]

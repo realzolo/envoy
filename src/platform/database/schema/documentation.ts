@@ -57,8 +57,8 @@ export const schemaDocumentation = {
     expectedTopicArn: "Allowed SES SNS topic ARN used to restrict notification sources", ipAllowlist: "Allowed source IP addresses or CIDR ranges for providers requiring source address checks",
     createdAt: created, updatedAt: updated,
   } },
-  sendingDomains: { table: "Managed email domains shared by service bindings and assigned one inbound provider account", columns: {
-    id: "Unique email domain identifier", domain: "Globally unique normalized email domain", inboundProviderAccountId: "Provider account that receives mail for this domain; null disables inbound reception",
+  sendingDomains: { table: "Managed email domains shared by service bindings; inbound mail routes by recipient domain", columns: {
+    id: "Unique email domain identifier", domain: "Globally unique normalized email domain",
     status: "Domain status: active (available) or disabled", createdAt: created, updatedAt: updated,
   } },
   providerIdentities: { table: "Domain sending identities within provider accounts and their DNS verification status", columns: {

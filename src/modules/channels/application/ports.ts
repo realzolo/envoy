@@ -28,7 +28,6 @@ export interface ManagementRepository {
   findDomainByName(input:{domain:string}):Promise<RepositoryResult<FindDomainByNameRow>>;
   lockDomain(input:{id:string}):Promise<RepositoryResult<LockDomainRow>>;
   notifyDomainBindingsChanged(input:{domainId:string;receiveOnly:boolean}):Promise<void>;
-  setInboundProvider(input:{id:string;providerAccountId:string|null}):Promise<RepositoryResult<SetInboundProviderRow>>;
   findDomainIdentity(input:{sendingDomainId:string;providerAccountId:string}):Promise<RepositoryResult<FindDomainIdentityRow>>;
   insertDashboardIdentity(input:{id:string;sendingDomainId:string;providerAccountId:string}):Promise<RepositoryResult<InsertDashboardIdentityRow>>;
   insertManagedIdentity(input:{id:string;sendingDomainId:string;providerAccountId:string;externalIdentityId:string;status:string;dnsRecords:string}):Promise<RepositoryResult<InsertManagedIdentityRow>>;
@@ -75,8 +74,7 @@ export type RecordWebhookSecurityUpdateRow=never;
 export type SetWebhookStatusRow=never;
 export type InsertDomainRow={ id: string };
 export type FindDomainByNameRow={ id: string };
-export type LockDomainRow={ id:string;status:string;inbound_provider_account_id:string|null };
-export type SetInboundProviderRow={ id: string };
+export type LockDomainRow={ id:string;status:string };
 export type FindDomainIdentityRow={ id: string; status: string };
 export type InsertDashboardIdentityRow=never;
 export type InsertManagedIdentityRow=never;

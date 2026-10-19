@@ -2,7 +2,7 @@
 import { ActionButton,ActionForm,type Data,DnsRecords,Field,formValue,type FormValues,formValues,Notice,Panel,record,requiredRule,type Row,rows,StatusTag,Submit,useAction,value } from "@/components/admin-console-shared";
 import styles from "@/components/admin-views.module.css";
 import { AddDomainProvider } from "@/features/outbound/config-editors";
-import { Button,Card,Checkbox,Collapse,Grid,Input,Select,Space,Typography } from "@arco-design/web-react";
+import { Button,Card,Checkbox,Collapse,Grid,Input,Space,Typography } from "@arco-design/web-react";
 import { IconRefresh,IconSettings } from "@arco-design/web-react/icon";
 import { useState } from "react";
 export function Domains({ data }: { data: Data }) {
@@ -14,8 +14,6 @@ export function Domains({ data }: { data: Data }) {
   const managedTypes = new Set(descriptors.filter(item => record(item.capabilities).domainManagement === true).map(item => value(item, "type")));
   const allProviders = rows(data.providers);
   const providers = allProviders.filter(provider => provider.status === "active");
-  const inboundTypes = new Set(descriptors.filter(item => record(item.capabilities).inboundEnvelopeRecipients === true).map(item => value(item,"type")));
-  const inboundProviders = providers.filter(provider => inboundTypes.has(value(provider,"type")));
 
   async function submit(values: FormValues) {
     const allowedAccountIds = new Set(providers.filter(provider => {
@@ -24,7 +22,7 @@ export function Domains({ data }: { data: Data }) {
       return !mailgunDomain || !draftDomain.trim() || mailgunDomain === draftDomain.trim().toLowerCase();
     }).map(provider => value(provider, "id")));
     try {
-      await action.run({method:"POST",path:`/api/admin/domains`,payload:{domain: formValue(values, "domain"), accountIds: formValues(values, "accountIds").filter(id => allowedAccountIds.has(id)),inboundProviderAccountId:formValue(values,"inboundProviderAccountId") || null}});
+      await action.run({method:"POST",path:`/api/admin/domains`,payload:{domain: formValue(values, "domain"), accountIds: formValues(values, "accountIds").filter(id => allowedAccountIds.has(id))}});
     } catch {
       // Inline notice owns failures from this request.
     }
@@ -48,11 +46,6 @@ export function Domains({ data }: { data: Data }) {
             <Grid.Col xs={24}>
               <Field field="domain" label="Domain" required rules={requiredRule}>
                 <Input placeholder="mail.example.com" allowClear />
-              </Field>
-            </Grid.Col>
-            <Grid.Col xs={24}>
-              <Field field="inboundProviderAccountId" label="Inbound provider">
-                <Select allowClear placeholder="No inbound mail" options={inboundProviders.map(provider => ({value:value(provider,"id"),label:value(provider,"name")}))} />
               </Field>
             </Grid.Col>
             <Grid.Col xs={24}>
@@ -92,7 +85,13 @@ export function Domains({ data }: { data: Data }) {
           title={<Typography.Text code>{value(domain, "domain")}</Typography.Text>}
           extra={<Space wrap><Button size="small" onClick={() => setAddingProvider(domain)}>Add provider</Button><ActionButton body={{method:"PATCH",path:`/api/admin/domains/${encodeURIComponent(String(domain.id))}`,payload:{id: domain.id, enabled: domain.status !== "active"}}}>{domain.status === "active" ? "Disable" : "Enable"}</ActionButton></Space>}
         >
-          <InboundProviderControl domain={domain} providers={inboundProviders} />
+          <Space wrap style={{ marginBottom: 16 }}>
+            <Typography.Text>Inbound:</Typography.Text>
+            {domain.status !== "active" ? <StatusTag>Disabled</StatusTag> : Number(domain.receiving_service_count)
+              ? <Typography.Text>{Number(domain.receiving_service_count)} receiving Service{Number(domain.receiving_service_count) === 1 ? "" : "s"}</Typography.Text>
+              : <Typography.Text type="secondary">No receiving Service</Typography.Text>}
+            {!Number(domain.receiving_service_count) && <Button href="/api-keys" type="text" size="small">Configure Service</Button>}
+          </Space>
           <Collapse bordered>
             {rows(domain.identities).map(identity => (
               <Collapse.Item
@@ -114,20 +113,4 @@ export function Domains({ data }: { data: Data }) {
       {addingProvider && <AddDomainProvider key={value(addingProvider, "id")} domain={addingProvider} providers={providers} onClose={() => setAddingProvider(null)} />}
     </Space>
   );
-}
-
-function InboundProviderControl({domain,providers}:{domain:Row;providers:Row[]}) {
-  const action=useAction();
-  const selected=value(domain,"inbound_provider_account_id");
-  return <Space direction="vertical" size="small" style={{width:"100%",marginBottom:16}}>
-    <Space wrap>
-      <Typography.Text>Inbound provider</Typography.Text>
-      <Select aria-label={`Inbound provider for ${value(domain,"domain")}`} allowClear
-        style={{minWidth:220}} value={selected || undefined} placeholder="No inbound mail"
-        options={providers.map(provider => ({value:value(provider,"id"),label:value(provider,"name")}))}
-        onChange={accountId => void action.run({method:"PUT",path:`/api/admin/domains/${encodeURIComponent(value(domain,"id"))}`,payload:{inboundProviderAccountId:accountId ? String(accountId) : null}}).catch(() => {})} />
-      {selected && <StatusTag>{domain.inbound_ready ? "Ready" : "Webhook setup required"}</StatusTag>}
-    </Space>
-    <Notice notice={action.notice} />
-  </Space>;
 }

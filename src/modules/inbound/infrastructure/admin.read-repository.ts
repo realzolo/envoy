@@ -2,7 +2,7 @@ import {query} from '@/platform/database';
 import type {RawEventDto,InboundMessageDto} from '@/modules/admin/contracts';
 export const inboundAdminReads={rawEvents: () => query<RawEventDto>(`SELECT r.id,r.native_type,r.provider_event_id,r.signature_valid,r.replay_valid,r.received_at,r.processed_at,r.processing_error,r.processing_attempt_count,r.terminated_at,r.content_purged_at,r.raw_payload_purged_at,pa.name AS account,pa.type
     FROM raw_provider_events r JOIN provider_accounts pa ON pa.id=r.provider_account_id ORDER BY r.received_at DESC LIMIT 200`),
-inbound: () => query<InboundMessageDto>(`SELECT i.id,i.service_id,i.content_purged_at,i.from_email,i.to_emails,i.subject,i.status,i.created_at AS received_at,i.author_date,i.ingress_received_at,i.ready_at,s.name AS service,count(a.id) AS attachment_count
+inbound: () => query<InboundMessageDto>(`SELECT i.id,i.service_id,i.content_purged_at,i.from_email,i.to_emails,i.subject,i.status,i.rejection_reason,i.created_at AS received_at,i.author_date,i.ingress_received_at,i.ready_at,s.name AS service,count(a.id) AS attachment_count
     FROM inbound_messages i
     LEFT JOIN services s ON s.id=i.service_id
     LEFT JOIN inbound_attachments a ON a.inbound_message_id=i.id

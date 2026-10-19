@@ -10,15 +10,14 @@ export const channelsAdminReads={providers: () => query<ProviderAccountDto>(`SEL
     JOIN provider_webhook_endpoints e ON e.provider_account_id=a.id
     ORDER BY a.name`),
 domains: () => query<DomainDto>(`SELECT sd.id,sd.domain,sd.status,
-    sd.inbound_provider_account_id,ia.name AS inbound_provider_account,
-    COALESCE(ia.status='active' AND ie.status='active' AND ie.security_configured,false) AS inbound_ready,
+    (SELECT count(*)::int FROM service_domain_bindings b
+      JOIN services s ON s.id=b.service_id AND s.status='active'
+      WHERE b.sending_domain_id=sd.id AND b.receive_enabled) AS receiving_service_count,
     json_agg(json_build_object('id',pi.id,'accountId',pa.id,'account',pa.name,'type',pa.type,'accountStatus',pa.status,'status',pi.status,'externalId',pi.external_identity_id,'dnsRecords',pi.dns_records,'lastCheckedAt',pi.last_checked_at) ORDER BY pa.name)
       FILTER(WHERE pi.id IS NOT NULL) AS identities
     FROM sending_domains sd
-    LEFT JOIN provider_accounts ia ON ia.id=sd.inbound_provider_account_id
-    LEFT JOIN provider_webhook_endpoints ie ON ie.provider_account_id=ia.id
     LEFT JOIN provider_identities pi ON pi.sending_domain_id=sd.id
     LEFT JOIN provider_accounts pa ON pa.id=pi.provider_account_id
-    GROUP BY sd.id,ia.id,ie.id ORDER BY sd.domain`),
+    GROUP BY sd.id ORDER BY sd.domain`),
 webhooks: () => query<ProviderWebhookDto>(`SELECT e.id,e.opaque_token,e.status,e.security_configured,e.expected_topic_arn,e.ip_allowlist,e.created_at,pa.id AS provider_account_id,pa.name AS account,pa.type
     FROM provider_webhook_endpoints e JOIN provider_accounts pa ON pa.id=e.provider_account_id ORDER BY e.created_at DESC`)};

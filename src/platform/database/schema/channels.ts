@@ -73,17 +73,11 @@ export const providerWebhookEndpoints = pgTable("provider_webhook_endpoints", {
 export const sendingDomains = pgTable("sending_domains", {
 	id: text().primaryKey().notNull(),
 	domain: text().notNull(),
-	inboundProviderAccountId: text("inbound_provider_account_id"),
 	status: text().default('active').notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table): PgTableExtraConfigValue[] => [
 	unique("sending_domains_domain_key").on(table.domain),
-	foreignKey({
-			columns: [table.inboundProviderAccountId],
-			foreignColumns: [providerAccounts.id],
-			name: "sending_domains_inbound_provider_account_id_fkey"
-		}).onDelete("restrict"),
 	check("sending_domains_status_check", sql`status = ANY (ARRAY['active'::text, 'disabled'::text])`),
 ]);
 

@@ -23,9 +23,9 @@ export function Inbound({ data }: { data: Data }) {
               { title: "From", render: (_, item) => value(item, "from_email") },
               { title: "To", render: (_, item) => Array.isArray(item.to_emails) ? item.to_emails.join(", ") : "" },
               { title: "Subject", render: (_, item) => <Button type="text" onClick={() => setSelectedId(value(item, "id"))}>{value(item, "subject") || "(No subject)"}</Button> },
-              { title: "Service / visibility", render: (_, item) => <Space direction="vertical" size="mini"><Typography.Text>{value(item, "service") || "No receiving Service"}</Typography.Text>{!item.service_id && <Typography.Text type="secondary">Administrator only</Typography.Text>}</Space> },
+              { title: "Service / visibility", render: (_, item) => <Space direction="vertical" size="mini"><Typography.Text>{value(item, "service") || "Not forwarded"}</Typography.Text>{!item.service_id && <Typography.Text type="secondary">Envoy only</Typography.Text>}</Space> },
               { title: "Attachments", render: (_, item) => value(item, "attachment_count") },
-              { title: "Status", render: (_, item) => <StatusTag>{value(item, "status")}</StatusTag> },
+              { title: "Status", render: (_, item) => <StatusTag>{!item.service_id && item.status === "ready" ? "Received" : item.rejection_reason === "NO_RECEIVING_SERVICE" ? "Previously not forwarded" : value(item, "status")}</StatusTag> },
               { title: "Stored", render: (_, item) => date(item.received_at) },
             ]}
           />
@@ -39,7 +39,7 @@ export function Inbound({ data }: { data: Data }) {
         <div className={styles.section}>
         <Typography.Text bold>{value(item, "subject") || "(No subject)"}</Typography.Text>
         <Descriptions column={1} layout="vertical" tableLayout="fixed" data={[
-          { label: "Status", value: <StatusTag>{value(item, "status")}</StatusTag> },
+          { label: "Status", value: <StatusTag>{!item.service_id && item.status === "ready" ? "Received; not forwarded" : item.rejection_reason === "NO_RECEIVING_SERVICE" ? "Previously not forwarded" : value(item, "status")}</StatusTag> },
           { label: "Stored", value: date(item.received_at) },
           { label: "Author Date", value: item.author_date ? date(item.author_date) : "Not supplied / invalid" },
           { label: "Trusted ingress", value: item.ingress_received_at ? date(item.ingress_received_at) : "Unknown" },
@@ -52,10 +52,12 @@ export function Inbound({ data }: { data: Data }) {
           { label: "References", value: Array.isArray(item.references_ids) ? item.references_ids.join(" ") : "" },
           { label: "From", value: value(item, "from_email") },
           { label: "To", value: Array.isArray(item.to_emails) ? item.to_emails.join(", ") : "" },
-          { label: "Service", value: value(item, "service") || "Administrator only" },
+          { label: "Service", value: value(item, "service") || "Envoy only; not forwarded" },
         ]} />
         </div>
-        {item.rejection_reason ? <Alert type="error" content={value(item, "rejection_reason")} showIcon /> : null}
+        {item.rejection_reason ? <Alert type={item.rejection_reason === "NO_RECEIVING_SERVICE" ? "info" : "error"} content={item.rejection_reason === "NO_RECEIVING_SERVICE"
+          ? "This older mail was marked rejected because no Service was receiving its domain. After enabling Receive, replay its Provider Event while the verified receipt is retained. New mail without a receiving Service remains available in Envoy."
+          : value(item, "rejection_reason")} showIcon /> : null}
         {item.content_purged_at ? <Alert type="info" content="Message content was removed under the retention policy." /> : <>
           <Collapse defaultActiveKey={["text"]}>
             <Collapse.Item name="text" header="Plain-text content"><pre className={styles.code}>{value(item, "text_body") || "No plain-text content."}</pre></Collapse.Item>

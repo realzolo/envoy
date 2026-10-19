@@ -100,7 +100,6 @@ CREATE TABLE "provider_webhook_endpoints" (
 CREATE TABLE "sending_domains" (
 	"id" text PRIMARY KEY NOT NULL,
 	"domain" text NOT NULL,
-	"inbound_provider_account_id" text,
 	"status" text DEFAULT 'active' NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
@@ -552,7 +551,6 @@ ALTER TABLE "provider_credentials" ADD CONSTRAINT "provider_credentials_provider
 ALTER TABLE "provider_identities" ADD CONSTRAINT "provider_identities_sending_domain_id_fkey" FOREIGN KEY ("sending_domain_id") REFERENCES "public"."sending_domains"("id") ON DELETE cascade ON UPDATE no action;
 ALTER TABLE "provider_identities" ADD CONSTRAINT "provider_identities_provider_account_id_fkey" FOREIGN KEY ("provider_account_id") REFERENCES "public"."provider_accounts"("id") ON DELETE cascade ON UPDATE no action;
 ALTER TABLE "provider_webhook_endpoints" ADD CONSTRAINT "provider_webhook_endpoints_provider_account_id_fkey" FOREIGN KEY ("provider_account_id") REFERENCES "public"."provider_accounts"("id") ON DELETE cascade ON UPDATE no action;
-ALTER TABLE "sending_domains" ADD CONSTRAINT "sending_domains_inbound_provider_account_id_fkey" FOREIGN KEY ("inbound_provider_account_id") REFERENCES "public"."provider_accounts"("id") ON DELETE restrict ON UPDATE no action;
 ALTER TABLE "service_domain_bindings" ADD CONSTRAINT "service_domain_bindings_service_id_fkey" FOREIGN KEY ("service_id") REFERENCES "public"."services"("id") ON DELETE cascade ON UPDATE no action;
 ALTER TABLE "service_domain_bindings" ADD CONSTRAINT "service_domain_bindings_sending_domain_id_fkey" FOREIGN KEY ("sending_domain_id") REFERENCES "public"."sending_domains"("id") ON DELETE cascade ON UPDATE no action;
 ALTER TABLE "service_domain_bindings" ADD CONSTRAINT "service_domain_bindings_outbound_identity_domain_fkey" FOREIGN KEY ("outbound_provider_identity_id","sending_domain_id") REFERENCES "public"."provider_identities"("id","sending_domain_id") ON DELETE restrict ON UPDATE no action;
@@ -999,10 +997,9 @@ COMMENT ON COLUMN "request_logs"."duration_ms" IS 'Request processing duration i
 COMMENT ON COLUMN "request_logs"."actor" IS 'Request actor identifier; null when unknown';
 COMMENT ON COLUMN "request_logs"."details" IS 'Request diagnostic JSON containing only permitted redacted information; Authorization, credentials and sensitive bodies are forbidden';
 COMMENT ON COLUMN "request_logs"."created_at" IS 'Record creation time (timestamptz); defaults to the database transaction start time, now()';
-COMMENT ON TABLE "sending_domains" IS 'Managed email domains shared by service bindings and assigned one inbound provider account';
+COMMENT ON TABLE "sending_domains" IS 'Managed email domains shared by service bindings; inbound mail routes by recipient domain';
 COMMENT ON COLUMN "sending_domains"."id" IS 'Unique email domain identifier';
 COMMENT ON COLUMN "sending_domains"."domain" IS 'Globally unique normalized email domain';
-COMMENT ON COLUMN "sending_domains"."inbound_provider_account_id" IS 'Provider account that receives mail for this domain; null disables inbound reception';
 COMMENT ON COLUMN "sending_domains"."status" IS 'Domain status: active (available) or disabled';
 COMMENT ON COLUMN "sending_domains"."created_at" IS 'Record creation time (timestamptz); defaults to the database transaction start time, now()';
 COMMENT ON COLUMN "sending_domains"."updated_at" IS 'Last update time (timestamptz); explicitly maintained by business writes, defaults to now()';

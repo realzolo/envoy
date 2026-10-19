@@ -52,13 +52,29 @@ describe("inbound application without a database", () => {
     expect(repository.rejectCopy).toHaveBeenCalledWith(expect.objectContaining({ reason: "INBOUND_MESSAGE_TOO_LARGE" }));
     expect(uploads.put).not.toHaveBeenCalled();
   });
-  it("quarantines receipts with no receiving Service", async () => {
+  it("stores a ready administrator copy with attachments when no Service receives", async () => {
     vi.mocked(repository.findDispatches).mockResolvedValue({ rows: [], rowCount: 0 });
     vi.mocked(repository.readReceipt).mockResolvedValue({ rows: [{ routes: [], terminated_at: null, ingress_received_at: now }], rowCount: 1 });
     vi.mocked(repository.findTombstone).mockResolvedValue({ rows: [], rowCount: 0 });
-    vi.mocked(repository.insertRejected).mockResolvedValue({ rows: [{ id: "inb_test" }], rowCount: 1 });
+    await expect(persistInbound({ ...input(), message: { ...message, attachments: [
+      { fileName: "note.txt", contentType: "text/plain", content: Buffer.from("hello") },
+    ] } })).resolves.toBe("inb_test");
+    expect(repository.insertCopy).toHaveBeenCalledWith(expect.objectContaining({ serviceId: null, scope: "quarantine" }));
+    expect(repository.completeCopy).toHaveBeenCalled();
+    expect(repository.registerAttachment).toHaveBeenCalledWith("ina_test", "inbound", null, "digest");
+    expect(repository.subscribedCallbacks).not.toHaveBeenCalled();
+    expect(repository.insertRejected).not.toHaveBeenCalled();
+    expect(uploads.put).toHaveBeenCalledTimes(2);
+  });
+  it("retries a scanning administrator copy after temporary storage failure", async () => {
+    vi.mocked(repository.readReceipt).mockResolvedValue({ rows: [{ routes: [], terminated_at: null, ingress_received_at: now }], rowCount: 1 });
+    vi.mocked(repository.findCopy)
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+      .mockResolvedValueOnce({ rows: [{ id: "inb_test", status: "scanning", content_purged_at: null }], rowCount: 1 });
+    uploads.put.mockRejectedValueOnce(new Error("temporary outage"));
+    await expect(persistInbound(input())).rejects.toThrow("temporary outage");
     await expect(persistInbound(input())).resolves.toBe("inb_test");
-    expect(repository.insertRejected).toHaveBeenCalledWith(expect.objectContaining({ reason: "NO_RECEIVING_SERVICE" }));
-    expect(uploads.put).not.toHaveBeenCalled();
+    expect(repository.insertCopy).toHaveBeenCalledTimes(1);
+    expect(repository.completeCopy).toHaveBeenCalledTimes(1);
   });
 });

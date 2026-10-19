@@ -79,9 +79,9 @@ describe("inbound provider ownership and RFC fields", () => {
       else expect(mail.authorDate).toBeNull();
     } finally{s3.restore();}
   });
-  it("does not offer Resend as an inbound channel without authenticated SMTP recipients", () => {
+  it("offers Resend inbound routing through its verified webhook", () => {
     const adapter = providerRegistry("resend");
-    expect(adapter.descriptor.capabilities.inboundMode).toBe("none");
-    expect(adapter.inbound).toBeUndefined();
+    expect(adapter.descriptor.capabilities.inboundMode).toBe("webhook-fetch");
+    expect(adapter.inbound).toBeDefined();
   });
 });

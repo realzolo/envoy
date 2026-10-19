@@ -34,7 +34,6 @@ const identifierSchema = z.string().trim().min(1).max(160);
 const domainInputSchema = z.object({
   domain: domainNameSchema,
   accountIds: z.array(identifierSchema).max(20),
-  inboundProviderAccountId: identifierSchema.nullable().optional(),
 }).strict().superRefine((input, context) => {
   const accounts = new Set<string>();
   input.accountIds.forEach((accountId, index) => {
@@ -164,11 +163,9 @@ async function toggleWebhookEndpoint(id: string, enabled: boolean, actor: string
 async function createDomain(input: {
   domain: string;
   accountIds: string[];
-  inboundProviderAccountId?: string | null;
 }, actor: string) {
   const validated = domainInputSchema.parse(input);
   const domain = validated.domain;
-  if (validated.inboundProviderAccountId) await validateInboundProvider(validated.inboundProviderAccountId);
   const accounts = await Promise.all(validated.accountIds.map(async accountId => {
     const account = await loadProviderAccount(accountId);
     return { accountId, account, identity: account.module.identity }
@@ -179,9 +176,6 @@ async function createDomain(input: {
     }
   }
   const existingDomain = (await repository.findDomainByName({domain})).rows[0];
-  if (existingDomain && validated.inboundProviderAccountId !== undefined) {
-    throw new Error("Domain already registered. Change its inbound provider on the domain page.");
-  }
   type PreparedIdentity =
     | { accountId: string; kind: "existing" }
     | { accountId: string; kind: "dashboard" }
@@ -205,12 +199,6 @@ async function createDomain(input: {
   return unitOfWork.run(async client => {
     const inserted = (await client.insertDomain({id:createId("sd"),domain})).rows[0];
     const domainId = inserted?.id ?? (await client.findDomainByName({domain})).rows[0].id;
-    if (!inserted && validated.inboundProviderAccountId !== undefined) {
-      throw new Error("Domain already registered. Change its inbound provider on the domain page.");
-    }
-    if (inserted && validated.inboundProviderAccountId) {
-      await client.setInboundProvider({id:domainId,providerAccountId:validated.inboundProviderAccountId});
-    }
     const results = [];
     for (const setup of prepared) {
       const {accountId} = setup;
@@ -231,24 +219,6 @@ async function createDomain(input: {
     }
     await client.recordAudit({actor,action:"sending_domain.create",resourceType:"sending_domain",resourceId:domainId,details:{domain,identities:results}});
     return { domainId, identities: results }
-  });
-}
-async function validateInboundProvider(accountId: string) {
-  const account = await loadProviderAccount(accountId);
-  if (!account.module.descriptor.capabilities.inboundEnvelopeRecipients) {
-    throw new Error("This provider does not supply recipients for inbound routing");
-  }
-}
-async function setDomainInboundProvider(id: string, providerAccountId: string | null, actor: string) {
-  const accountId = providerAccountId === null ? null : identifierSchema.parse(providerAccountId);
-  if (accountId) await validateInboundProvider(accountId);
-  await unitOfWork.run(async client => {
-    const current = (await client.lockDomain({id})).rows[0];
-    if (!current) throw new Error("Domain not found");
-    if (current.inbound_provider_account_id === accountId) return;
-    await client.setInboundProvider({id,providerAccountId:accountId});
-    await client.notifyDomainBindingsChanged({domainId:id,receiveOnly:true});
-    await client.recordAudit({actor,action:"sending_domain.inbound_provider_update",resourceType:"sending_domain",resourceId:id,details:{providerAccountId:accountId}});
   });
 }
 async function toggleDomain(id: string, enabled: boolean, actor: string) {
@@ -288,5 +258,5 @@ async function toggleIdentity(id: string, enabled: boolean, actor: string) {
   await audit(actor, "provider_identity.toggle", "provider_identity", id, { enabled })
 }
 
-return {createProviderAccount,testProviderAccount,toggleProvider,updateProviderQuota,rotateProviderCredential,configureProviderWebhook,toggleWebhookEndpoint,createDomain,setDomainInboundProvider,toggleDomain,refreshIdentity,toggleIdentity};
+return {createProviderAccount,testProviderAccount,toggleProvider,updateProviderQuota,rotateProviderCredential,configureProviderWebhook,toggleWebhookEndpoint,createDomain,toggleDomain,refreshIdentity,toggleIdentity};
 }

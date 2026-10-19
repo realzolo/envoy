@@ -47,26 +47,14 @@ describe("historical delivery search", () => {
 import { sendTestMessage } from "@/modules/outbound/public";
 import { createMessageSchema } from "@/lib/contracts";
 import { getDeliveryDetail, messageComposerData } from "@/server/admin-queries";
-import { setDomainInboundProvider } from "@/modules/channels/public";
-import { discoverMail } from "@/modules/identity/public";
 
 describe("native admin mail", () => {
-  it("reflects inbound provider changes in domain settings and Service discovery", async () => {
-    try {
-      await setDomainInboundProvider("sd_atlas",null,"test-admin");
-      const disabled=await adminData("domains");
-      expect(disabled.domains?.find(domain=>domain.id==="sd_atlas")?.inbound_provider_account_id).toBeNull();
-      const unavailable=await discoverMail({serviceId:"svc_atlas_auth",serviceName:"Atlas Auth",rateLimitPerMinute:60});
-      const binding = unavailable.domains.find(domain=>domain.id==="sd_atlas");
-      expect(binding?.permissions.receive).toBe(true);
-      expect(binding?.receiving.state).toBe("unavailable");
-    } finally {
-      await setDomainInboundProvider("sd_atlas","pa_mock","test-admin");
-    }
-    const enabled=await adminData("domains");
-    expect(enabled.domains?.find(domain=>domain.id==="sd_atlas")).toMatchObject({inbound_provider_account_id:"pa_mock",inbound_ready:true});
-    const available=await discoverMail({serviceId:"svc_atlas_auth",serviceName:"Atlas Auth",rateLimitPerMinute:60});
-    expect(available.domains.find(domain=>domain.id==="sd_atlas")?.receiving.state).toBe("configured");
+  it("shows receiving Service count without domain-level provider configuration", async () => {
+    const data=await adminData("domains");
+    const domain=data.domains?.find(item=>item.id==="sd_atlas");
+    expect(domain?.receiving_service_count).toBeGreaterThan(0);
+    expect(domain).not.toHaveProperty("inbound_provider_account_id");
+    expect(domain).not.toHaveProperty("inbound_ready");
   });
 
   it("accepts manually entered mail parameters and retains recipient roles in queries", async () => {

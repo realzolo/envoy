@@ -29,7 +29,7 @@ Use a direct or session-pooled connection and reserve the documented connection 
 | API rejects a request before message creation | Save `requestId` and query `/api/v1/requests/{requestId}` with the same service credential. Check field errors and sender authorization. |
 | Messages remain queued or deferred | Check structured delivery errors and submission attempts, Worker heartbeat/logs, overdue work, the Service-domain binding, its verified outbound provider identity, and provider account health. |
 | Provider webhook is rejected | Verify the provider event URL, provider-specific signature material, allowed source configuration, and server clock. For Postmark, use the credential-bearing URL generated when Basic Auth is saved. |
-| Resend shows received mail but Inbound is empty | Confirm the Resend webhook subscribes to `email.received`, its Provider Event is verified, the domain selects that Resend account as Inbound provider, and at least one active Service binding has Receive enabled. Check Worker processing errors. Previously processed events can be replayed from Provider Events after configuration only while their verified receipts are retained. |
+| Resend shows received mail but no Service sees it | Confirm the Resend webhook subscribes to `email.received`, its Provider Event is verified, the recipient domain is registered and active, and at least one active Service binding has Receive enabled. An Inbound row marked Received / Not forwarded means Envoy retained it but had no receiving Service; this is normal. Older `NO_RECEIVING_SERVICE` rejected rows can be replayed after enabling Receive while their verified receipts are retained. |
 | Outbound callback delivery fails | Inspect the event callback endpoint URL, signing secret, consumer response, and dead-letter/replay state in the operations console. |
 | Credentials cannot be read after deployment | Verify that `ENVOY_KEK_BASE64`, `ENVOY_KEK_VERSION`, and any `ENVOY_KEK_KEYRING_JSON` entries match the keys used to encrypt existing envelopes. |
 
@@ -70,9 +70,9 @@ Configure these resources in Envoy, not in each business system:
 2. **Provider Accounts / Domains**: associate provider identities and retrieve/present available DNS records.
    The domain administrator publishes them on the actual DNS platform. Refresh the result in Envoy. Provider-specific
    workflows stay with Envoy operators; sending-domain verification is not proof that inbound MX/rules work.
-3. **Domains**: assign one inbound provider account per domain and configure its receiving MX/provider rules. An empty
-   inbound provider disables receiving for that domain. Domain matching is case normalized and exact; every local part
-   belongs to the domain scope. Provider verification for sending does not establish inbound readiness.
+3. **Domains**: register the exact domain and configure its receiving MX/provider rules in the provider. The verified
+   webhook identifies the incoming provider account automatically. Domain matching is case normalized and exact; every
+   local part belongs to the domain scope. Provider verification for sending does not establish inbound readiness.
 4. **Services → Edit configuration**: bind each needed domain. Enable receiving to give that Service a private inbound
    copy, and select one verified outbound provider identity to enable sending. Leave either direction unset to disable
    it. Multiple Services can receive the same domain; each Service chooses its outbound identity independently.
@@ -84,8 +84,8 @@ Configure these resources in Envoy, not in each business system:
    Inbound and outbound events use that same endpoint automatically. Give the caller its callback connection
    secret. Callback retries/replay acknowledge transport receipt, never completed business work.
 
-Use `/api/v1/capabilities` with the caller's service key to review `mail`: sender configuration, inbound provider
-configuration, canonical send facts, actual inbound observation and callback delivery are separate. `null` evidence and
+Use `/api/v1/capabilities` with the caller's service key to review `mail`: sender configuration, receiving permission,
+provider webhook availability, actual inbound observation and callback delivery are separate. `null` evidence and
 `unknown` external/runtime states mean unverified; do not relabel them as success. Provider errors/DNS records are
 operator diagnostics; callers receive stable reason codes and Envoy request/resource IDs.
 
@@ -106,16 +106,17 @@ webhook verification is configured, but API acceptance alone does not establish 
 
 The Inbound detail drawer distinguishes the Envoy ID, RFC Message-ID, provider-reported recipients, standard reply/thread fields,
 and the recipient domains matched for each private Service copy. Inspect the full verified raw provider event when diagnosing
-quarantined mail. For Resend, select the Resend account as the domain's **Inbound provider** and enable receiving on each
-Service binding that should get a copy. The signed `email.received` webhook supplies recipients; Envoy retrieves the
+quarantined mail. For Resend, enable receiving on each Service binding that should get a copy. The signed
+`email.received` webhook supplies recipients; Envoy retrieves the
 message body and attachments through the Resend API. Resend's `received_for` comes from a `Received` header; if missing,
 Envoy uses the webhook's `to/cc/bcc` fields. Its recipient metadata may differ from the SMTP envelope.
 
 ## Authoritative schema
 
-The fresh-project `001_initial.sql` includes the full application schema and both change streams. Rebuild any database
-initialized with an earlier prelaunch V1 checksum before running setup for this revision. Future changes append
-contiguous versions and checksums. `pnpm db:generate` writes the typed `db/schema.sql` snapshot, and `pnpm db:check`
+`001_initial.sql` is the original baseline; `002_remove_inbound_provider_account.sql` removes the domain-level inbound
+provider selection without deleting domain, Service binding or mail data. Run the ordered V2 upgrade before deploying
+the matching Web and Worker build. Future changes append contiguous versions and checksums. `pnpm db:generate` writes
+the typed `db/schema.sql` snapshot, and `pnpm db:check`
 verifies it and all migration checksums. Setup serializes migrations, validates the recorded catalog, applies missing
 versions and records checksums in `envoy_meta.migrations` atomically. A nonempty unjournaled application schema and any
 catalog drift are rejected without repair or deletion. BullMQ manages its independent schema. Run setup successfully
@@ -133,8 +134,10 @@ only the intended dead letters. HTTP delivery success never changes business con
 
 The first durable inbound dispatch plan is frozen at normalization. Each private copy has its own claim, attachments and
 callbacks; one failed copy does not prevent the others from progressing. An interrupted raw-event job retries only that
-plan. Adding Service-domain bindings does not redistribute history. There is no automatic or implicit historical redistribution operation;
-any future operator redistribution feature must use a separate audited decision and preserve purge/permission boundaries.
+plan. Mail with no matching Service remains available to administrators without forwarding or a callback. Adding
+Service-domain bindings does not automatically redistribute history. For an older `NO_RECEIVING_SERVICE` rejected record
+whose original plan had no routes, replay the raw Provider Event after enabling Receive. This explicit action is available
+only while the verified receipt remains; an event with successful copies cannot be expanded by replay.
 
 Run `pnpm data:cleanup --apply` regularly for object deletion intents and the 90-day inbound change-prefix cleanup even
 when content age policies are unset. Preview remains `pnpm data:cleanup`. Monitor failed deletion intents and consumer

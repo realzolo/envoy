@@ -33,7 +33,7 @@ async function catalog(client: PoolClient, namespace: string) {
       WHERE n.nspname=$1
     UNION ALL
     SELECT jsonb_build_object('kind','column','table',c.relname,'name',a.attname,
-      'position',a.attnum,'type',format_type(a.atttypid,a.atttypmod),'required',a.attnotnull,'description',col_description(c.oid,a.attnum),
+      'position',row_number() OVER (PARTITION BY c.oid ORDER BY a.attnum),'type',format_type(a.atttypid,a.atttypmod),'required',a.attnotnull,'description',col_description(c.oid,a.attnum),
       'default',pg_get_expr(d.adbin,d.adrelid),'identity',a.attidentity,'generated',a.attgenerated)
       FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid JOIN pg_namespace n ON n.oid=c.relnamespace
       LEFT JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum
