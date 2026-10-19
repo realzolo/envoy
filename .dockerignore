@@ -12,6 +12,7 @@ docs
 tests
 scripts/*
 !scripts/migrate.ts
+!scripts/require-production-storage.sh
 docker-compose.yml
 docker-compose.example.yml
 README.md

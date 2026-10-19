@@ -128,7 +128,7 @@ export const submissionAttemptSchema = z.object({
   recipients: z.array(z.object({ deliveryId: z.string(), email: z.string(), role: z.enum(["to", "cc", "bcc"]) })),
 });
 export const attachmentUsageSchema = z.object({
-  state:z.enum(["processing","usable","unavailable"]),safetyState:z.enum(["pending","scanning","clean","malicious","unavailable","unscanned","purged","blocked"]),processing:z.boolean(),canSend:z.boolean(),canDownload:z.boolean(),
+  state:z.enum(["processing","usable","unavailable"]),safetyState:z.enum(["pending","scanning","clean","verified","malicious","unavailable","unscanned","purged","blocked"]),processing:z.boolean(),canSend:z.boolean(),canDownload:z.boolean(),
   reasonCode:z.string().nullable(),retryable:z.boolean(),recovery:z.enum(["poll","retry","none"]),
 });
 export const attachmentSchema = z.object({ id: z.string(), fileName: z.string(), contentType: z.string(), size: z.number(), contentId: nullableText,

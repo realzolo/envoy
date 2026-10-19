@@ -12,7 +12,7 @@ export const GET = serviceRoute(async (_request, identity) => {
     content: { ownership: "caller", formats: ["text/plain", "text/html"], requiresRenderedContent: true },
     mail: await discoverMail(identity),
     messagePolicies,
-    attachmentSafety: { processing:"asynchronous",mode:"require_clean",policyVersion:scanPolicy().version,runtimeAvailability:"unknown" },
+    attachmentSafety: { processing:"asynchronous",mode:scanPolicy().mode,policyVersion:scanPolicy().version,runtimeAvailability:"unknown" },
     resources: ["messages", "deliveries", "events", "requests", "files", "inbound-messages", "inbound-changes", "outbound-changes", "suppressions", "capabilities"],
   });
 });

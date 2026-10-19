@@ -1,9 +1,10 @@
 # Attachment safety contract
 
-Envoy owns attachment storage, scanning, quarantine, bounded retry/recovery and use checks for both mail directions.
+Envoy owns attachment storage, optional scanning, quarantine, bounded retry/recovery and use checks for both mail directions.
 Callers own their service authorization, business size/type rules, file IDs and business operation IDs. Callers never
-connect to a scanner or pass scanner settings to Envoy. This is the final contract for a new project; no compatibility
-scan layer, unchecked-content mode, schema adoption or historical-clean backfill exists.
+connect to a scanner or pass scanner settings to Envoy. `require_clean` is the default; operators may explicitly set
+`ATTACHMENT_SCAN_MODE=integrity_only` to permit size/hash-verified files without malware screening. Neither mode permits
+unchecked bytes, schema adoption or historical-clean backfill.
 
 ## Upload, query, use
 
@@ -34,7 +35,7 @@ is permitted. `usage` is a current policy decision, independent of byte retentio
 | Field | Contract |
 |---|---|
 | `state` | `processing`, `usable`, or `unavailable` |
-| `safetyState` | `unscanned`, `pending`, `scanning`, `clean`, `malicious`, `unavailable`, `blocked`, or `purged` |
+| `safetyState` | `unscanned`, `pending`, `scanning`, `verified`, `clean`, `malicious`, `unavailable`, `blocked`, or `purged`; `verified` means integrity checked without malware scanning |
 | `processing` | Work is active, pending, or eligible for bounded automatic processing |
 | `canSend` | Currently safety-approved for outbound use; always false for an inbound attachment |
 | `canDownload` | Currently safety-approved for private download |
@@ -50,6 +51,8 @@ the same pipeline, with no separate download bypass. Sanitized HTML does not exp
 | Stable reason | Meaning/action |
 |---|---|
 | `FILE_SCAN_REQUIRED`, `FILE_SCAN_PENDING` | No applicable proof yet; poll |
+| `FILE_VERIFICATION_REQUIRED`, `FILE_VERIFICATION_PENDING` | Integrity-only verification is pending; poll |
+| `FILE_POLICY_CHANGED` | A policy changed while work was in flight; retry under the current mode |
 | `SCAN_NOT_CONFIGURED`, `SCAN_CONFIGURATION_INVALID` | Envoy operator must repair configuration; caller does not supply it |
 | `SCAN_CAPACITY_BUSY`, `SCAN_TIMEOUT`, `SCAN_CONNECTION_FAILED`, `SCAN_CONNECTION_CLOSED`, `SCAN_PROTOCOL_INVALID` | Temporary infrastructure failure, not malware; finite retries, then explicit recovery |
 | `FILE_STORAGE_UNAVAILABLE` | Private bytes cannot currently be read; fail closed and recover after repair |
@@ -90,12 +93,15 @@ Task metadata and outbox publication are durable in PostgreSQL, using the existi
 persistent scope rotation queues at most one live task per service at a time. Lost jobs/expired dispatch leases can be
 reissued; random scan lease tokens fence stale completions. Five scan claims and exponential 30–600 second backoff
 bound automatic processing. A claim that dies on its fifth attempt becomes exhausted rather than looping forever.
-Engine absence, errors and malformed responses remain distinct from a malicious verdict.
+Engine absence, errors and malformed responses remain distinct from a malicious verdict in `require_clean` mode.
 
 The shared scanner has a 10 MB limit, bounded process concurrency, a 4096-byte response cap and a single total deadline
 covering connect, writes/backpressure and response. It parses the exact NUL-terminated INSTREAM result, never searches
 for an `OK` substring. Connections and capacity are released on every outcome; raw engine/signature text is discarded.
-Object reads are bounded too. Proofs bind expected/scanned SHA-256 and the applicable policy version.
+Object reads are bounded too. Proofs bind expected/processed SHA-256 and the applicable mode-separated policy version.
+In `integrity_only`, the Worker still reads the stored object and checks size and SHA-256, then records `verified` without
+connecting to a scanner. Switching back to `require_clean` invalidates these proofs and schedules retained files for scanning.
+Known malicious or integrity-blocked files remain unavailable in either mode.
 Wire framing and deployment limits follow the official [ClamD protocol](https://docs.clamav.net/manual/Usage/ClamdProtocol.html);
 the client uses one framed INSTREAM command per connection and does not enable sessions or filesystem-path commands.
 
@@ -106,7 +112,7 @@ existing retention/object cleanup also reclaims isolated/quarantined, unreferenc
 and explicit deletion remain separate from temporary scan failure and recovery. Backups and caller copies are separate.
 
 The **Attachment Safety** admin page shows configuration, status counts, observed times, failure codes, task attempts
-and allowed reprocessing. Configuration and past observations do not guarantee current scanner health. Scanner host,
+and allowed reprocessing. Configuration and past observations do not guarantee current scanner health. Mode, scanner host,
 port, timeout, concurrency and policy version belong only in Envoy deployment configuration; see
 [Operations](OPERATIONS.md#attachment-safety-operations). All instances must switch policies together with admission and
 sending workers stopped/drained. No mixed-policy rolling deployment or automatic history resend is supported.
@@ -114,8 +120,7 @@ sending workers stopped/drained. No mixed-policy rolling deployment or automatic
 Executed SQL migrations are immutable and changes append ordered versions with checksums. `pnpm db:setup` applies
 missing versions under a transaction lock after catalog verification. `pnpm db:generate` updates the typed
 `db/schema.sql` snapshot; `pnpm db:check` validates it and migration checksums. Setup rejects drift and preserves
-business records in future ordered upgrades. This fresh-project baseline requires a new database. Unverified bytes are never
-backfilled clean.
+business records in future ordered upgrades. Unverified bytes are never backfilled clean.
 
 ## Minimal business flow
 
@@ -137,8 +142,8 @@ provider transmission. A successful send acceptance still means queued, not actu
 ## Morph/Sonaops integration adjustment checklist
 
 1. **Cutover prerequisite:** implement and verify this Envoy capability, deploy it to the target environment, run its
-   worker/scanner, and verify actual target upload → pending → clean → usable plus fail-closed behavior. Repository
-   fixture tests are not a real target scanner/provider acceptance test. Keep the existing business checks until this
+   worker, and verify actual target upload → pending → approved → usable plus fail-closed behavior. Under `require_clean`,
+   approved means `clean` from a real scanner; under `integrity_only`, it means `verified` by size/hash checks only. Keep the existing business checks until this
    prerequisite is met; do not create a safety-check gap.
 2. Keep business APP/service binding, permissions and business file size/type restrictions. Replace local scanner
    execution with private Envoy upload and durable storage of the returned `fileId` under the original operation ID.
@@ -153,7 +158,5 @@ provider transmission. A successful send acceptance still means queued, not actu
 6. Retain normal service isolation, mail idempotency, status/event consumption and business authorization. If Envoy
    safety is unavailable during cutover, hold attachment use and repair Envoy; do not silently restore an unchecked
    path. Remove scanner infrastructure from the business deployment only after those safety gates are proven.
-
-This repository changes Envoy only; no Morph or Sonaops source/configuration has been modified.
 
 Outbound uploads require `X-Sending-Domain`, freezing the Service-authorized From domain. Files cannot be attached across domains. Removed Service-domain bindings block file metadata, reprocessing, downloads and erasure through the service API. `examples/attachment-mail.mjs` takes `ENVOY_SENDING_DOMAIN`.

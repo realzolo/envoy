@@ -18,8 +18,8 @@ import { attachmentUsage as usage, assertUsable as assert } from "../domain/safe
 import type { SafetyRow } from "../contracts";
 import { scanPolicy, scanBytes } from "./scanner";
 
-export const attachmentUsage = (retained: boolean, sha256: string | null, safety?: SafetyRow | null, direction: "outbound" | "inbound" = "outbound") => usage(scanPolicy().version, retained, sha256, safety, direction);
-export const assertUsable = (retained: boolean, sha256: string | null, safety?: SafetyRow | null) => assert(scanPolicy().version, retained, sha256, safety);
+export const attachmentUsage = (retained: boolean, sha256: string | null, safety?: SafetyRow | null, direction: "outbound" | "inbound" = "outbound") => { const policy=scanPolicy();return usage(policy.version, retained, sha256, safety, direction, policy.mode); };
+export const assertUsable = (retained: boolean, sha256: string | null, safety?: SafetyRow | null) => { const policy=scanPolicy();return assert(policy.version, retained, sha256, safety, policy.mode); };
 
 function repositories(executor: Pick<PoolClient, "query">, client?: PoolClient): AttachmentRepositories {
   const required = () => { if (!client) throw new Error("Attachment operation requires a transaction"); return client; };

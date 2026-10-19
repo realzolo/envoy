@@ -16,7 +16,7 @@ The Compose configuration runs three services from the same application image:
 - A Linux server with Git, Docker Engine, Docker Compose v2, curl, and OpenSSL.
 - PostgreSQL 14 or newer with a database accessible from the application containers.
 - S3-compatible object storage, such as Cloudflare R2, for production content and attachments.
-- A reachable ClamAV scanner with current signatures when using attachments.
+- A reachable ClamAV scanner with current signatures when `ATTACHMENT_SCAN_MODE=require_clean` and attachments are used. `integrity_only` needs no scanner and provides no malware screening.
 
 Use direct or session-pooled PostgreSQL connections. Transaction-pooled connections cannot preserve the `LISTEN`
 sessions used by the queue backend. The setup role needs permission to create schemas, application objects and the
@@ -64,6 +64,10 @@ vi .env.production
 
 The example defaults to local development. Configure these values before starting production:
 
+The production image rejects `local` or an unknown object storage driver before starting any Compose service.
+Web and Worker must use the same S3 bucket, region, endpoint, prefix and credentials. A writable directory inside
+the Web container does not make uploaded files available to Worker, and a container restart can remove them.
+
 | Setting | Production configuration |
 | --- | --- |
 | `DATABASE_URL` | PostgreSQL connection string reachable from the containers; use the TLS settings required by your database provider |
@@ -80,7 +84,7 @@ The example defaults to local development. Configure these values before startin
 | `OBJECT_STORE_SECRET_ACCESS_KEY` | Object storage secret key |
 | `CLAMAV_HOST` / `CLAMAV_PORT` | Scanner address reachable from the worker; the default port is `3310` |
 
-Uncomment the storage and scanner settings you need, and replace every active `replace_with_*` value.
+Uncomment the storage and scanner settings you need, and replace every active `replace_with_*` value. Choose `ATTACHMENT_SCAN_MODE=integrity_only` on both Web and Worker when malware scanning is intentionally disabled; the default `require_clean` blocks attachments without a scanner.
 Inside a container, `localhost` refers to that container. Use addresses reachable from the application containers for
 PostgreSQL and ClamAV.
 
@@ -101,6 +105,9 @@ For R2, use `OBJECT_STORAGE_REGION=auto` and an endpoint in the form
 `https://ACCOUNT_ID.r2.cloudflarestorage.com`. Use bucket-default encryption and leave
 `OBJECT_STORE_SERVER_SIDE_ENCRYPTION` unset. R2 credentials use the `OBJECT_STORE_*` settings independently of AWS
 runtime credentials used by SES.
+When a custom S3 endpoint is configured, both `OBJECT_STORE_ACCESS_KEY_ID` and
+`OBJECT_STORE_SECRET_ACCESS_KEY` are required; the process does not fall back to AWS credentials for that endpoint.
+For AWS S3 without a custom endpoint, the default AWS credential chain may be used.
 
 The Docker image sets `NODE_ENV=production`; it does not need to be added to the environment file. Server processes
 use UTC by default. Keep `PORT=6178` unless you also update the Compose port mapping and health check.
@@ -234,7 +241,7 @@ in PostgreSQL or object storage.
 | Web remains unhealthy or `/api/health` returns `503` | Inspect Web logs and verify database connectivity and both application and queue schemas. |
 | Worker exits or messages remain queued | Inspect Worker logs, its console heartbeat, database connectivity, provider configuration, and routing. |
 | Administrator login fails | Verify the configured email and password and recreate containers after environment changes. |
-| Attachments remain unavailable | Verify storage credentials, bucket access, scanner connectivity, current signatures, and Worker logs. Missing or failing scanners block attachment use. |
+| Attachments remain unavailable | Verify storage credentials, bucket access, Worker logs, and the configured attachment scan mode. In `require_clean`, also verify scanner connectivity and signatures; missing or failing scanners block attachment use. |
 
 To inspect a failed migration container:
 

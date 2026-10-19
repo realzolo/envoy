@@ -10,5 +10,9 @@
   {
     "file": "003_domain_inbound_sources.sql",
     "sha256": "6bc9ad91f86cb8037b888340b26c8f90e43842123a81b150920c365a738bd79f"
+  },
+  {
+    "file": "004_optional_attachment_scanning.sql",
+    "sha256": "04380b64f70f40a26e79479d5879d5498fd6985e2fd18cccb6609cfc4b1f3991"
   }
 ]

@@ -49,7 +49,7 @@ describe("application database migrations", () => {
         expect(changes.every(row => row.message_id === "msg_upgrade" && row.recorded_at.getTime() > Date.now() - 10_000)).toBe(true);
         expect((await client.query("SELECT position::text,floor::text FROM outbound_streams WHERE service_id='svc_upgrade'")).rows[0]).toEqual({ position: "2", floor: "0" });
         const journal = (await client.query("SELECT * FROM envoy_meta.migrations ORDER BY file")).rows;
-        expect(journal).toHaveLength(3); expect(await initializeDatabase(client)).toBe("validated");
+        expect(journal).toHaveLength((await loadApplicationMigrations()).length); expect(await initializeDatabase(client)).toBe("validated");
         expect((await client.query("SELECT * FROM envoy_meta.migrations ORDER BY file")).rows).toEqual(journal);
         await client.query("INSERT INTO delivery_events(id,delivery_id,event_type,source_key,occurred_at,canonical_payload) VALUES('next_event','delivery_upgrade','opened','next-source','1800-01-01','{}')");
         expect((await client.query("SELECT position::text FROM outbound_changes WHERE id='next_event'")).rows[0].position).toBe("3");
@@ -62,7 +62,7 @@ describe("application database migrations", () => {
       try {
         expect((await Promise.all([initializeDatabase(first), initializeDatabase(second)])).sort()).toEqual(["initialized", "validated"]);
         await seed(first);
-        expect((await first.query("SELECT count(*)::int AS count FROM envoy_meta.migrations")).rows[0].count).toBe(3);
+        expect((await first.query("SELECT count(*)::int AS count FROM envoy_meta.migrations")).rows[0].count).toBe((await loadApplicationMigrations()).length);
         expect((await first.query("SELECT count(*)::int AS count FROM outbound_changes")).rows[0].count).toBe(2);
       } finally { first.release(); second.release(); }
     });

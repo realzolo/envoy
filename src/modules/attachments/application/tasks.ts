@@ -58,7 +58,7 @@ async function processAttachmentScan(resourceId: string) {
     if (!source || source.content_purged_at) {status="purged";reason="FILE_CONTENT_PURGED";}
     if (source && sourceKey && source.object_key!==sourceKey) {status="blocked";reason="FILE_INTEGRITY_FAILED";}
     if (source && sha256 && source.sha256!==sha256) {status="blocked";reason="FILE_INTEGRITY_FAILED";}
-    if (policy.version !== dependencies.scanPolicy().version && status === "clean") {status="unavailable";reason="FILE_SCAN_REQUIRED";}
+    if (policy.version !== dependencies.scanPolicy().version && (status === "clean" || status === "verified")) {status="unavailable";reason="FILE_POLICY_CHANGED";}
     await client.tasks.finishScan({ resourceId: resourceId, token: token, status: status, reason: reason, sha256: sha256 });
   });
 }

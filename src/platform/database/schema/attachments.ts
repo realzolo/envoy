@@ -96,7 +96,7 @@ export const attachmentSafety = pgTable("attachment_safety", {
 			name: "attachment_safety_scope_fkey"
 		}),
 	check("attachment_safety_kind_check", sql`kind = ANY (ARRAY['outbound'::text, 'inbound'::text])`),
-	check("attachment_safety_status_check", sql`status = ANY (ARRAY['pending'::text, 'scanning'::text, 'clean'::text, 'malicious'::text, 'unavailable'::text, 'blocked'::text, 'purged'::text])`),
+	check("attachment_safety_status_check", sql`status = ANY (ARRAY['pending'::text, 'scanning'::text, 'clean'::text, 'verified'::text, 'malicious'::text, 'unavailable'::text, 'blocked'::text, 'purged'::text])`),
 ]);
 
 

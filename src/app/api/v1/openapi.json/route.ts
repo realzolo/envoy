@@ -69,7 +69,7 @@ export function GET(request: Request) {
         messagePolicies: { type: "object", properties: { sendBefore: { const: true }, contentPolicies: { type: "array", items: { enum: ["normal", "sensitive"] } }, sensitive: { type: "object", properties: { requiresSendBefore: { const: true }, maxRetentionSeconds: { const: 900 }, contentReadable: { const: false } } } } },
         features: { type: "object", additionalProperties: { type: ["boolean", "string"] } },
         mail: { ...ref("MailDiscovery"), description: "Service-scoped domain sending/receiving permissions; no APP or mailbox entities. Configuration and historical evidence do not guarantee current delivery." },
-        attachmentSafety: {type:"object",required:["processing","mode","policyVersion","runtimeAvailability"],properties:{processing:{const:"asynchronous"},mode:{const:"require_clean"},policyVersion:{type:"string"},runtimeAvailability:{const:"unknown"}}},
+        attachmentSafety: {type:"object",required:["processing","mode","policyVersion","runtimeAvailability"],properties:{processing:{const:"asynchronous"},mode:{enum:["require_clean","integrity_only"]},policyVersion:{type:"string"},runtimeAvailability:{const:"unknown"}}},
         resources: { type: "array", items: { type: "string" } },
       } }) },
     },

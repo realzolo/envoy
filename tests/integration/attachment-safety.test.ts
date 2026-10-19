@@ -71,6 +71,48 @@ describe("private attachment safety lifecycle",()=>{
   try {await processDelivery(job(await submission(receipt.id)));expect(send).toHaveBeenCalledTimes(1);}finally{send.mockRestore();}
   expect(await (await downloadAttachment("outbound",uploaded.id,a))!.text()).toBe(bytes.toString());
  });
+ it("permits integrity-verified files without a scanner, then requires a clean scan when scanning is enabled",async()=>{
+  const uploaded=await file();
+  process.env.ATTACHMENT_SCAN_MODE="integrity_only";
+  try {
+   await processAttachmentScan(uploaded.id);
+   expect(await row(uploaded.id)).toMatchObject({status:"verified",policy_version:"integrity:1"});
+   expect(await getOutboundFile(uploaded.id,a)).toMatchObject({usage:{state:"usable",safetyState:"verified",canSend:true,canDownload:true}});
+   expect(await (await downloadAttachment("outbound",uploaded.id,a))!.text()).toBe(bytes.toString());
+   const accepted=await acceptMessage({identity,input:input([uploaded.id]),idempotencyKey:createId("op")});
+   expect(accepted.message.id).toBeTruthy();
+  }finally{process.env.ATTACHMENT_SCAN_MODE="require_clean";}
+  expect(await getOutboundFile(uploaded.id,a)).toMatchObject({usage:{state:"processing",safetyState:"unscanned",canSend:false,reasonCode:"FILE_SCAN_REQUIRED"}});
+  await scanClean(uploaded.id);
+  expect(await row(uploaded.id)).toMatchObject({status:"clean",policy_version:"1"});
+  expect(await getOutboundFile(uploaded.id,a)).toMatchObject({usage:{state:"usable",safetyState:"clean",canSend:true}});
+ });
+ it("blocks corrupt stored bytes in integrity-only mode",async()=>{
+  const uploaded=await file();
+  const key=(await query<{object_key:string}>("SELECT object_key FROM outbound_files WHERE id=$1",[uploaded.id])).rows[0].object_key;
+  await objectStore().put(key,Buffer.from("different fixture bytes"),"application/octet-stream");
+  process.env.ATTACHMENT_SCAN_MODE="integrity_only";
+  try {
+   await processAttachmentScan(uploaded.id);
+   expect(await row(uploaded.id)).toMatchObject({status:"blocked",reason:"FILE_INTEGRITY_FAILED"});
+   expect(await getOutboundFile(uploaded.id,a)).toMatchObject({usage:{state:"unavailable",canSend:false,canDownload:false}});
+  }finally{process.env.ATTACHMENT_SCAN_MODE="require_clean";}
+ });
+ it("reprocesses an exhausted missing-scanner task immediately after scanning is disabled",async()=>{
+  const uploaded=await file();
+  for(let count=0;count<5;count++) {
+   await processAttachmentScan(uploaded.id);
+   await query("UPDATE attachment_safety SET next_attempt_at=now() WHERE resource_id=$1",[uploaded.id]);
+  }
+  expect(await row(uploaded.id)).toMatchObject({status:"unavailable",attempt_count:5,reason:"SCAN_NOT_CONFIGURED"});
+  process.env.ATTACHMENT_SCAN_MODE="integrity_only";
+  try {
+   await processAttachmentScan(uploaded.id);
+   expect(await row(uploaded.id)).toMatchObject({status:"verified",attempt_count:1,policy_version:"integrity:1"});
+   expect(await getOutboundFile(uploaded.id,a)).toMatchObject({usage:{canSend:true,safetyState:"verified"}});
+  }finally{process.env.ATTACHMENT_SCAN_MODE="require_clean";}
+  await scanClean(uploaded.id);
+ });
  it("blocks a whole multi-attachment/CID request and rechecks all attachments before the provider boundary",async()=>{
   const good=await file(),other=await file();await scanClean(good.id);
   await expect(acceptMessage({identity,input:input([good.id,other.id]),idempotencyKey:createId("op")})).rejects.toMatchObject({code:"FILE_NOT_READY"});

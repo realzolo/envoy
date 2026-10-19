@@ -2,7 +2,7 @@ import type { PoolClient } from "pg";
 import { inboundDomainAccess, outboundDomainAccess } from "@/modules/identity/infrastructure/authorization";
 import type { TasksRepository } from "../application/ports";
 import type { Task } from "../contracts";
-const due = `s.status NOT IN ('malicious','blocked','purged') AND s.next_attempt_at<=now() AND (s.queued_until IS NULL OR s.queued_until<=now()) AND (s.lease_expires_at IS NULL OR s.lease_expires_at<=now()) AND ((s.status<>'clean' AND s.attempt_count<5) OR s.policy_version IS DISTINCT FROM $1)`;
+const due = `s.status NOT IN ('malicious','blocked','purged') AND (s.next_attempt_at<=now() OR s.policy_version IS DISTINCT FROM $1) AND (s.queued_until IS NULL OR s.queued_until<=now()) AND (s.lease_expires_at IS NULL OR s.lease_expires_at<=now()) AND ((s.status NOT IN ('clean','verified') AND s.attempt_count<5) OR s.policy_version IS DISTINCT FROM $1)`;
 
 export function createTasksRepository(client: Pick<PoolClient,"query">): TasksRepository {
 return {
@@ -22,11 +22,11 @@ return {
         attempt_count=CASE WHEN policy_version IS DISTINCT FROM $3 THEN 0 ELSE attempt_count END,policy_version=$3,status='pending',updated_at=now() WHERE resource_id=$1`, [input.resource_id, input.outboxId, input.version]); },
   insertScanOutbox(input: { outboxId: string; resource_id: string; payload: { resourceId: string; } }) { return client.query<Record<string,unknown>>("INSERT INTO outbox_events(id,aggregate_type,aggregate_id,event_type,payload) VALUES($1,'attachment',$2,'attachment.scan.requested',$3)", [input.outboxId, input.resource_id, input.payload]); },
   touchScope(input: { scope: string }) { return client.query<Record<string,unknown>>("UPDATE attachment_scan_scopes SET last_dispatched_at=clock_timestamp() WHERE scope=$1", [input.scope]); },
-  claimScan(input: { resourceId: string; token: string; version: string }) { return client.query<Task>(`UPDATE attachment_safety SET status='scanning',attempt_count=attempt_count+1,
+  claimScan(input: { resourceId: string; token: string; version: string }) { return client.query<Task>(`UPDATE attachment_safety SET status='scanning',attempt_count=CASE WHEN policy_version IS DISTINCT FROM $3 THEN 1 ELSE attempt_count+1 END,
     lease_token=$2,lease_expires_at=now()+interval '2 minutes',updated_at=now(),policy_version=$3
-    WHERE resource_id=$1 AND status NOT IN ('malicious','blocked','purged') AND next_attempt_at<=now()
-      AND attempt_count<5 AND (lease_expires_at IS NULL OR lease_expires_at<=now())
-      AND NOT(status='clean' AND policy_version=$3) RETURNING *`, [input.resourceId, input.token, input.version]); },
+    WHERE resource_id=$1 AND status NOT IN ('malicious','blocked','purged') AND (next_attempt_at<=now() OR policy_version IS DISTINCT FROM $3)
+      AND (attempt_count<5 OR policy_version IS DISTINCT FROM $3) AND (lease_expires_at IS NULL OR lease_expires_at<=now())
+      AND NOT(status IN ('clean','verified') AND policy_version=$3) RETURNING *`, [input.resourceId, input.token, input.version]); },
   lockScanLease(input: { resourceId: string; token: string }) { return client.query<Task>("SELECT * FROM attachment_safety WHERE resource_id=$1 AND lease_token=$2 FOR UPDATE", [input.resourceId, input.token]); },
   finishScan(input: { resourceId: string; token: string; status: string; reason: string | null; sha256: string | null }) { return client.query<Record<string,unknown>>(`UPDATE attachment_safety SET status=$3,reason=$4,scanned_sha256=$5,
       checked_at=clock_timestamp(),lease_token=NULL,lease_expires_at=NULL,queued_until=NULL,

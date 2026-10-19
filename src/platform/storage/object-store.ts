@@ -73,8 +73,12 @@ class S3ObjectStore implements ObjectStore {
 
   constructor() {
     if (!this.bucket) throw new Error("OBJECT_STORAGE_BUCKET is required for the S3 object store");
+    if (!process.env.OBJECT_STORAGE_REGION?.trim()) throw new Error("OBJECT_STORAGE_REGION is required for the S3 object store");
     if (Boolean(process.env.OBJECT_STORE_ACCESS_KEY_ID) !== Boolean(process.env.OBJECT_STORE_SECRET_ACCESS_KEY)) {
       throw new Error("Object store access key and secret must be configured together")
+    }
+    if (process.env.OBJECT_STORAGE_ENDPOINT && !process.env.OBJECT_STORE_ACCESS_KEY_ID) {
+      throw new Error("Explicit object store credentials are required for a custom S3 endpoint")
     }
     if (process.env.OBJECT_STORE_SERVER_SIDE_ENCRYPTION && !["AES256", "aws:kms"].includes(process.env.OBJECT_STORE_SERVER_SIDE_ENCRYPTION)) {
       throw new Error("Unsupported object store server-side encryption setting")
@@ -104,7 +108,17 @@ class S3ObjectStore implements ObjectStore {
 
 let instance: ObjectStore | undefined;
 
+export function objectStorageDriver(): "local" | "s3" {
+  const driver = process.env.OBJECT_STORAGE_DRIVER?.trim() || "local";
+  if (driver !== "local" && driver !== "s3") throw new Error("OBJECT_STORAGE_DRIVER must be local or s3");
+  if (driver === "local" && process.env.NODE_ENV === "production") {
+    throw new Error("Production requires shared S3 object storage; local storage is not supported");
+  }
+  return driver;
+}
+
 export function objectStore() {
-  instance ??= process.env.OBJECT_STORAGE_DRIVER === "s3" ? new S3ObjectStore() : new LocalObjectStore();
+  const driver = objectStorageDriver();
+  instance ??= driver === "s3" ? new S3ObjectStore() : new LocalObjectStore();
   return instance
 }

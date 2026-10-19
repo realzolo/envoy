@@ -1,5 +1,5 @@
 import { afterEach,describe,expect,it,vi } from "vitest";
-import { scanBytes, digest } from "@/modules/attachments/public";
+import { scanBytes, scanPolicy, digest } from "@/modules/attachments/public";
 import { scannerFixture } from "../helpers/scanner";
 
 const bytes=Buffer.from("controlled harmless bytes");
@@ -19,6 +19,15 @@ describe("bounded attachment scanner protocol",()=>{
  });
  it("keeps absent scanners unscanned, without pretending a clean result",async()=>{
   vi.stubEnv("CLAMAV_HOST","");expect(await scanBytes(bytes)).toMatchObject({status:"unavailable",reason:"SCAN_NOT_CONFIGURED"});
+ });
+ it("verifies bytes without claiming a malware scan when scanning is explicitly disabled",async()=>{
+  vi.stubEnv("ATTACHMENT_SCAN_MODE","integrity_only");vi.stubEnv("CLAMAV_HOST","");
+  expect(scanPolicy()).toMatchObject({mode:"integrity_only",version:"integrity:1",configured:false});
+  expect(await scanBytes(bytes)).toEqual({status:"verified",reason:null,sha256:digest(bytes)});
+  expect(await scanBytes(Buffer.alloc(10_000_001))).toMatchObject({status:"unavailable",reason:"FILE_SIZE_EXCEEDED"});
+ });
+ it("rejects unknown scan modes",()=>{
+  vi.stubEnv("ATTACHMENT_SCAN_MODE","skip");expect(scanPolicy).toThrow("Invalid Envoy attachment safety configuration");
  });
  it("bounds the total time even when a connection stays open",async()=>{
   const fixture=await scannerFixture(null);vi.stubEnv("CLAMAV_TIMEOUT_MS","100");

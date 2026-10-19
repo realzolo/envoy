@@ -70,8 +70,8 @@ export interface AttachmentDependencies {
     put(key: string, bytes: Uint8Array, contentType: string): Promise<void>;
     get(key: string, maxBytes: number): Promise<Uint8Array>;
   };
-  scanPolicy(): { version: string; timeout: number; concurrency: number; configured: boolean; mode: "require_clean" };
-  scanBytes(bytes: Uint8Array): Promise<{ status: "clean" | "malicious" | "unavailable"; reason: string | null; sha256: string }>;
+  scanPolicy(): { version: string; timeout: number; concurrency: number; configured: boolean; mode: "require_clean" | "integrity_only" };
+  scanBytes(bytes: Uint8Array): Promise<{ status: "clean" | "verified" | "malicious" | "unavailable"; reason: string | null; sha256: string }>;
   attachmentUsage(retained: boolean, sha256: string | null, safety?: SafetyRow | null, direction?: "outbound" | "inbound"): import("../domain/safety").AttachmentUsage;
   assertUsable(retained: boolean, sha256: string | null, safety?: SafetyRow | null): void;
 }

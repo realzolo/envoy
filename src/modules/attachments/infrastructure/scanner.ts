@@ -5,12 +5,14 @@ import { MAX_FILE_BYTES } from "@/lib/contracts";
 export function scanPolicy() {
   const timeout = Number(process.env.CLAMAV_TIMEOUT_MS ?? 15000);
   const concurrency = Number(process.env.ATTACHMENT_SCAN_CONCURRENCY ?? 4);
-  const version = process.env.ATTACHMENT_POLICY_VERSION?.trim() || "1";
-  if (!Number.isInteger(timeout) || timeout < 100 || timeout > 30000 || !Number.isInteger(concurrency) || concurrency < 1 || concurrency > 16 || !/^[a-zA-Z0-9._-]{1,80}$/.test(version)) throw new Error("Invalid Envoy attachment safety configuration");
-  return { version, timeout, concurrency, configured: Boolean(process.env.CLAMAV_HOST?.trim()), mode: "require_clean" as const };
+  const baseVersion = process.env.ATTACHMENT_POLICY_VERSION?.trim() || "1";
+  const mode = process.env.ATTACHMENT_SCAN_MODE?.trim() || "require_clean";
+  if (!Number.isInteger(timeout) || timeout < 100 || timeout > 30000 || !Number.isInteger(concurrency) || concurrency < 1 || concurrency > 16 || !/^[a-zA-Z0-9._-]{1,80}$/.test(baseVersion) || !["require_clean", "integrity_only"].includes(mode)) throw new Error("Invalid Envoy attachment safety configuration");
+  const version = mode === "integrity_only" ? `integrity:${baseVersion}` : baseVersion;
+  return { version, timeout, concurrency, configured: Boolean(process.env.CLAMAV_HOST?.trim()), mode: mode as "require_clean" | "integrity_only" };
 }
 
-type Verdict = { status: "clean" | "malicious" | "unavailable"; reason: string | null; sha256: string };
+type Verdict = { status: "clean" | "verified" | "malicious" | "unavailable"; reason: string | null; sha256: string };
 let active = 0;
 
 /** One bounded INSTREAM command. No engine response/signature/file name escapes this module. */
@@ -19,6 +21,7 @@ export async function scanBytes(bytes: Uint8Array): Promise<Verdict> {
   const result = (status: Verdict["status"], reason: string | null): Verdict => ({ status, reason, sha256 });
   const policy = scanPolicy();
   if (bytes.byteLength > MAX_FILE_BYTES) return result("unavailable", "FILE_SIZE_EXCEEDED");
+  if (policy.mode === "integrity_only") return result("verified", null);
   if (!policy.configured) return result("unavailable", "SCAN_NOT_CONFIGURED");
   const port = Number(process.env.CLAMAV_PORT ?? 3310);
   if (!Number.isInteger(port) || port < 1 || port > 65535) return result("unavailable", "SCAN_CONFIGURATION_INVALID");

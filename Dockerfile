@@ -43,4 +43,5 @@ USER node
 
 EXPOSE 6178
 
+ENTRYPOINT ["sh", "scripts/require-production-storage.sh"]
 CMD ["node", "server.js"]

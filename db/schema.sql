@@ -397,7 +397,7 @@ CREATE TABLE "attachment_safety" (
 	"checked_at" timestamp with time zone,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "attachment_safety_kind_check" CHECK (kind = ANY (ARRAY['outbound'::text, 'inbound'::text])),
-	CONSTRAINT "attachment_safety_status_check" CHECK (status = ANY (ARRAY['pending'::text, 'scanning'::text, 'clean'::text, 'malicious'::text, 'unavailable'::text, 'blocked'::text, 'purged'::text]))
+	CONSTRAINT "attachment_safety_status_check" CHECK (status = ANY (ARRAY['pending'::text, 'scanning'::text, 'clean'::text, 'verified'::text, 'malicious'::text, 'unavailable'::text, 'blocked'::text, 'purged'::text]))
 );
 
 CREATE TABLE "attachment_scan_scopes" (

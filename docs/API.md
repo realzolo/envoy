@@ -265,7 +265,9 @@ Missing scalar RFC fields are `null`, missing lists are `[]`. A provider's opaqu
 RFC Message-ID. To/Cc remain visible content headers; Resend can also use its signed To/Cc fields as a routing fallback. Bcc and `envelopeRecipients` expose only
 addresses matched for the current service. Raw MIME, full provider payloads, and other services' private recipients are
 not exposed through the business API. Attachment downloads require that both mail and attachment belong to this service,
-ready state, retained bytes, and the current scanning policy.
+ready state, retained bytes, and the current attachment safety policy. `require_clean` requires a clean malware scan;
+`integrity_only` allows size/hash-verified bytes without malware screening and reports `safetyState=verified`. Switching
+back to `require_clean` invalidates those proofs and schedules retained files for scanning.
 
 `inbound.received` callbacks have a stable event ID and include `serviceId`,
 `envelopeRecipients`, `messageId`, `replyTo`, `inReplyTo`, and `references` under `data`. Fetch sanitized content and

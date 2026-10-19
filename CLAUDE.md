@@ -21,6 +21,13 @@ module boundaries, `src/platform` infrastructure and `src/integrations/providers
 only in Repositories/ReadRepositories. Application services own transactions through semantic ports and UnitOfWork;
 Next controllers and independent Worker processors call public use cases. Next-only authorization facades live in
 `src/server` and use `server-only`; shared business code must run in the standalone Worker without Next.js.
+Production Web and Worker use the same S3-compatible object store. The production image rejects local or unknown
+storage drivers before startup; local files are development-only because separate containers do not share them.
+Custom S3 endpoints require an explicit independent credential pair, while AWS S3 may use its default credential chain.
+Attachment safety defaults to `ATTACHMENT_SCAN_MODE=require_clean`; `integrity_only` is an explicit no-malware-scan
+mode that permits files only after Worker verifies stored byte size and SHA-256. It records `verified`, never `clean`.
+Mode-separated policy versions invalidate prior proofs and reprocess retained files on mode changes. Keep Web/Worker
+on the same mode and run migration 004 before deploying this contract.
 Run `pnpm architecture:check`, `pnpm db:check`, `pnpm typecheck`, `pnpm lint`, `pnpm test` and `pnpm build`.
 
 # Unified callback authentication
