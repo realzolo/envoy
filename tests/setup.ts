@@ -9,6 +9,6 @@ process.env.OBJECT_STORAGE_DRIVER = "local";
 process.env.OBJECT_STORAGE_PREFIX = "envoy-test";
 
 // Tests use only explicitly bound local scanner fixtures, never deployment scanners.
-process.env.CLAMAV_HOST = "";
-process.env.ATTACHMENT_SCAN_MODE = "require_clean";
+process.env.CLAMAV_HOST = "127.0.0.1";
+process.env.CLAMAV_PORT = "1";
 process.env.ATTACHMENT_POLICY_VERSION = "1";

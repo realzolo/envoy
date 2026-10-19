@@ -2,8 +2,8 @@
 
 Envoy owns attachment storage, optional scanning, quarantine, bounded retry/recovery and use checks for both mail directions.
 Callers own their service authorization, business size/type rules, file IDs and business operation IDs. Callers never
-connect to a scanner or pass scanner settings to Envoy. `require_clean` is the default; operators may explicitly set
-`ATTACHMENT_SCAN_MODE=integrity_only` to permit size/hash-verified files without malware screening. Neither mode permits
+connect to a scanner or pass scanner settings to Envoy. A configured `CLAMAV_HOST` selects `require_clean`; when absent,
+`integrity_only` permits size/hash-verified files without malware screening. Neither mode permits
 unchecked bytes, schema adoption or historical-clean backfill.
 
 ## Upload, query, use
@@ -53,7 +53,7 @@ the same pipeline, with no separate download bypass. Sanitized HTML does not exp
 | `FILE_SCAN_REQUIRED`, `FILE_SCAN_PENDING` | No applicable proof yet; poll |
 | `FILE_VERIFICATION_REQUIRED`, `FILE_VERIFICATION_PENDING` | Integrity-only verification is pending; poll |
 | `FILE_POLICY_CHANGED` | A policy changed while work was in flight; retry under the current mode |
-| `SCAN_NOT_CONFIGURED`, `SCAN_CONFIGURATION_INVALID` | Envoy operator must repair configuration; caller does not supply it |
+| `SCAN_CONFIGURATION_INVALID` | Envoy operator must repair configured scanner settings; caller does not supply them |
 | `SCAN_CAPACITY_BUSY`, `SCAN_TIMEOUT`, `SCAN_CONNECTION_FAILED`, `SCAN_CONNECTION_CLOSED`, `SCAN_PROTOCOL_INVALID` | Temporary infrastructure failure, not malware; finite retries, then explicit recovery |
 | `FILE_STORAGE_UNAVAILABLE` | Private bytes cannot currently be read; fail closed and recover after repair |
 | `SCAN_RETRIES_EXHAUSTED`, `SCAN_TASK_FAILED` | Work exhausted scan/queue recovery; inspect Envoy diagnostics and request controlled reprocessing |
@@ -113,7 +113,8 @@ and explicit deletion remain separate from temporary scan failure and recovery. 
 
 The **Attachment Safety** admin page shows configuration, status counts, observed times, failure codes, task attempts
 and allowed reprocessing. Configuration and past observations do not guarantee current scanner health. Mode, scanner host,
-port, timeout, concurrency and policy version belong only in Envoy deployment configuration; see
+port, timeout, concurrency and policy version belong only in Envoy deployment configuration; leave `CLAMAV_HOST` unset
+on both Web and Worker to disable scanning, or configure it on both to require clean results; see
 [Operations](OPERATIONS.md#attachment-safety-operations). All instances must switch policies together with admission and
 sending workers stopped/drained. No mixed-policy rolling deployment or automatic history resend is supported.
 

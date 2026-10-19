@@ -16,7 +16,7 @@ The Compose configuration runs three services from the same application image:
 - A Linux server with Git, Docker Engine, Docker Compose v2, curl, and OpenSSL.
 - PostgreSQL 14 or newer with a database accessible from the application containers.
 - S3-compatible object storage, such as Cloudflare R2, for production content and attachments.
-- A reachable ClamAV scanner with current signatures when `ATTACHMENT_SCAN_MODE=require_clean` and attachments are used. `integrity_only` needs no scanner and provides no malware screening.
+- A reachable ClamAV scanner with current signatures when `CLAMAV_HOST` is configured. Without it, attachments receive integrity verification but no malware screening.
 
 Use direct or session-pooled PostgreSQL connections. Transaction-pooled connections cannot preserve the `LISTEN`
 sessions used by the queue backend. The setup role needs permission to create schemas, application objects and the
@@ -84,7 +84,7 @@ the Web container does not make uploaded files available to Worker, and a contai
 | `OBJECT_STORE_SECRET_ACCESS_KEY` | Object storage secret key |
 | `CLAMAV_HOST` / `CLAMAV_PORT` | Scanner address reachable from the worker; the default port is `3310` |
 
-Uncomment the storage and scanner settings you need, and replace every active `replace_with_*` value. Choose `ATTACHMENT_SCAN_MODE=integrity_only` on both Web and Worker when malware scanning is intentionally disabled; the default `require_clean` blocks attachments without a scanner.
+Uncomment the storage and scanner settings you need, and replace every active `replace_with_*` value. Leave `CLAMAV_HOST` unset on both Web and Worker when malware scanning is not enabled; setting it on both requires clean scanner results.
 Inside a container, `localhost` refers to that container. Use addresses reachable from the application containers for
 PostgreSQL and ClamAV.
 
@@ -241,7 +241,7 @@ in PostgreSQL or object storage.
 | Web remains unhealthy or `/api/health` returns `503` | Inspect Web logs and verify database connectivity and both application and queue schemas. |
 | Worker exits or messages remain queued | Inspect Worker logs, its console heartbeat, database connectivity, provider configuration, and routing. |
 | Administrator login fails | Verify the configured email and password and recreate containers after environment changes. |
-| Attachments remain unavailable | Verify storage credentials, bucket access, Worker logs, and the configured attachment scan mode. In `require_clean`, also verify scanner connectivity and signatures; missing or failing scanners block attachment use. |
+| Attachments remain unavailable | Verify storage credentials, bucket access, Worker logs, and consistent `CLAMAV_HOST` configuration on Web and Worker. When configured, also verify scanner connectivity and signatures; failing scanners block attachment use. |
 
 To inspect a failed migration container:
 

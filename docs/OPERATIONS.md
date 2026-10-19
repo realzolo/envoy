@@ -177,8 +177,8 @@ queries and connection budgets. Revocations and runtime authorization never depe
 See [Attachment Safety](ATTACHMENT-SAFETY.md) for the complete API, queue/fencing contract and Morph/Sonaops cutover checklist.
 Envoy alone configures `CLAMAV_HOST`, `CLAMAV_PORT` (default 3310), `CLAMAV_TIMEOUT_MS` (100–30000, default 15000),
 `ATTACHMENT_SCAN_CONCURRENCY` (1–16, default 4) and `ATTACHMENT_POLICY_VERSION` (default `1`). The only mode is
-`require_clean` is the default: no unscanned bypass exists. Set `ATTACHMENT_SCAN_MODE=integrity_only` explicitly
-when malware scanning is intentionally disabled. This still checks stored bytes against their size and SHA-256 before
+`CLAMAV_HOST` selects the mode: when configured, `require_clean` requires a clean result; when absent,
+`integrity_only` checks stored bytes against their size and SHA-256 before
 use, reports `verified` rather than `clean`, and does not detect malware. Never give scanner addresses/configuration
 to a business service.
 
@@ -189,7 +189,7 @@ controlled reasons, attempts, policy and observed-result timestamps; those obser
 Repair temporary failures, then use **Reprocess** (or the service-owned resource endpoint). Malicious/integrity-blocked
 resources require removal and a new upload, never ordinary retry. Observe failed outbox jobs too.
 
-Policy/signature or mode changes: stop admission and drain/stop sending workers, update the same policy version/configuration
+Policy/signature or scanner configuration changes: stop admission and drain/stop sending workers, update the same policy version/configuration
 on all Web/Worker instances, then restart. Do not perform a mixed-policy rolling deployment. A changed version invalidates
 prior proofs and schedules retained bytes for processing under the new mode. Known malicious and integrity-blocked
 files remain unusable even when scanning is disabled. Accepted queued sends whose attachments are no longer

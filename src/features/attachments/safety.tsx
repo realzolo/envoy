@@ -6,7 +6,7 @@ export function AttachmentSafety({ data }: { data:Data }) {
   const configuration=record(data.configuration);
   return <Space direction="vertical" size="large" className={styles.stack}>
     <Card title="Safety policy"><Typography.Paragraph>
-      {configuration.mode === "integrity_only" ? "Integrity verification only (malware scanning disabled)" : "Clean scanner result required"} · Policy {value(configuration,"version")} · Scanner {configuration.configured ? "configured" : "not configured"} · Concurrency {value(configuration,"concurrency")} · Deadline {value(configuration,"timeout")} ms.
+      {configuration.mode === "integrity_only" ? "Integrity verification only (malware scanning disabled)" : "Clean scanner result required"} · Policy {value(configuration,"version")} · Scanner {configuration.configured ? "configured" : "disabled"} · Concurrency {value(configuration,"concurrency")} · Deadline {value(configuration,"timeout")} ms.
       Configuration is not a live health check. Integrity-only files are marked verified, never clean.
     </Typography.Paragraph><DataTable data={rows(data.observations)} columns={[
       {title:"Observed state",render:(_,r)=><StatusTag>{value(r,"status")}</StatusTag>},{title:"Count",render:(_,r)=>value(r,"count")},

@@ -61,7 +61,7 @@ vi .env.production
 - 将 `OBJECT_STORAGE_DRIVER=local` 改为 `s3`，取消对象存储配置的注释；R2 使用 `OBJECT_STORAGE_REGION=auto`
 - 生产镜像在启动 Web、Worker 或迁移任务前拒绝 `local`、未知驱动或缺少存储桶/区域；Web 和 Worker 必须使用同一 S3 桶、区域、端点、前缀和凭据。只修复 Web 容器内 `/app/var` 的写权限无法让 Worker 读取该容器的文件，容器重建也可能丢失这些文件
 - 自定义 S3 端点（包括 R2）必须显式提供成对的独立 `OBJECT_STORE_*` 凭据，不回退使用 SES 的 AWS 凭据链；无自定义端点的 AWS S3 可使用默认 AWS 凭据链
-- 附件扫描默认采用 `ATTACHMENT_SCAN_MODE=require_clean`；缺少扫描器时附件不可使用。若明确不启用恶意软件扫描，在 Web 和 Worker 同时设置 `ATTACHMENT_SCAN_MODE=integrity_only`；该模式只校验存储文件的大小和 SHA-256，结果标记为 `verified`，不代表已扫描。业务无需配置扫描主机、端口或超时。详见 [附件安全合同及接入清单](ATTACHMENT-SAFETY.md)
+- 附件扫描由 `CLAMAV_HOST` 自动决定：Web 和 Worker 都配置扫描器主机时必须取得 `clean` 结果；都不配置时仅校验存储文件的大小和 SHA-256，结果标记为 `verified`，不代表已扫描。两端配置必须一致；业务无需配置扫描主机、端口或超时。详见 [附件安全合同及接入清单](ATTACHMENT-SAFETY.md)
 
 生成 KEK 和 Session Secret：
 
