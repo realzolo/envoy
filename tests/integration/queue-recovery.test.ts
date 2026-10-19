@@ -3,11 +3,12 @@ import { readFile } from "node:fs/promises";
 import { Client } from "pg";
 import { runMigrations, Worker, createPostgresBackend, type PostgresQueueBackend } from "bullmq";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { db, query } from "@/server/database";
-import { closeQueues, createQueueWorker, DELIVERY_QUEUE, queues } from "@/server/queues";
-import { dispatchOutboxBatch, markOutboxJobFailed } from "@/server/services/outbox";
-import { retryOutbox } from "@/modules/admin/actions";
-import { recoverWorkBatch } from "@/server/services/recovery";
+import { db, query } from "@/platform/database";
+import { closeQueues, createQueueWorker, DELIVERY_QUEUE, queues } from "@/platform/queues";
+let dispatchOutboxBatch: typeof import("@/platform/outbox/public").dispatchOutboxBatch;
+let markOutboxJobFailed: typeof import("@/platform/outbox/public").markOutboxJobFailed;
+let retryOutbox: typeof import("@/platform/outbox/public").retryOutbox;
+let recoverWorkBatch: typeof import("@/platform/outbox/public").recoverWorkBatch;
 
 const databaseName = `envoy_queue_${crypto.randomUUID().replaceAll("-", "")}`;
 let previousUrl: string | undefined;
@@ -21,6 +22,8 @@ beforeAll(async () => {
   const url = new URL(adminUrl);
   url.pathname = `/${databaseName}`;
   process.env.DATABASE_URL = url.toString();
+  // Assemble app repositories only after selecting this fixture's isolated database.
+  ({ dispatchOutboxBatch, markOutboxJobFailed, retryOutbox, recoverWorkBatch } = await import("@/platform/outbox/public"));
   const client = await db().connect();
   try {
     await client.query(await readFile("db/migrations/001_initial.sql", "utf8"));

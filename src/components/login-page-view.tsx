@@ -1,8 +1,8 @@
 "use client";
 
-import { Card, Space, Typography } from "@arco-design/web-react";
 import { EnvoyLogo } from "@/components/envoy-logo";
 import { LoginForm } from "@/components/login-form";
+import { Card,Space,Typography } from "@arco-design/web-react";
 
 export function LoginPageView({ next }: { next?: string }) {
   return (

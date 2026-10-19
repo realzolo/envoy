@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDomain, refreshIdentity } from "@/modules/admin/actions";
-import { loadProviderAccount } from "@/modules/config/provider-account";
-import { resendModule } from "@/modules/providers/resend";
-import { query } from "@/server/database";
+import { createDomain, refreshIdentity } from "@/modules/channels/public";
+import { loadProviderAccount } from "@/modules/channels/infrastructure/provider-account";
+import { resendModule } from "@/integrations/providers/resend";
+import { query } from "@/platform/database";
 
-vi.mock("@/modules/config/provider-account", () => ({ loadProviderAccount: vi.fn() }));
+vi.mock("@/modules/channels/infrastructure/provider-account", () => ({ loadProviderAccount: vi.fn() }));
 
 const records = [{ type: "TXT", name: "resend._domainkey", value: "dkim-public-key", status: "verified" }];
 const domains: string[] = [];

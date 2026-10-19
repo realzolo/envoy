@@ -1,11 +1,11 @@
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { SendDeadlineError } from "@/modules/core/message/policy";
+import { SendDeadlineError } from "@/modules/outbound/public";
 
 const fixture = vi.hoisted(() => ({ request: vi.fn() }));
 vi.mock("node:https", () => ({ request: fixture.request }));
-import { boundedProviderRequest, runWithSubmissionPolicy } from "@/modules/providers/submission-policy";
+import { boundedProviderRequest, runWithSubmissionPolicy } from "@/integrations/providers/submission-policy";
 
 function transport() {
   const socket = new EventEmitter();

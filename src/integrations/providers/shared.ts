@@ -1,0 +1,185 @@
+import { SendDeadlineError } from "@/modules/outbound/policy";
+import { createHash } from "node:crypto";
+import { CanonicalProviderError, type CanonicalEvent, type CanonicalMessage, type EmailAddress, type ProviderSendResult } from "./contracts";
+import { boundedProviderRequest, responseHeaders, submissionPolicy } from "./submission-policy";
+import { messageHeaders } from "./mail-capabilities";
+export { nativeMailCapabilities, formatAddress, messageHeaders, messageRecipients, estimatedMessageBytes, assertMessageCapabilities } from "./mail-capabilities";
+
+export function safeDiagnostic(value: unknown) {
+    if (submissionPolicy()?.sensitive)
+        return "Sensitive message provider diagnostic withheld.";
+    return String(value ?? "Provider request failed")
+        .replace(/(?:Bearer|Basic)\s+[A-Za-z0-9+/=_\-.]+/gi, "[redacted credential]")
+        .replace(/\b(?:re_|SG\.|key-)[A-Za-z0-9_.-]{8,}/g, "[redacted credential]")
+        .replace(/\b(?:api[_-]?key|token|password|secret)(?:["']?\s*[:=]\s*["']?)[^\s,;}"']+/gi, "credential=[redacted]")
+        .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, "")
+        .slice(0, 2000);
+}
+export function providerErrorCode(category: string, unknown = false) {
+    if (unknown)
+        return "SUBMISSION_OUTCOME_UNKNOWN";
+    return ({ authentication: "PROVIDER_AUTHENTICATION_FAILED", rate_limit: "PROVIDER_RATE_LIMITED", invalid_recipient: "INVALID_RECIPIENT", policy: "PROVIDER_POLICY_REJECTED", provider: "PROVIDER_REJECTED", network: "PROVIDER_UNAVAILABLE" } as Record<string, string>)[category] ?? "PROVIDER_REJECTED";
+}
+const crlf = "\r\n";
+function encodedWords(value: string) {
+    // 42 UTF-8 bytes leaves each RFC 2047 encoded word below 75 characters.
+    const chunks: string[] = [];
+    let chunk = "";
+    for (const char of value) {
+        if (Buffer.byteLength(chunk + char, "utf8") > 42) {
+            chunks.push(chunk);
+            chunk = "";
+        }
+        chunk += char;
+    }
+    if (chunk)
+        chunks.push(chunk);
+    return chunks.map(c => `=?UTF-8?B?${Buffer.from(c).toString("base64")}?=`).join(`${crlf} `);
+}
+function mimeAddress(address: EmailAddress) {
+    return address.name ? `${encodedWords(address.name)} <${address.email}>` : address.email;
+}
+function base64Lines(content: Uint8Array | string) {
+    return Buffer.from(content).toString("base64").match(/.{1,76}/g)?.join(crlf) ?? "";
+}
+function mimeHeader(name: string, value: string) {
+    const content = /[^\x20-\x7e]/.test(value) ? encodedWords(value) : value;
+    let line = `${name}:`;
+    const lines: string[] = [];
+    for (const word of content.split(/\s+/)) {
+        if (line.length + word.length + 1 > 78) {
+            lines.push(line);
+            line = ` ${word}`;
+        }
+        else
+            line += ` ${word}`;
+    }
+    lines.push(line);
+    return lines.join(crlf);
+}
+/** RFC 5322 MIME content; Bcc exists only in the separately supplied envelope. */
+export function buildMimeMessage(message: CanonicalMessage) {
+    const boundary = (label: string) => `envoy_${label}_${requestFingerprint(message.submissionId).slice(0, 32)}`;
+    const multipart = (type: string, label: string, parts: string[]) => {
+        const separator = boundary(label);
+        return `Content-Type: multipart/${type}; boundary="${separator}"${crlf}${crlf}` +
+            parts.map(part => `--${separator}${crlf}${part}${crlf}`).join("") + `--${separator}--${crlf}`;
+    };
+    const textPart = (type: string, value: string) => `Content-Type: ${type}; charset=UTF-8${crlf}Content-Transfer-Encoding: base64${crlf}${crlf}${base64Lines(value)}`;
+    const attachmentPart = (attachment: CanonicalMessage["attachments"][number]) => {
+        const filename = encodeURIComponent(attachment.fileName).replace(/[!'()*]/g, char => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
+        const segments = filename.match(/(?:%[0-9A-F]{2}|[^%]){1,20}/g) ?? [filename];
+        const parameters = segments.length === 1 ? [`filename*=UTF-8''${filename}`] : segments.map((segment, index) => `filename*${index}*=${index === 0 ? "UTF-8''" : ""}${segment}`);
+        return [`Content-Type: ${attachment.contentType}`, "Content-Transfer-Encoding: base64",
+            `Content-Disposition: ${attachment.disposition};${crlf} ${parameters.join(`;${crlf} `)}`,
+            ...(attachment.contentId ? [`Content-ID: <${attachment.contentId}>`] : []), "", base64Lines(attachment.content)].join(crlf);
+    };
+    const alternatives = [
+        ...(message.text === undefined ? [] : [textPart("text/plain", message.text)]),
+        ...(message.html === undefined ? [] : [textPart("text/html", message.html)])
+    ];
+    let body = alternatives.length === 1 ? alternatives[0] : multipart("alternative", "alternative", alternatives);
+    const inline = message.attachments.filter(a => a.disposition === "inline");
+    if (inline.length)
+        body = multipart("related", "related", [body, ...inline.map(attachmentPart)]);
+    const attachments = message.attachments.filter(a => a.disposition === "attachment");
+    if (attachments.length)
+        body = multipart("mixed", "mixed", [body, ...attachments.map(attachmentPart)]);
+    const headers = [
+        `From: ${mimeAddress(message.from)}`,
+        ...(message.to.length ? [`To: ${message.to.map(mimeAddress).join(`,${crlf} `)}`] : []),
+        ...(message.cc.length ? [`Cc: ${message.cc.map(mimeAddress).join(`,${crlf} `)}`] : []),
+        ...(message.replyTo.length ? [`Reply-To: ${message.replyTo.map(mimeAddress).join(`,${crlf} `)}`] : []),
+        `Subject: ${encodedWords(message.subject)}`,
+        `Date: ${new Date().toUTCString()}`,
+        `Message-ID: ${message.rfcMessageId ?? `<${requestFingerprint(message.submissionId)}@${message.from.email.split("@")[1]}>`}`,
+        "MIME-Version: 1.0",
+        ...Object.entries(messageHeaders(message)).map(([name, value]) => mimeHeader(name, value))
+    ];
+    return new Uint8Array(Buffer.from(headers.join(crlf) + crlf + body, "utf8"));
+}
+export function requestFingerprint(value: unknown) {
+    return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+export async function responseJson(response: Response) {
+    return response.json().catch(() => ({})) as Promise<Record<string, unknown>>;
+}
+export async function checkedJson(response: Response): Promise<Record<string, unknown>> {
+    const body = await responseJson(response);
+    if (!response.ok) {
+        const message = safeDiagnostic(body.message ?? body.Message ?? body.error ?? `Provider returned HTTP ${response.status}`);
+        const details = `${message} ${JSON.stringify(body.errors ?? "")}`.toLowerCase();
+        const invalidRecipient = (response.status === 400 || response.status === 422) && (/recipient/.test(details) || /\bto (email|address)\b/.test(details) || /personalizations.*\.to\./.test(details));
+        const providerCode = String(body.code ?? body.name ?? body.ErrorCode ?? `http_${response.status}`);
+        if (response.status >= 500 || response.status === 408)
+            throw new CanonicalProviderError(message, "provider", "SUBMISSION_OUTCOME_UNKNOWN", "unknown", false, { providerCode });
+        const category = response.status === 401 || response.status === 403 ? "authentication" : response.status === 429 ? "rate_limit" : invalidRecipient ? "invalid_recipient" : response.status >= 500 ? "provider" : "policy";
+        throw new CanonicalProviderError(message, category, providerErrorCode(category), "not_accepted", response.status === 429, { providerCode });
+    }
+    return body;
+}
+export function accepted(id: unknown, response?: Record<string, unknown>, rfcMessageId?: unknown): ProviderSendResult {
+    if (typeof id !== "string" || !id)
+        throw new CanonicalProviderError("Provider returned no message identifier", "provider", "SUBMISSION_OUTCOME_UNKNOWN", "unknown", false, { providerCode: "missing_message_id" });
+    return { outcome: "accepted", externalMessageId: id, response, rfcMessageId: typeof rfcMessageId === "string" && /^<[^<>\s@]+@[^<>\s@]+>$/.test(rfcMessageId) ? rfcMessageId : null };
+}
+export function event(input: Omit<CanonicalEvent, "metadata"> & {
+    metadata?: Record<string, unknown>;
+}): CanonicalEvent {
+    return { ...input, metadata: input.metadata ?? {} };
+}
+export function decodeJson(raw: Uint8Array) {
+    return JSON.parse(new TextDecoder().decode(raw)) as Record<string, unknown>;
+}
+export function header(headers: Record<string, string>, name: string) {
+    return headers[name.toLowerCase()] ?? headers[name] ?? "";
+}
+export type MultipartValue = string | {
+    name: string;
+    type: string;
+    bytes: Uint8Array;
+};
+export async function parseMultipart(raw: Uint8Array, contentType: string) {
+    const form = await new Response(Buffer.from(raw), { headers: { "content-type": contentType } }).formData();
+    const result: Record<string, MultipartValue | MultipartValue[]> = {};
+    for (const [key, value] of form.entries()) {
+        const parsed: MultipartValue = typeof value === "string" ? value : {
+            name: value.name,
+            type: value.type,
+            bytes: new Uint8Array(await value.arrayBuffer())
+        };
+        const current = result[key];
+        result[key] = current ? Array.isArray(current) ? [...current, parsed] : [current, parsed] : parsed;
+    }
+    return result;
+}
+// The submission boundary gets one bounded transport attempt. A lost response
+// cannot prove rejection and must never trigger an automatic provider switch.
+export async function submitRequest(url: string, options: RequestInit) {
+    try {
+        if (submissionPolicy()?.sendBefore) {
+            const request = new Request(url, options);
+            const response = await boundedProviderRequest(new URL(url), { method: request.method, headers: Object.fromEntries(request.headers), body: new Uint8Array(await request.arrayBuffer()) });
+            const chunks: Buffer[] = [];
+            for await (const chunk of response)
+                chunks.push(Buffer.from(chunk));
+            return new Response(Buffer.concat(chunks), { status: response.statusCode, statusText: response.statusMessage, headers: responseHeaders(response.headers) });
+        }
+        await submissionPolicy()?.beforeSend();
+        return await fetch(url, { ...options, signal: AbortSignal.timeout(30000) });
+    }
+    catch (error) {
+        if (error instanceof SendDeadlineError || error instanceof CanonicalProviderError)
+            throw error;
+        throw new CanonicalProviderError(safeDiagnostic(error instanceof Error ? error.message : "Submission response unavailable"), "network", "SUBMISSION_OUTCOME_UNKNOWN", "unknown", false, { providerCode: "submission_transport_error" });
+    }
+}
+export function stableEventId(payload: unknown) {
+    return requestFingerprint(payload);
+}
+export function eventDate(value: unknown) {
+    const date = new Date(typeof value === "number" ? value : String(value ?? ""));
+    if (!Number.isFinite(date.getTime()))
+        throw new Error("Provider event is missing a valid occurrence time");
+    return date;
+}

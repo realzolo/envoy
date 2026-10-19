@@ -30,13 +30,14 @@ pnpm test
 pnpm build
 ```
 
-`pnpm test` creates and drops the `envoy_test` database. Point `TEST_DATABASE_ADMIN_URL` only at a PostgreSQL
+`pnpm test` creates and drops a uniquely named temporary database. Point `TEST_DATABASE_ADMIN_URL` only at a PostgreSQL
 instance where that database may be removed.
 
 ## Change Expectations
 
+- Write code comments, database descriptions, and application-facing text in English.
 - Prefer small, reviewable pull requests with tests covering behavior changes.
-- Keep provider-specific behavior inside `src/modules/providers`; do not expose provider credentials or payloads to
+- Keep provider-specific behavior inside `src/integrations/providers`; do not expose provider credentials or payloads to
   the service API.
 - Keep the initial schema authoritative for this new project. Do not add compatibility branches or migration-history
   documents. Update the final API contract and schema together.

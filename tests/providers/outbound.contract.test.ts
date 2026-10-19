@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockClient } from "aws-sdk-client-mock";
 import { SendEmailCommand, SESv2Client } from "@aws-sdk/client-sesv2";
-import { providerRegistry } from "@/modules/providers/registry";
-import type { CanonicalMessage, ProviderSendContext, ProviderType } from "@/modules/providers/contracts";
+import { providerRegistry } from "@/integrations/providers/registry";
+import type { CanonicalMessage, ProviderSendContext, ProviderType } from "@/integrations/providers/contracts";
 
 const message: CanonicalMessage = {
   submissionId: "sub_test",

@@ -1,4 +1,4 @@
-import { InboundCursorError, listInboundChanges } from "@/modules/inbound/changes";
+import { InboundCursorError, listInboundChanges } from "@/modules/inbound/public";
 import { apiProblem, serviceRoute } from "@/server/service-api";
 
 export const GET = serviceRoute(async (request,identity) => {

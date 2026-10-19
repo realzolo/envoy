@@ -1,9 +1,10 @@
+import { transactionContext } from "@/platform/database";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { query, transaction } from "@/server/database";
-import { completeObjectUploads, registerObjectUpload } from "@/server/services/object-cleanup";
-import { createId } from "@/server/ids";
-import { retentionOptions, runRetention } from "@/server/services/retention";
-import type { ObjectStore } from "@/modules/config/object-store";
+import { query, transaction } from "@/platform/database";
+import { completeObjectUploads, registerObjectUpload } from "@/platform/storage/object-cleanup/public";
+import { createId } from "@/platform/ids";
+import { retentionOptions, runRetention } from "@/platform/retention/public";
+import type { ObjectStore } from "@/platform/storage/object-store";
 
 const created: { messages: string[]; files: string[]; raw: string[]; inbound: string[]; callbacks: string[]; audits: string[] } = { messages: [], files: [], raw: [], inbound: [], callbacks: [], audits: [] };
 const store = (): ObjectStore => ({ put: vi.fn(), get: vi.fn(), delete: vi.fn().mockResolvedValue(undefined) });
@@ -271,11 +272,11 @@ describe("object-store / database handoff cleanup", () => {
   it("commits removal of an upload intent in the referencing business transaction", async () => {
     const key = objectKey(); await registerObjectUpload(key);
     await expect(transaction(async client => {
-      await completeObjectUploads(client, [key]);
+      await completeObjectUploads(transactionContext(client), [key]);
       throw new Error("reference transaction failed");
     })).rejects.toThrow("reference transaction failed");
     expect((await query("SELECT object_key FROM pending_object_deletions WHERE object_key=$1", [key])).rowCount).toBe(1);
-    await transaction(client => completeObjectUploads(client, [key]));
+    await transaction(client => completeObjectUploads(transactionContext(client), [key]));
     expect((await query("SELECT object_key FROM pending_object_deletions WHERE object_key=$1", [key])).rowCount).toBe(0);
   });
 
@@ -283,6 +284,6 @@ describe("object-store / database handoff cleanup", () => {
     const key = objectKey();
     await registerObjectUpload(key); await due(key);
     await pass(true, store());
-    await expect(transaction(client => completeObjectUploads(client, [key]))).rejects.toThrow("claim expired");
+    await expect(transaction(client => completeObjectUploads(transactionContext(client), [key]))).rejects.toThrow("claim expired");
   });
 });

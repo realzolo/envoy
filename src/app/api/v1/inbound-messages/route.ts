@@ -1,5 +1,5 @@
-import { listInboundMessages } from "@/modules/core/resources/service";
-import { decodeCursor } from "@/modules/core/message/service";
+import { listInboundMessages } from "@/modules/inbound/public";
+import { decodeCursor } from "@/modules/outbound/public";
 import { serviceRoute, apiProblem } from "@/server/service-api";
 
 export const GET = serviceRoute(async (request, identity) => {

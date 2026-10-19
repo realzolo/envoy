@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { providerConfigSchema, providerSecretSchema, providerWebhookSettingsSchema } from "@/modules/providers/contracts";
-import { openSecret, sealSecret } from "@/modules/config/envelope";
-import { objectStorageKey } from "@/modules/config/object-store";
+import { providerConfigSchema, providerSecretSchema, providerWebhookSettingsSchema } from "@/integrations/providers/contracts";
+import { openSecret, sealSecret } from "@/platform/crypto/envelope";
+import { objectStorageKey } from "@/platform/storage/object-store";
 
 describe("provider configuration", () => {
   it("fails closed on an unknown schema version", () => {

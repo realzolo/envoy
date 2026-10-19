@@ -1,16 +1,10 @@
-import { databaseHealth } from "@/server/database";
-import { queueSchemaHealth } from "@/server/queues";
-import { outboxBacklog } from "@/server/services/outbox";
+import { checkSystemHealth } from "@/server/health";
 
 export const runtime = "nodejs";
 
 export async function GET() {
   try {
-    await Promise.all([
-      databaseHealth(),
-      queueSchemaHealth(),
-      outboxBacklog(),
-    ]);
+    await checkSystemHealth();
     return Response.json({
       name: "envoy",
       status: "ok"

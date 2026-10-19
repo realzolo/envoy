@@ -1,4 +1,4 @@
-import { removeSuppression } from "@/modules/core/resources/service";
+import { removeSuppression } from "@/modules/suppressions/public";
 import { serviceRoute, apiProblem } from "@/server/service-api";
 
 export const DELETE = serviceRoute(async (request, identity, context: { params: Promise<{ id: string }> }) => {

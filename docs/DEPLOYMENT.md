@@ -9,7 +9,7 @@ The Compose configuration runs three services from the same application image:
 | --- | --- |
 | `web` | Next.js application, operations console, API, and provider event ingress |
 | `worker` | Delivery, event processing, callbacks, attachment scanning jobs, and background maintenance |
-| `migrate` | One-time application and BullMQ PostgreSQL schema migration |
+| `migrate` | Complete application V1 initialization/validation and official BullMQ initialization |
 
 ## Requirements
 
@@ -19,7 +19,8 @@ The Compose configuration runs three services from the same application image:
 - A reachable ClamAV scanner with current signatures when using attachments.
 
 Use direct or session-pooled PostgreSQL connections. Transaction-pooled connections cannot preserve the `LISTEN`
-sessions used by the queue backend. The database role must be able to apply application and queue migrations.
+sessions used by the queue backend. The setup role needs permission to create schemas, application objects and the
+BullMQ schema. Web and Worker do not execute schema DDL.
 
 Node.js and pnpm are provided by the Docker image build.
 
@@ -119,7 +120,16 @@ docker compose up -d --build
 ```
 
 Compose builds the shared `envoy:production` image, runs `migrate`, and starts Web and Worker after the migration
-completes successfully. Migration initializes both the application schema and the BullMQ PostgreSQL schema.
+completes successfully. This step initializes an empty database from the single complete
+`db/migrations/001_initial.sql`, then initializes BullMQ through its official API. On subsequent runs it compares the
+application's actual tables, columns, comments, constraints, indexes, functions and triggers with V1. An unknown or changed
+application schema is rejected without applying upgrades or deleting data. No application migration journal is kept.
+
+Envoy is currently an unreleased V1. Schema changes update the typed definitions and regenerate this same V1 with
+`pnpm db:generate`; `pnpm db:check` verifies consistency. Use a new empty database when the V1 structure changes.
+There are no historical application migration patches or compatibility transformations.
+Maintain the English table and column descriptions in `src/platform/database/schema/documentation.ts` and regenerate
+the same V1. Generation rejects undocumented tables or columns; setup also rejects comment drift.
 
 The default port mapping exposes the application on the server at `http://127.0.0.1:6178`. Public HTTPS access is
 configured separately.
@@ -157,7 +167,9 @@ Provider API keys and webhook secrets belong in the operations console, where th
 ## 5. Update an Existing Deployment
 
 Before updating, back up PostgreSQL, including its `bullmq` schema, and preserve the production environment, KEKs,
-and required object storage data. Review migration and configuration changes for the target release.
+and required object storage data. Review configuration changes and verify that the source uses the same complete V1
+structure. While V1 is unreleased, a changed structure requires a new empty database; this setup command does not
+perform an in-place data migration.
 
 Pull the source without overwriting the server's configuration files:
 
@@ -217,7 +229,7 @@ in PostgreSQL or object storage.
 | --- | --- |
 | Build fails | Check Docker build output, registry access, package downloads, and available disk space and memory. |
 | `migrate` exits with a nonzero code | Read migration logs; check the database URL, database permissions, and schema compatibility before starting Web or Worker. |
-| Migration reports a checksum mismatch | Stop the upgrade and investigate the schema history. Do not reset a data-bearing database or rewrite migration checksums to force startup. |
+| Setup reports that the database does not match V1 | Use a new empty database for the current complete V1. The initializer deliberately does not upgrade or reset an unknown structure. |
 | Web remains unhealthy or `/api/health` returns `503` | Inspect Web logs and verify database connectivity and both application and queue schemas. |
 | Worker exits or messages remain queued | Inspect Worker logs, its console heartbeat, database connectivity, provider configuration, and routing. |
 | Administrator login fails | Verify the configured email and password and recreate containers after environment changes. |
@@ -236,6 +248,6 @@ is removed after exit.
 
 Check out a known compatible source revision and repeat the build, migration, and container recreation steps above.
 Confirm that the older application and queue backend support the current database schema before rolling back. Application rollback does not reverse database
-migrations. Restore backups only through a planned database recovery procedure.
+structures. Restore backups only through a planned database recovery procedure.
 
 For ongoing delivery, credential rotation, retention, and recovery procedures, see [Operations](OPERATIONS.md).

@@ -1,7 +1,9 @@
 import { loadEnvConfig } from "@next/env";
 
 loadEnvConfig(process.cwd(), true);
-process.env.DATABASE_URL = "postgresql://envoy:envoy@localhost:5432/envoy_test";
+const databaseUrl = process.env.ENVOY_TEST_DATABASE_URL;
+if (!databaseUrl) throw new Error("Run tests through the isolated V1 database global setup");
+process.env.DATABASE_URL = databaseUrl;
 process.env.ENVOY_KEK_BASE64 = "xNKUJulg5w3Uf+hmV9yWMPa6BxUJbUVvJFBquKimvnc=";
 process.env.OBJECT_STORAGE_DRIVER = "local";
 process.env.OBJECT_STORAGE_PREFIX = "envoy-test";

@@ -1,5 +1,5 @@
 import { serviceRoute, apiProblem } from "@/server/service-api";
-import { getMessage } from "@/modules/core/message/service";
+import { getMessage } from "@/modules/outbound/public";
 
 export const runtime = "nodejs";
 

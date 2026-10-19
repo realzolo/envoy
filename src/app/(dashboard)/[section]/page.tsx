@@ -1,9 +1,9 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { connection } from "next/server";
-import { AdminConsole } from "@/components/admin-console";
+import { AdminConsole } from "@/features/admin-console";
 import { PageHeader } from "@/components/page-header";
-import { adminData, type AdminSection } from "@/modules/admin/queries";
+import { adminData, type AdminSection } from "@/server/admin-queries";
 
 const sections = {
   attachments: ["Attachment Safety", "Inspect private attachment processing, bounded retries and observed scanner results."],

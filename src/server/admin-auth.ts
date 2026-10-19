@@ -1,7 +1,7 @@
 import { jwtVerify, SignJWT } from "jose";
 import { cookies } from "next/headers";
 import { timingSafeEqual } from "node:crypto";
-import { trustedProxyEnabled } from "@/server/network";
+import { trustedProxyEnabled } from "@/platform/network";
 
 const COOKIE_NAME = "envoy_admin_session";
 const MAX_AGE = 60 * 60 * 12;

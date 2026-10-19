@@ -1,7 +1,7 @@
-import { messagePolicies } from "@/modules/core/message/policy";
-import { discoverMail } from "@/modules/core/resources/capabilities";
+import { messagePolicies } from "@/modules/outbound/public";
+import { discoverMail } from "@/modules/identity/public";
 import { MAX_ATTACHMENT_BYTES, MAX_CONTENT_BYTES, MAX_FILE_BYTES, MAX_REQUEST_BYTES } from "@/lib/contracts";
-import { scanPolicy } from "@/modules/attachments/scanner";
+import { scanPolicy } from "@/modules/attachments/public";
 import { serviceRoute } from "@/server/service-api";
 
 export const GET = serviceRoute(async (_request, identity) => {

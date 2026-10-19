@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { choosePolicyTarget, chooseWeighted } from "@/modules/core/routing/engine";
+import { choosePolicyTarget, chooseWeighted } from "@/modules/outbound/domain/routing";
 
 const candidate = (id: string, overrides: Partial<{
   priority: number;

@@ -1,5 +1,5 @@
 import { MAX_FILE_BYTES } from "@/lib/contracts";
-import { uploadOutboundFile } from "@/modules/files/service";
+import { uploadOutboundFile } from "@/modules/attachments/public";
 import { apiProblem, serviceRoute } from "@/server/service-api";
 import { readRequestBytes } from "@/server/request-body";
 

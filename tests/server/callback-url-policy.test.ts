@@ -2,12 +2,8 @@ import { once } from "node:events";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  CallbackUrlPolicyError,
-  isPrivateOrReservedAddress,
-  postCallback,
-  resolveCallbackTarget
-} from "@/modules/callbacks/url-policy";
+import { CallbackUrlPolicyError } from "@/modules/callbacks/domain/policy";
+import { isPrivateOrReservedAddress, postCallback, resolveCallbackTarget } from "@/modules/callbacks/infrastructure/http-transport";
 
 afterEach(() => vi.unstubAllEnvs());
 

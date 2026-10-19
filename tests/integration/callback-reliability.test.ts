@@ -1,18 +1,18 @@
 import { createHmac } from "node:crypto";
-import { sealSecret } from "@/modules/config/envelope";
-import { replaceCallbackSecret, replayDeadLetters, toggleCallback } from "@/modules/admin/actions";
+import { sealSecret } from "@/platform/crypto/envelope";
+import { replaceCallbackSecret, replayDeadLetters, toggleCallback } from "@/modules/callbacks/public";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-import { db, query } from "@/server/database";
-import { createId } from "@/server/ids";
-import { acceptMessage } from "@/modules/core/message/service";
+import { db, query } from "@/platform/database";
+import { createId } from "@/platform/ids";
+import { acceptMessage } from "@/modules/outbound/public";
 import { createMessageSchema } from "@/lib/contracts";
 
 const network = vi.hoisted(() => ({ resolve: vi.fn(), post: vi.fn() }));
-vi.mock("@/modules/callbacks/url-policy", async importOriginal => {
-  const original = await importOriginal<typeof import("@/modules/callbacks/url-policy")>();
+vi.mock("@/modules/callbacks/infrastructure/http-transport", async importOriginal => {
+  const original = await importOriginal<typeof import("@/modules/callbacks/infrastructure/http-transport")>();
   return { ...original, resolveCallbackTarget: network.resolve, postCallback: network.post };
 });
-import { deliverCallback } from "@/modules/callbacks/service";
+import { deliverCallback } from "@/modules/callbacks/public";
 
 const ids: string[] = [];
 afterEach(() => { vi.restoreAllMocks(); vi.resetAllMocks(); });

@@ -1,16 +1,15 @@
 import { MAX_FILE_BYTES } from "@/lib/contracts";
+import { FileValidationError,uploadOutboundFile } from "@/modules/attachments/public";
+import { activeServiceExists } from "@/modules/identity/public";
 import { getAdminSession } from "@/server/admin-auth";
-import { query } from "@/server/database";
-import { BodyTooLargeError, readRequestBytes } from "@/server/request-body";
-import { FileValidationError, uploadOutboundFile } from "@/modules/files/service";
+import { BodyTooLargeError,readRequestBytes } from "@/server/request-body";
 
 export async function POST(request: Request) {
   const session = await getAdminSession();
   if (!session) return Response.json({ error: "Unauthorized" }, { status: 401 });
   try {
     const serviceId = new URL(request.url).searchParams.get("serviceId");
-    const service = await query("SELECT s.id FROM services s JOIN products p ON p.id=s.product_id WHERE s.id=$1 AND p.status='active'", [serviceId]);
-    if (!service.rows[0]) return Response.json({ error: "Select an active service" }, { status: 422 });
+    if (!await activeServiceExists(serviceId)) return Response.json({ error: "Select an active service" }, { status: 422 });
     const fileName = decodeURIComponent(request.headers.get("x-file-name") ?? "");
     const contentType = request.headers.get("content-type")?.split(";")[0] ?? "application/octet-stream";
     const bytes = await readRequestBytes(request, MAX_FILE_BYTES);

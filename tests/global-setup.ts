@@ -1,33 +1,39 @@
-import { readdir, readFile } from "node:fs/promises";
-import { join } from "node:path";
-import { Client } from "pg";
-import { runMigrations } from "bullmq";
+import { randomUUID } from "node:crypto";
+import { Client, Pool, type PoolClient } from "pg";
+import { initializeV1 } from "../src/platform/database/initialization";
 
 const adminUrl = process.env.TEST_DATABASE_ADMIN_URL ?? "postgresql://envoy:envoy@localhost:5432/postgres";
-const testUrl = "postgresql://envoy:envoy@localhost:5432/envoy_test";
+const databaseName = `envoy_test_${randomUUID().replaceAll("-", "")}`;
+const testDatabaseUrl = new URL(adminUrl);
+testDatabaseUrl.pathname = `/${databaseName}`;
+const testUrl = testDatabaseUrl.toString();
+
+async function dropTestDatabase() {
+  const cleanup = new Client({ connectionString: adminUrl });
+  await cleanup.connect();
+  try { await cleanup.query(`DROP DATABASE IF EXISTS "${databaseName}" WITH (FORCE)`); }
+  finally { await cleanup.end(); }
+}
 
 export default async function setup() {
   process.env.DATABASE_URL = testUrl;
+  process.env.ENVOY_TEST_DATABASE_URL = testUrl;
   process.env.ENVOY_KEK_BASE64 = "xNKUJulg5w3Uf+hmV9yWMPa6BxUJbUVvJFBquKimvnc=";
 
   const admin = new Client({ connectionString: adminUrl });
   await admin.connect();
-  await admin.query("DROP DATABASE IF EXISTS envoy_test WITH (FORCE)");
-  await admin.query("CREATE DATABASE envoy_test");
-  await admin.end();
+  try { await admin.query(`CREATE DATABASE "${databaseName}"`); }
+  finally { await admin.end(); }
 
-  const database = new Client({ connectionString: testUrl });
-  await database.connect();
-  const migrationsDirectory = join(process.cwd(), "db", "migrations");
-  for (const file of (await readdir(migrationsDirectory)).filter(name => name.endsWith(".sql")).sort()) {
-    await database.query(await readFile(join(migrationsDirectory, file), "utf8"));
-  }
-
-  await runMigrations(database, "bullmq");
+  const testPool = new Pool({ connectionString: testUrl });
+  let database: PoolClient | undefined;
+  try {
+  database = await testPool.connect();
+  await initializeV1(database);
 
   const [{ hashApiKey }, { sealSecret }] = await Promise.all([
-    import("../src/server/crypto"),
-    import("../src/modules/config/envelope")
+    import("../src/platform/crypto/hash"),
+    import("../src/platform/crypto/envelope")
   ]);
   const providerSecret = sealSecret({ type: "mock", token: "test-provider-token" }, "pa_mock", 1);
   const webhookSecret = sealSecret({ token: "test-webhook-token" }, "pwe_mock", 1);
@@ -47,12 +53,14 @@ export default async function setup() {
   await database.query("INSERT INTO routing_targets(id,policy_id,provider_account_id,provider_identity_id,priority,weight) VALUES ('rt_atlas_security','rp_atlas_security','pa_mock','pi_atlas_mock',10,100)");
   await database.query("INSERT INTO callback_endpoints(id,service_id,name,url,secret_ciphertext,encrypted_dek,key_version,subscribed_events) VALUES ('cb_atlas_local','svc_atlas_auth','Test callback','https://callback.test/events',$1,$2,$3,$4)", [callbackSecret.secretCiphertext, callbackSecret.encryptedDek, callbackSecret.keyVersion, ["email.accepted", "email.delivered", "email.bounced", "email.failed", "email.suppressed", "inbound.received"]]);
   await database.query("INSERT INTO inbound_routes(id,provider_webhook_endpoint_id,sending_domain_id,product_id,service_id) VALUES ('ir_atlas','pwe_mock','sd_atlas','prd_atlas','svc_atlas_auth')");
-  await database.end();
-
-  return async () => {
-    const cleanup = new Client({ connectionString: adminUrl });
-    await cleanup.connect();
-    await cleanup.query("DROP DATABASE IF EXISTS envoy_test WITH (FORCE)");
-    await cleanup.end()
+  } catch (error) {
+    database?.release();
+    database = undefined;
+    await testPool.end();
+    await dropTestDatabase();
+    throw error;
   }
+  database?.release();
+  await testPool.end();
+  return dropTestDatabase;
 }

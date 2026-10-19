@@ -1,43 +1,26 @@
+import { transactionContext } from "@/platform/database";
 import type { Job } from "bullmq";
 import { afterAll, describe, expect, it, vi } from "vitest";
-import {
-  acceptMessage,
-  cancelMessage,
-  DuplicateRiskError,
-  getMessage,
-  IdempotencyConflictError,
-  listMessages,
-  MessageValidationError,
-  retryMessage
-} from "@/modules/core/message/service";
-import { applyCanonicalEvent, applyDeliveryEvent, processRawProviderEvent } from "@/modules/core/event/service";
-import {
-  createSuppression,
-  listDeliveries,
-  listSuppressions,
-  removeSuppression
-} from "@/modules/core/resources/service";
-import { ingestProviderWebhook } from "@/modules/webhooks/ingress";
-import {
-  addSuppression,
-  createDomain,
-  createInboundRoute,
-  createRoutingPolicy,
-  manualRetryDelivery,
-  replayDeadLetters,
-  rotateProviderCredential,
-  simulateRouting
-} from "@/modules/admin/actions";
-import { CanonicalProviderError } from "@/modules/providers/contracts";
-import { objectStore } from "@/modules/config/object-store";
-import { persistInbound } from "@/modules/inbound/service";
-import { deadLetterCallback } from "@/modules/callbacks/service";
-import { sealSecret } from "@/modules/config/envelope";
-import { markAccepted, markDeterminateFailure, markUnknown, markReconciled, getAttemptForReconciliation, prepareSubmission as prepareSubmissionById } from "@/modules/core/routing/engine";
+import { acceptMessage, cancelMessage, DuplicateRiskError, getMessage, IdempotencyConflictError, listMessages, MessageValidationError, retryMessage } from "@/modules/outbound/public";
+import { applyCanonicalEvent, applyDeliveryEvent, processRawProviderEvent } from "@/modules/outbound/public";
+import { createSuppression, listSuppressions, removeSuppression } from "@/modules/suppressions/public";
+import { listDeliveries } from "@/modules/outbound/public";
+import { ingestProviderWebhook } from "@/modules/inbound/public";
+import { addSuppression } from "@/modules/suppressions/public";
+import { createDomain, rotateProviderCredential } from "@/modules/channels/public";
+import { createInboundRoute } from "@/modules/inbound/public";
+import { createRoutingPolicy, manualRetryDelivery, simulateRouting } from "@/modules/outbound/public";
+import { replayDeadLetters } from "@/modules/callbacks/public";
+import { CanonicalProviderError } from "@/integrations/providers/contracts";
+import { objectStore } from "@/platform/storage/object-store";
+import { persistInbound } from "@/modules/inbound/public";
+import { deadLetterCallback } from "@/modules/callbacks/public";
+import { sealSecret } from "@/platform/crypto/envelope";
+import { markAccepted, markDeterminateFailure, markUnknown, markReconciled, getAttemptForReconciliation, prepareSubmission as prepareSubmissionById } from "@/modules/outbound/public";
 import { createMessageSchema, createSuppressionSchema } from "@/lib/contracts";
-import { providerRegistry } from "@/modules/providers/registry";
+import { providerRegistry } from "@/integrations/providers/registry";
 import { processDelivery } from "@/worker/delivery";
-import { db, query, transaction } from "@/server/database";
+import { db, query, transaction } from "@/platform/database";
 
 const identity = {
   serviceId: "svc_atlas_auth",
@@ -273,7 +256,7 @@ describe("durable message pipeline", () => {
     const accepted = await acceptMessage({ identity, idempotencyKey: crypto.randomUUID(), input: { ...request, to: [{ email }] } });
     messageIds.push(accepted.message.id);
     const delivery = (await query<{ id: string }>("SELECT id FROM deliveries WHERE message_id=$1", [accepted.message.id])).rows[0];
-    await transaction(client => applyDeliveryEvent(client, delivery.id, { id: crypto.randomUUID(), type: "suppressed", occurredAt: new Date(), metadata: { source: "submission_policy" } }, `local-suppression:${crypto.randomUUID()}`));
+    await transaction(client => applyDeliveryEvent(transactionContext(client), delivery.id, { id: crypto.randomUUID(), type: "suppressed", occurredAt: new Date(), metadata: { source: "submission_policy" } }, `local-suppression:${crypto.randomUUID()}`));
     expect((await query<{ scope_type: string }>("SELECT scope_type FROM suppressions WHERE email_normalized=$1", [email])).rows.map(row => row.scope_type)).toEqual(["product"]);
   });
 

@@ -110,11 +110,12 @@ before enabling business receipt; this does not change Resend outbound support.
 
 ## Authoritative schema
 
-This is a new project. `db/migrations/001_initial.sql` is the only authoritative application schema; fresh installations
-use `pnpm db:setup`. There is no schema-adoption compatibility path. The migrator refuses an applied checksum that does
-not match this schema. Do not delete migration history, edit the ledger/checksum, reset a data-bearing database, or label
-unscanned files safe to force startup. An unsupported existing installation must remain stopped pending a separately
-authorized data decision. This attachment change does not execute a migration on an existing developer/production database.
+This is an unreleased V1 project. `db/migrations/001_initial.sql` is the complete application schema, including
+all constraints, indexes, functions and triggers. Use `pnpm db:setup` for a fresh installation. Update the typed schema
+and regenerate the same V1 with `pnpm db:generate`; `pnpm db:check` verifies the snapshot. Keep no incremental migration
+scripts or application migration ledger. Initialization validates an already identical V1 and refuses a different
+existing schema without modifying it. For development schema changes, select a fresh empty database. BullMQ manages
+its own internal schema through its official API.
 
 ## Inbound recovery and lifecycle operations
 

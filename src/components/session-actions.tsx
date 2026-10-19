@@ -1,6 +1,6 @@
 "use client";
 
-import { Button, Tooltip } from "@arco-design/web-react";
+import { Button,Tooltip } from "@arco-design/web-react";
 import { IconPoweroff } from "@arco-design/web-react/icon";
 import { useRouter } from "next/navigation";
 

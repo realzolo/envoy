@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
-import { adminData } from "@/modules/admin/queries";
+vi.mock("@/server/admin-auth", () => ({ getAdminSession: vi.fn().mockResolvedValue({ email: "admin@example.test" }) }));
+import { describe, expect, it, vi } from "vitest";
+import { getAdminSession } from "@/server/admin-auth";
+import { adminData } from "@/server/admin-queries";
 
 describe("admin data queries", () => {
   it("returns callback ownership fields used by inbound routing", async () => {
@@ -15,8 +17,8 @@ describe("admin data queries", () => {
   });
 });
 
-import { listEmailPage } from "@/modules/admin/queries";
-import { query } from "@/server/database";
+import { listEmailPage } from "@/server/admin-queries";
+import { query } from "@/platform/database";
 
 describe("historical delivery search", () => {
   it("searches beyond the old 200-row limit and pages tied timestamps without duplicates", async () => {
@@ -43,9 +45,10 @@ describe("historical delivery search", () => {
   });
 });
 
-import { setDomainGrant, sendTestMessage, toggleDomainGrant } from "@/modules/admin/actions";
+import { setDomainGrant, toggleDomainGrant } from "@/modules/identity/public";
+import { sendTestMessage } from "@/modules/outbound/public";
 import { createMessageSchema } from "@/lib/contracts";
-import { getDeliveryDetail, messageComposerData } from "@/modules/admin/queries";
+import { getDeliveryDetail, messageComposerData } from "@/server/admin-queries";
 
 describe("native admin mail", () => {
   it("accepts manually entered mail parameters and retains recipient roles in queries", async () => {
@@ -92,5 +95,12 @@ describe("native admin mail", () => {
     expect(access.grants).toEqual(expect.arrayContaining([expect.objectContaining({
       product_id: "prd_atlas", service_id: "svc_atlas_auth", domain: "mail.atlas.test",
     })]));
+  });
+});
+
+describe("admin data authorization", () => {
+  it("rejects reads when there is no administrator session", async () => {
+    vi.mocked(getAdminSession).mockResolvedValueOnce(null);
+    await expect(adminData("webhooks")).rejects.toThrow("Unauthorized");
   });
 });

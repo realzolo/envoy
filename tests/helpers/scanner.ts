@@ -1,5 +1,5 @@
 import { createServer, type Socket } from "node:net";
-import { processAttachmentScan } from "@/modules/attachments/tasks";
+import { processAttachmentScan } from "@/modules/attachments/public";
 
 /** Controlled wire fixture, not a real ClamAV installation or engine acceptance test. */
 export async function scannerFixture(reply: string | null = "stream: OK\0", handler?: (socket:Socket)=>void) {

@@ -1,10 +1,10 @@
-import { AttachmentUseError } from "@/modules/attachments/safety";
-import { FileValidationError } from "@/modules/files/service";
+import { AttachmentUseError } from "@/modules/attachments/public";
+import { FileValidationError } from "@/modules/attachments/public";
 import type { ZodError } from "zod";
-import { decodeCursor, DuplicateRiskError, IdempotencyConflictError, MessageValidationError } from "@/modules/core/message/service";
+import { decodeCursor, DuplicateRiskError, IdempotencyConflictError, MessageValidationError } from "@/modules/outbound/public";
 import { authenticateService, type ServiceIdentity } from "@/server/auth";
-import { enforceRateLimit } from "@/server/runtime-store";
-import { createId } from "@/server/ids";
+import { enforceRateLimit } from "@/platform/runtime-store";
+import { createId } from "@/platform/ids";
 import { recordRequest } from "@/server/request-log";
 import { BodyTooLargeError, readRequestBytes } from "@/server/request-body";
 import { MAX_REQUEST_BYTES } from "@/lib/contracts";

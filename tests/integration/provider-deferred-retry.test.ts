@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createMessageSchema } from "@/lib/contracts";
-import { acceptMessage, getDeliveryRetryEligibility, getMessage, MessageValidationError, retryMessage } from "@/modules/core/message/service";
-import { applyCanonicalEvent } from "@/modules/core/event/service";
-import { markAccepted, markUnknown, prepareSubmission } from "@/modules/core/routing/engine";
-import { db, query } from "@/server/database";
+import { acceptMessage, getDeliveryRetryEligibility, getMessage, MessageValidationError, retryMessage } from "@/modules/outbound/public";
+import { applyCanonicalEvent } from "@/modules/outbound/public";
+import { markAccepted, markUnknown, prepareSubmission } from "@/modules/outbound/public";
+import { db, query } from "@/platform/database";
 
 const identity = { serviceId: `svc_deferred_${crypto.randomUUID()}`, serviceName: "Deferred retry audit", productId: "prd_atlas", product: "Atlas", rateLimitPerMinute: 600 };
 const created: string[] = [];

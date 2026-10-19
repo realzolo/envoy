@@ -1,7 +1,7 @@
 import { generateKeyPairSync, sign } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { providerRegistry } from "@/modules/providers/registry";
-import type { ProviderSendContext } from "@/modules/providers/contracts";
+import { providerRegistry } from "@/integrations/providers/registry";
+import type { ProviderSendContext } from "@/integrations/providers/contracts";
 const contexts = {
   sendgrid: { accountId: "pa", config: { type: "sendgrid", schemaVersion: 1, region: "global" }, secret: { type: "sendgrid", apiKey: "test-key" } },
   ses: { accountId: "pa", config: { type: "ses", schemaVersion: 1, region: "us-east-1" }, secret: { type: "ses" } },

@@ -10,7 +10,10 @@ localization, and rendering remain in the calling service.
 - Next.js serves the internal Message API, provider event ingress, authentication, and the operations console.
 - A separate TypeScript worker runs delivery, event normalization, inbound processing, callbacks, reconciliation, and
   transactional outbox dispatch.
+- Business modules use application services, pure domain rules and semantic repository ports. HTTP controllers and
+  workers call module public interfaces; SQL and driver details stay in repository implementations.
 - PostgreSQL stores business state, BullMQ jobs (in its own schema), shared rate limits, and worker heartbeats.
+  Drizzle defines all application tables and provides the typed database client; complex parameterized SQL stays in repositories.
 - Provider credentials are stored as envelope-encrypted database records. Every secret has an independent AES-256-GCM
   data key wrapped by the configured root KEK.
 - Envoy never stores or renders business content definitions. Persisted content is the immutable send payload needed for
@@ -36,7 +39,9 @@ Requirements: Node.js 22+, pnpm, and PostgreSQL 14+ configured in `.env.local`.
 Create `.env.local` from `.env.example` and set an explicit administrator email, password, session secret, and KEK before
 starting the application.
 
-Initialize a new database with `pnpm db:setup`; this explicitly applies business and BullMQ schema migrations.
+Create an empty PostgreSQL database, then run `pnpm db:setup`. The initializer applies the complete application V1
+and invokes BullMQ's official PostgreSQL initializer. Re-running setup validates the same V1. A database with another
+application structure is rejected; setup never upgrades, repairs or deletes existing application data.
 
 ```bash
 pnpm install
@@ -141,6 +146,7 @@ publishes it. Copy `docker-compose.example.yml` to the Git-ignored `docker-compo
 ## Commands
 
 ```bash
+pnpm db:check           # verify complete V1 matches typed schema + database behaviors
 pnpm typecheck
 pnpm lint
 pnpm test
@@ -177,7 +183,18 @@ a dot and the original UTF-8 body within a fixed 300-second window, then durably
 secret only by pausing delivery, waiting for in-flight requests to finish, updating both sides and resuming; replay and
 incremental recovery remain available. See [callback operations](docs/OPERATIONS.md).
 
-Initialize a fresh database with `pnpm db:setup`. The sole application migration, `001_initial.sql`, directly defines domain sending/receiving grants, the independent Service suppression-management permission, domain-owned files, Service-scoped inbound routes and one callback with one current encrypted secret per Service. Applied migration checksums remain enforced.
+The only application migration is `db/migrations/001_initial.sql`: a complete V1 schema with domain permissions,
+configuration revisions, constraints, indexes, functions and triggers. Before the first release, edit the typed table
+definitions in `src/platform/database/schema/` or native database behaviors in `src/platform/database/schema/behaviors.ts`, then run
+`pnpm db:generate` and `pnpm db:check`. Review the resulting complete V1; do not add incremental migrations, journals,
+or compatibility paths. Point `DATABASE_URL` at a new empty database after a structure change. BullMQ manages its own
+schema through its official API; its third-party bookkeeping is separate from the application V1.
+English table and column comments are maintained in `src/platform/database/schema/documentation.ts`; generation
+requires a nonempty description for every typed table and column, and initialization validates the stored comments.
+
+Tests create and remove a unique isolated database for each run. Set `TEST_DATABASE_ADMIN_URL` to a PostgreSQL
+connection allowed to create databases (default: `postgresql://envoy:envoy@localhost:5432/postgres`); tests derive their
+connection from it and never reset a shared development database.
 
 Attachment safety belongs entirely to Envoy. Upload success means durable receipt; callers wait for `usage.canSend`
 before sending. All outbound/inline attachments and inbound downloads require a byte-bound current clean result;

@@ -2,17 +2,25 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMessageSchema, inboundDetailSchema, messageDetailSchema } from "@/lib/contracts";
 import { apiProblem, readJson, serviceRoute } from "@/server/service-api";
 import { authenticateService } from "@/server/auth";
-import { enforceRateLimit } from "@/server/runtime-store";
-import { digest } from "@/modules/attachments/scanner";
-import { query,transaction } from "@/server/database";
+import { enforceRateLimit } from "@/platform/runtime-store";
+import { digest } from "@/modules/attachments/public";
+import { query, transaction } from "@/platform/database";
 import { recordRequest } from "@/server/request-log";
-import { getDelivery, getInboundAttachment, getInboundMessage, getRequestDiagnostic } from "@/modules/core/resources/service";
+import { getDelivery, getRequestDiagnostic } from "@/modules/outbound/public";
+import { getInboundAttachment, getInboundMessage } from "@/modules/inbound/public";
 import { GET as openapi } from "@/app/api/v1/openapi.json/route";
 import { GET as getMessage } from "@/app/api/v1/messages/[id]/route";
 vi.mock("@/server/auth", () => ({ authenticateService: vi.fn() }));
-vi.mock("@/server/runtime-store", () => ({ enforceRateLimit: vi.fn() }));
-vi.mock("@/server/database", () => ({ query: vi.fn(), transaction: vi.fn() }));
-vi.mock("@/modules/config/object-store", () => ({ objectStore: () => ({ get: vi.fn().mockResolvedValue(Buffer.from("safe-attachment")) }) }));
+vi.mock("@/platform/runtime-store", () => ({ enforceRateLimit: vi.fn() }));
+vi.mock("@/platform/database", async importOriginal => {
+  const original = await importOriginal<typeof import("@/platform/database")>();
+  const query = vi.fn();
+  const transaction = vi.fn();
+  return { ...original, query, transaction, pool: () => ({ query }), db: () => ({ query }),
+    createUnitOfWork: (factory: (client: never) => unknown) => ({ run: (work: (repositories: unknown) => Promise<unknown>) => transaction((client: never) => work(factory(client))) }),
+  };
+});
+vi.mock("@/platform/storage/object-store", () => ({ objectStore: () => ({ get: vi.fn().mockResolvedValue(Buffer.from("safe-attachment")) }) }));
 const identity = { serviceId: "svc", serviceName: "Test", productId: "prd", product: "Test", rateLimitPerMinute: 600 };
 beforeEach(() => {
   vi.mocked(transaction).mockImplementation(async work=>work({query} as never));

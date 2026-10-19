@@ -1,6 +1,6 @@
 import { connection } from "next/server";
-import { DashboardOverview } from "@/components/delivery-chart";
-import { dashboardData } from "@/modules/admin/queries";
+import { DashboardOverview } from "@/features/outbound/delivery-chart";
+import { dashboardData } from "@/server/admin-queries";
 
 export default async function OverviewPage() {
   await connection();

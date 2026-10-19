@@ -1,5 +1,5 @@
 import { afterEach,describe,expect,it,vi } from "vitest";
-import { scanBytes,digest } from "@/modules/attachments/scanner";
+import { scanBytes, digest } from "@/modules/attachments/public";
 import { scannerFixture } from "../helpers/scanner";
 
 const bytes=Buffer.from("controlled harmless bytes");

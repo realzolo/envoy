@@ -1,0 +1,21 @@
+import { createAuthorizationService } from './application/authorization';
+import { createContentService } from './application/content';
+import { createDiscoveryService } from './application/discovery';
+import { createManagementService } from './application/management';
+import { createAuthorizationRepository } from './infrastructure/authorization';
+import { discoveryRepository } from './infrastructure/capabilities.read-repository';
+import { contentUnitOfWork } from './infrastructure/content.repository';
+import { managementRepository,managementUnitOfWork } from './infrastructure/management.repository';
+export const {createProduct,toggleProduct,setDomainGrant,toggleDomainGrant,rotateServiceCredential,revokeServiceCredential,createService,updateService,issueServiceCredential}=createManagementService(managementRepository,managementUnitOfWork);
+export { ContentConflictError,ServiceConfigurationConflictError } from './contracts';
+export type { ServiceIdentity } from './contracts';
+export { activeServiceExists,identityAdminReads } from './infrastructure/admin.read-repository';
+export const {authorizedSendingDomain,canAccessInbound}=createAuthorizationService(createAuthorizationRepository);
+export const discoverMail=createDiscoveryService(discoveryRepository);
+export const purgeContent=createContentService(contentUnitOfWork);
+
+import { hashApiKey } from '@/platform/crypto/hash';
+import { SERVICE_REQUESTS_PER_MINUTE } from '@/server/service-limits';
+import { createServiceAuthenticator } from './application/authentication';
+import { credentialRepository } from './infrastructure/credential.repository';
+export const authenticateServiceKey=createServiceAuthenticator(credentialRepository,{hashKey:hashApiKey,requestsPerMinute:SERVICE_REQUESTS_PER_MINUTE,reportUsageFailure:error=>console.error('Credential usage update failed',error)});

@@ -1,5 +1,5 @@
 import { createSuppressionSchema } from "@/lib/contracts";
-import { createSuppression, listSuppressions } from "@/modules/core/resources/service";
+import { createSuppression, listSuppressions } from "@/modules/suppressions/public";
 import { validationErrors, serviceRoute, readJson, apiProblem } from "@/server/service-api";
 
 export const GET = serviceRoute(async (request, identity) => {

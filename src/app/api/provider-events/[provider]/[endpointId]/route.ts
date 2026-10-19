@@ -1,7 +1,7 @@
 import { BodyTooLargeError, readRequestBytes } from "@/server/request-body";
-import { providerTypeSchema } from "@/modules/providers/contracts";
-import { ingestProviderWebhook } from "@/modules/webhooks/ingress";
-import { clientIpFromTrustedProxy } from "@/server/network";
+import { providerTypeSchema } from "@/integrations/providers/contracts";
+import { ingestProviderWebhook } from "@/modules/inbound/public";
+import { clientIpFromTrustedProxy } from "@/platform/network";
 import { recordRequest } from "@/server/request-log";
 
 export const runtime = "nodejs";

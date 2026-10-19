@@ -2,9 +2,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { mockClient } from "aws-sdk-client-mock";
 import { SendEmailCommand, SESv2Client } from "@aws-sdk/client-sesv2";
 import { simpleParser } from "mailparser";
-import { providerRegistry } from "@/modules/providers/registry";
-import { assertMessageCapabilities, buildMimeMessage, safeDiagnostic } from "@/modules/providers/shared";
-import type { CanonicalMessage, ProviderSendContext, ProviderType } from "@/modules/providers/contracts";
+import { providerRegistry } from "@/integrations/providers/registry";
+import { assertMessageCapabilities, buildMimeMessage, safeDiagnostic } from "@/integrations/providers/shared";
+import type { CanonicalMessage, ProviderSendContext, ProviderType } from "@/integrations/providers/contracts";
 
 const message: CanonicalMessage = {
   submissionId: "sub_native",

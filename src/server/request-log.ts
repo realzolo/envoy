@@ -1,5 +1,5 @@
-import { createId } from "@/server/ids";
-import { query } from "@/server/database";
+import { createId } from "@/platform/ids";
+import { query } from "@/platform/database";
 
 export async function recordRequest(input: {
   requestId?: string;

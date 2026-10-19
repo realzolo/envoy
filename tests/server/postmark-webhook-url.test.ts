@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { postmarkWebhookUrl } from "@/components/provider-accounts";
+import { postmarkWebhookUrl } from "@/features/channels/provider-accounts";
 
 describe("Postmark callback URL", () => {
   it("encodes Basic Auth credentials into the provider-facing URL", () => {

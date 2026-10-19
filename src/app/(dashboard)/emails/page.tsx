@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
-import { MessagesPageView } from "@/components/messages-page-view";
-import { messageFilters } from "@/modules/admin/message-filters";
-import { listEmailPage } from "@/modules/admin/queries";
+import { MessagesPageView } from "@/features/outbound/messages-page-view";
+import { messageFilters } from "@/modules/admin/contracts";
+import { listEmailPage } from "@/server/admin-queries";
 
 export const metadata: Metadata = { title: "Messages" };
 

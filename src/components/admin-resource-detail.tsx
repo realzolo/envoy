@@ -1,9 +1,9 @@
 "use client";
 
-import { Alert, Button, Drawer, Spin } from "@arco-design/web-react";
-import { type ReactNode, useEffect, useState } from "react";
 import type { Row } from "@/components/admin-console-shared";
 import styles from "@/components/admin-views.module.css";
+import { Alert,Button,Drawer,Spin } from "@arco-design/web-react";
+import { type ReactNode,useEffect,useState } from "react";
 
 /** A detail stays on its list page so filters and scroll position are retained. */
 export function ResourceDetail({ title, path, onClose, children }: { title: string; path: string; onClose: () => void; children: (resource: Row) => ReactNode }) {

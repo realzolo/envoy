@@ -1,6 +1,6 @@
 "use client";
 
-import { Button, Space, Typography } from "@arco-design/web-react";
+import { Button,Space,Typography } from "@arco-design/web-react";
 import { IconArrowLeft } from "@arco-design/web-react/icon";
 import type { ReactNode } from "react";
 

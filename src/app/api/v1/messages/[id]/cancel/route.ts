@@ -1,5 +1,5 @@
 import { serviceRoute, apiProblem } from "@/server/service-api";
-import { cancelMessage } from "@/modules/core/message/service";
+import { cancelMessage } from "@/modules/outbound/public";
 
 export const POST = serviceRoute(async (request, identity, context: { params: Promise<{ id: string }> }) => {
   const result = await cancelMessage((await context.params).id, identity.serviceId);

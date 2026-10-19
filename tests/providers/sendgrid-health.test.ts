@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { providerRegistry } from "@/modules/providers/registry";
-import type { ProviderSendContext } from "@/modules/providers/contracts";
+import { providerRegistry } from "@/integrations/providers/registry";
+import type { ProviderSendContext } from "@/integrations/providers/contracts";
 
 const context: ProviderSendContext = {
   accountId: "pa_sendgrid",

@@ -1,117 +1,64 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createInboundService } from "@/modules/inbound/application/service";
+import type { InboundDependencies, InboundRepository } from "@/modules/inbound/application/ports";
+import type { InboundRoute } from "@/modules/inbound/contracts";
 
-const mocks = vi.hoisted(() => ({
-  createId: vi.fn(),
-  objectStore: vi.fn(),
-  put: vi.fn(),
-  query: vi.fn(),
-  transaction: vi.fn()
-}));
-
-vi.mock("@/modules/config/object-store", () => ({
-  objectStore: mocks.objectStore
-}));
-vi.mock("@/server/database", () => ({
-  query: mocks.query,
-  transaction: mocks.transaction
-}));
-vi.mock("@/server/ids", () => ({
-  createId: mocks.createId
-}));
-
-import { persistInbound } from "@/modules/inbound/service";
-
-const route = {
-  id: "ir_test",
-  product_id: "prd_test",
-  service_id: "svc_test",
-  recipients: ["support@example.test"]
+const route: InboundRoute = { id: "ir_test", product_id: "prd_test", service_id: "svc_test", recipients: ["support@example.test"] };
+const now = new Date("2026-09-24T00:00:00.000Z");
+const result = () => Promise.resolve({ rows: [], rowCount: 1 });
+const repository: InboundRepository = {
+  findRoutes: vi.fn(), freezeReceipt: vi.fn(result), readReceipt: vi.fn(), findTombstone: vi.fn(), insertRejected: vi.fn(),
+  allowedDomains: vi.fn(), findCopy: vi.fn(), insertCopy: vi.fn(result), findConcurrentCopy: vi.fn(), recordDates: vi.fn(result),
+  claimCopy: vi.fn(), copyState: vi.fn(), renewClaim: vi.fn(result), authorizeCompletion: vi.fn(result), completeCopy: vi.fn(),
+  insertAttachment: vi.fn(result), subscribedCallbacks: vi.fn(), insertCallback: vi.fn(result), enqueueCallback: vi.fn(result),
+  rejectCopy: vi.fn(result), releaseClaim: vi.fn(result), registerAttachment: vi.fn(), completeUploads: vi.fn(),
 };
-
+const uploads = { register: vi.fn(), put: vi.fn() };
+const dependencies: InboundDependencies = {
+  repository, unitOfWork: { run: work => work(repository) }, id: prefix => `${prefix}_test`, digest: () => "digest",
+  sanitizeHtml: html => html, uploads,
+};
+const { persistInbound } = createInboundService(dependencies);
 const message = {
-  externalMessageId: "external-test",
-  from: "sender@example.test",
-  to: ["support@example.test"],
-  envelopeRecipients: ["support@example.test"],
-  cc: [],
-  bcc: [],
-  subject: "Inbound test",
-  rawMime: new Uint8Array([1, 2, 3]),
-  attachments: [],
-  receivedAt: new Date("2026-09-24T00:00:00.000Z")
+  externalMessageId: "external-test", from: "sender@example.test", to: ["support@example.test"], envelopeRecipients: ["support@example.test"],
+  cc: [], bcc: [], subject: "Inbound test", rawMime: Buffer.from([1, 2, 3]), attachments: [], receivedAt: now,
 };
+const input = () => ({ providerAccountId: "pa_test", webhookEndpointId: "pwe_test", rawEventId: "raw_test", message });
 
-function configureTransactions() {
-  mocks.transaction.mockImplementation(async (callback: (client: { query: ReturnType<typeof vi.fn> }) => Promise<unknown>) => {
-    const client = {
-      query: vi.fn().mockImplementation(async (sql: string) => sql.includes("FROM inbound_routes") ? { rows: [route], rowCount: 1 } : sql.includes("FROM inbound_receipts") ? { rows:[{ routes:[route],ingress_received_at:new Date() }],rowCount:1 } : { rows: [{ id: "inb_test", domain:"example.test",ready_at:new Date() }], rowCount: 1 })
-    };
-    return callback(client);
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.mocked(repository.findRoutes).mockResolvedValue({ rows: [route], rowCount: 1 });
+  vi.mocked(repository.readReceipt).mockResolvedValue({ rows: [{ routes: [route], terminated_at: null, ingress_received_at: now }], rowCount: 1 });
+  vi.mocked(repository.allowedDomains).mockResolvedValue({ rows: [{ domain: "example.test" }], rowCount: 1 });
+  vi.mocked(repository.findCopy).mockResolvedValue({ rows: [], rowCount: 0 });
+  vi.mocked(repository.claimCopy).mockResolvedValue({ rows: [{ received_at: now }], rowCount: 1 });
+  vi.mocked(repository.completeCopy).mockResolvedValue({ rows: [{ id: "inb_test", ready_at: now }], rowCount: 1 });
+  vi.mocked(repository.subscribedCallbacks).mockResolvedValue({ rows: [], rowCount: 0 });
+  uploads.put.mockResolvedValue(undefined);
+});
+
+describe("inbound application without a database", () => {
+  it("keeps scanning retryable after storage failure and completes the retry", async () => {
+    uploads.put.mockRejectedValueOnce(new Error("S3 temporarily unavailable"));
+    await expect(persistInbound(input())).rejects.toThrow("S3 temporarily unavailable");
+    expect(repository.rejectCopy).not.toHaveBeenCalled();
+    expect(repository.releaseClaim).toHaveBeenCalled();
+    await expect(persistInbound(input())).resolves.toBe("inb_test");
+    expect(uploads.put).toHaveBeenCalledTimes(2);
+    expect(repository.completeUploads).toHaveBeenCalledWith(["inbound/inb_test/claim_test/raw.eml"]);
   });
-}
-
-describe("inbound attachment scanning", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mocks.query.mockReset().mockResolvedValue({ rows: [{ id: "inb_test" }], rowCount: 1 });
-    mocks.createId.mockImplementation((prefix: string) => `${prefix}_test`);
-    mocks.objectStore.mockReturnValue({ put: mocks.put });
+  it("rejects message-size violations before storing bytes", async () => {
+    await expect(persistInbound({ ...input(), message: { ...message, rawMime: { byteLength: 25 * 1024 * 1024 + 1 } as Buffer } })).resolves.toBe("inb_test");
+    expect(repository.rejectCopy).toHaveBeenCalledWith(expect.objectContaining({ reason: "INBOUND_MESSAGE_TOO_LARGE" }));
+    expect(uploads.put).not.toHaveBeenCalled();
   });
-
-  afterEach(() => vi.unstubAllEnvs());
-
-  it("keeps a scanning message retryable after an object-store failure", async () => {
-    configureTransactions();
-    mocks.query.mockImplementation(async (sql:string) => sql.startsWith("SELECT id,status,content_purged_at") ? {rows:[],rowCount:0} : {rows:[{id:"inb_test",domain:"example.test",status:"scanning",received_at:new Date()}],rowCount:1});
-    mocks.put.mockRejectedValueOnce(new Error("S3 temporarily unavailable")).mockResolvedValueOnce(undefined);
-
-    await expect(persistInbound({
-      providerAccountId: "pa_test",
-      webhookEndpointId: "pwe_test",
-      rawEventId: "raw_test",
-      message
-    })).rejects.toThrow("S3 temporarily unavailable");
-    expect(mocks.query.mock.calls.some(([sql]) => (String(sql).includes("status='rejected'") || String(sql).includes("'rejected',$13")) && !String(sql).includes("delivery_scope<>ALL"))).toBe(false);
-
-    mocks.query.mockResolvedValue({ rows: [{ id: "inb_test", domain:"example.test", status: "scanning" }], rowCount: 1 });
-    await expect(persistInbound({
-      providerAccountId: "pa_test",
-      webhookEndpointId: "pwe_test",
-      rawEventId: "raw_test",
-      message
-    })).resolves.toBe("inb_test");
-    expect(mocks.put).toHaveBeenCalledTimes(2);
-  });
-
-  it("rejects message-size violations without retrying the processing failure", async () => {
-    configureTransactions();
-    mocks.query.mockImplementation(async (sql:string) => sql.startsWith("SELECT id,status,content_purged_at") ? {rows:[],rowCount:0} : {rows:[{id:"inb_test",domain:"example.test",status:"scanning",received_at:new Date()}],rowCount:1});
-
-    await expect(persistInbound({
-      providerAccountId: "pa_test",
-      webhookEndpointId: "pwe_test",
-      rawEventId: "raw_test",
-      message: { ...message, rawMime: { byteLength: 25 * 1024 * 1024 + 1 } as Uint8Array }
-    })).resolves.toBe("inb_test");
-    expect(mocks.query.mock.calls.some(([sql]) => (String(sql).includes("status='rejected'") || String(sql).includes("'rejected',$13")))).toBe(true);
-    expect(mocks.put).not.toHaveBeenCalled();
-  });
-
-  it("quarantines an initial receipt without eligible routes", async () => {
-    mocks.transaction.mockImplementation(async (callback: (client: { query: ReturnType<typeof vi.fn> }) => Promise<unknown>) => callback({
-      query: vi.fn().mockImplementation(async (sql:string)=>sql.includes("FROM inbound_receipts") ? {rows:[{routes:[],ingress_received_at:new Date()}],rowCount:1} : { rows: [], rowCount: 0 })
-    }));
-    mocks.query
-      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
-      .mockResolvedValueOnce({ rows: [{ id: "inb_test" }], rowCount: 1 });
-
-    await expect(persistInbound({
-      providerAccountId: "pa_test",
-      webhookEndpointId: "pwe_test",
-      rawEventId: "raw_test",
-      message
-    })).resolves.toBe("inb_test");
-    expect(mocks.query.mock.calls.some(([sql]) => (String(sql).includes("status='rejected'") || String(sql).includes("'rejected',$13")))).toBe(true);
-    expect(mocks.put).not.toHaveBeenCalled();
+  it("quarantines receipts with no eligible routes", async () => {
+    vi.mocked(repository.findRoutes).mockResolvedValue({ rows: [], rowCount: 0 });
+    vi.mocked(repository.readReceipt).mockResolvedValue({ rows: [{ routes: [], terminated_at: null, ingress_received_at: now }], rowCount: 1 });
+    vi.mocked(repository.findTombstone).mockResolvedValue({ rows: [], rowCount: 0 });
+    vi.mocked(repository.insertRejected).mockResolvedValue({ rows: [{ id: "inb_test" }], rowCount: 1 });
+    await expect(persistInbound(input())).resolves.toBe("inb_test");
+    expect(repository.insertRejected).toHaveBeenCalledWith(expect.objectContaining({ reason: "NO_INBOUND_ROUTE" }));
+    expect(uploads.put).not.toHaveBeenCalled();
   });
 });

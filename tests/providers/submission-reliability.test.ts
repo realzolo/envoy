@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mockClient } from "aws-sdk-client-mock";
 import { SendEmailCommand, SESv2Client } from "@aws-sdk/client-sesv2";
-import { providerRegistry } from "@/modules/providers/registry";
-import type { CanonicalMessage, ProviderSendContext, ProviderType } from "@/modules/providers/contracts";
+import { providerRegistry } from "@/integrations/providers/registry";
+import type { CanonicalMessage, ProviderSendContext, ProviderType } from "@/integrations/providers/contracts";
 
 const message: CanonicalMessage = { submissionId: "sub", from: { name: "App", email: "app@example.com" }, to: [{ email: "person@example.net" }], cc: [], bcc: [], replyTo: [], headers: {}, references: [], subject: "Hello", html: "<p>Hello</p>", text: "Hello", attachments: [], tags: {} };
 const contexts: Partial<Record<ProviderType, ProviderSendContext>> = {

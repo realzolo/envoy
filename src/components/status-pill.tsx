@@ -1,7 +1,7 @@
 "use client";
 
-import { Tag } from "@arco-design/web-react";
 import type { DeliveryStatus } from "@/lib/types";
+import { Tag } from "@arco-design/web-react";
 
 const statusMeta: Record<DeliveryStatus, { color: string; label: string }> = {
   delivered: { color: "green", label: "Delivered" },

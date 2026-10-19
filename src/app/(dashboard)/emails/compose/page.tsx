@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
-import { ComposeMessageView } from "@/components/compose-message-view";
-import { messageComposerData } from "@/modules/admin/queries";
+import { ComposeMessageView } from "@/features/outbound/compose-message-view";
+import { messageComposerData } from "@/server/admin-queries";
 
 export const metadata: Metadata = { title: "Send a test" };
 

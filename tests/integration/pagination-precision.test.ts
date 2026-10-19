@@ -1,7 +1,8 @@
 import { afterAll, expect, it } from "vitest";
-import { db, query } from "@/server/database";
-import { decodeCursor, listMessages } from "@/modules/core/message/service";
-import { listDeliveries, listEvents, listInboundMessages } from "@/modules/core/resources/service";
+import { db, query } from "@/platform/database";
+import { decodeCursor, listMessages } from "@/modules/outbound/public";
+import { listDeliveries, listEvents } from "@/modules/outbound/public";
+import { listInboundMessages } from "@/modules/inbound/public";
 
 const key = crypto.randomUUID().replaceAll("-", "");
 const serviceId = `svc_pagination_${key}`;

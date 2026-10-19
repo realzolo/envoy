@@ -1,4 +1,4 @@
-import { getInboundAttachment } from "@/modules/core/resources/service";
+import { getInboundAttachment } from "@/modules/inbound/public";
 import { serviceRoute, apiProblem } from "@/server/service-api";
 
 export const GET = serviceRoute(async (_request, identity, context: { params: Promise<{ id: string; attachmentId: string }> }) => {

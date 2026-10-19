@@ -1,5 +1,5 @@
 import { eventTypes } from "@/lib/contracts";
-import { listEvents } from "@/modules/core/resources/service";
+import { listEvents } from "@/modules/outbound/public";
 import { serviceRoute, apiProblem, pagination } from "@/server/service-api";
 
 export const GET = serviceRoute(async (request, identity) => {

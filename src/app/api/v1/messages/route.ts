@@ -1,5 +1,5 @@
 import { createMessageSchema, processingStates, messageOutcomes } from "@/lib/contracts";
-import { acceptMessage, listMessages } from "@/modules/core/message/service";
+import { acceptMessage, listMessages } from "@/modules/outbound/public";
 import { validationErrors, apiProblem, pagination, readJson, serviceRoute, getRequestId } from "@/server/service-api";
 
 export const runtime = "nodejs";

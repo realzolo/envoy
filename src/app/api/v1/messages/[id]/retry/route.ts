@@ -1,6 +1,6 @@
 import { validationErrors, serviceRoute, readJson, apiProblem, getRequestId } from "@/server/service-api";
 import { retryMessageSchema } from "@/lib/contracts";
-import { retryMessage } from "@/modules/core/message/service";
+import { retryMessage } from "@/modules/outbound/public";
 
 export const POST = serviceRoute(async (request, identity, context: { params: Promise<{ id: string }> }) => {
   const key = request.headers.get("idempotency-key")?.trim();

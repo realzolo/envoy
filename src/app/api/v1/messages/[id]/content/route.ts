@@ -1,4 +1,4 @@
-import { ContentConflictError, purgeContent } from "@/modules/core/resources/content";
+import { ContentConflictError, purgeContent } from "@/modules/identity/public";
 import { apiProblem, serviceRoute } from "@/server/service-api";
 
 export const DELETE = serviceRoute(async (_request,identity,context: { params: Promise<{ id: string }> }) => {

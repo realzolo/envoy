@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { DeliveryDetailView } from "@/components/delivery-detail-view";
-import { getDeliveryDetail } from "@/modules/admin/queries";
+import { DeliveryDetailView } from "@/features/outbound/delivery-detail-view";
+import { getDeliveryDetail } from "@/server/admin-queries";
 
 export const metadata: Metadata = { title: "Delivery details" };
 

@@ -9,5 +9,5 @@ export default defineConfig({
     globalSetup: ["tests/global-setup.ts"],
     setupFiles: ["tests/setup.ts"],
     sequence: { concurrent: false }
-  }, resolve: { alias: { "@": resolve(import.meta.dirname, "src") } }
+  }, resolve: { alias: { "@": resolve(import.meta.dirname, "src"), "server-only": resolve(import.meta.dirname, "tests/helpers/server-only.ts") } }
 });

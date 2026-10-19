@@ -3,13 +3,13 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { Webhook } from "svix";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { providerRegistry } from "@/modules/providers/registry";
-import type { ProviderSendContext } from "@/modules/providers/contracts";
+import { providerRegistry } from "@/integrations/providers/registry";
+import type { ProviderSendContext } from "@/integrations/providers/contracts";
 import {
   isTrustedSnsSigningCertificateUrl,
   isTrustedSnsSubscribeUrl,
   snsSignatureAlgorithm
-} from "@/modules/providers/ses/sns-security";
+} from "@/integrations/providers/ses/sns-security";
 
 const fixture = async (name: string) => readFile(resolve("tests/fixtures", name));
 afterEach(() => vi.unstubAllGlobals());

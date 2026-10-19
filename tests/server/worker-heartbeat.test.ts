@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { query } from "@/server/database";
-import { removeWorkerHeartbeat, workerHeartbeatAlive, writeWorkerHeartbeat } from "@/server/runtime-store";
+import { query } from "@/platform/database";
+import { removeWorkerHeartbeat, workerHeartbeatAlive, writeWorkerHeartbeat } from "@/platform/runtime-store";
 
 const workerId = `test-heartbeat-${crypto.randomUUID()}`;
 afterEach(() => removeWorkerHeartbeat(workerId));

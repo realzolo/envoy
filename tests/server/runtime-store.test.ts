@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { query, transaction } from "@/server/database";
-import { cleanupRuntimeStore, enforceScopedRateLimit, reserveRateLimits } from "@/server/runtime-store";
+import { query, transaction } from "@/platform/database";
+import { cleanupRuntimeStore, enforceScopedRateLimit, reserveRateLimits } from "@/platform/runtime-store";
 
 const scope = `runtime-test-${crypto.randomUUID()}`;
 afterEach(async () => { await query("DELETE FROM rate_limit_counters WHERE scope=$1", [scope]); });

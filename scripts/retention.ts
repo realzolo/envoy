@@ -1,6 +1,6 @@
 import { loadEnvConfig } from "@next/env";
-import { db } from "../src/server/database";
-import { retentionOptions, runRetention } from "../src/server/services/retention";
+import { db } from "../src/platform/database";
+import { retentionOptions, runRetention } from "../src/platform/retention/public";
 
 loadEnvConfig(process.cwd());
 async function main() {

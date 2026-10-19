@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mockClient } from "aws-sdk-client-mock";
 import { GetObjectCommand, S3Client } from "@aws-sdk/client-s3";
-import { providerRegistry } from "@/modules/providers/registry";
-import type { ProviderSendContext, ProviderType } from "@/modules/providers/contracts";
+import { providerRegistry } from "@/integrations/providers/registry";
+import type { ProviderSendContext, ProviderType } from "@/integrations/providers/contracts";
 
 const contexts = {
   sendgrid: { accountId: "pa",config: { type: "sendgrid",schemaVersion: 1,region: "global" },secret: { type: "sendgrid",apiKey: "test-key" } },

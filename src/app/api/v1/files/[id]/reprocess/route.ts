@@ -1,4 +1,4 @@
-import { retryAttachmentScan } from "@/modules/attachments/tasks";
+import { retryAttachmentScan } from "@/modules/attachments/public";
 import { apiProblem, serviceRoute } from "@/server/service-api";
 export const POST = serviceRoute(async (_request,identity,context:{params:Promise<{id:string}>}) => {
   const result=await retryAttachmentScan((await context.params).id,"outbound",identity.serviceId,`service:${identity.serviceId}`);

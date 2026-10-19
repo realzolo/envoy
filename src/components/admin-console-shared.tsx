@@ -1,17 +1,16 @@
 "use client";
 
-import { Alert, Button, Card, Empty, Form, Input, Message, Modal, Space, Table, Tag, Tooltip, Typography, type PaginationProps, type TableColumnProps } from "@arco-design/web-react";
-import { IconCheck, IconDown, IconUp } from "@arco-design/web-react/icon";
+import { Alert,Button,Card,Empty,Form,Input,Message,Modal,Space,Table,Tag,Tooltip,Typography,type PaginationProps,type TableColumnProps } from "@arco-design/web-react";
+import { IconCheck,IconDown,IconUp } from "@arco-design/web-react/icon";
 import { useRouter } from "next/navigation";
-import { type ComponentProps, type ReactNode, createContext, useContext, useState } from "react";
+import { createContext,useContext,useState,type ComponentProps,type ReactNode } from "react";
 
-import { LocalTime } from "@/components/local-time";
 import styles from "@/components/admin-views.module.css";
+import { LocalTime } from "@/components/local-time";
 
 export type Row = Record<string, unknown>;
-export type Data = {configuration?:Row} & Partial<Record<"tasks" | "observations" | "grants" | "failedWork" | "audit" | "callbacks" | "callbackDeliveries" | "canonicalEvents" | "credentials" | "descriptors" | "domains" | "inbound" | "inboundRoutes" | "policies" | "products" | "providers" | "rawEvents" | "senders" | "services" | "suppressions" | "webhooks", Row[]>>;
-export type AdminActionName = "attachment.reprocess" | "domain.create" | "domain.toggle" | "identity.refresh" | "identity.toggle" | "routing.create" | "routing.update" | "routing.simulate" | "routing.toggle" | "product.create" | "product.toggle" | "service.create" | "service.update" | "credential.issue" | "credential.rotate" | "credential.revoke" | "callback.update" | "callback.test" | "callback.toggle" | "callback.replace_secret" | "callback.replay_dlq" | "callback.terminate" | "event.replay" | "event.terminate" | "suppression.create" | "suppression.remove" | "inbound_route.create" | "inbound_route.toggle" | "delivery.retry" | "outbox.retry";
-export type AdminAction = { action: AdminActionName } & Row;
+export type { AdminData as Data } from "@/modules/admin/contracts";
+export type AdminMutation = {method:"POST"|"PUT"|"PATCH"|"DELETE";path:string;payload:Record<string,unknown>};
 export type FormValues = Record<string, unknown>;
 export type ActionNotice = { kind: "success" | "error"; text: string } | null;
 
@@ -54,11 +53,11 @@ export function ActionForm({ fieldErrors, className, ...props }: ComponentProps<
   return <FieldErrorContext.Provider value={fieldErrors ?? {}}><Form labelAlign="left" colon={false} {...props} className={[styles.form, ...(Array.isArray(className) ? className : [className])].filter(Boolean).join(" ")} /></FieldErrorContext.Provider>;
 }
 
-export async function mutate(body: AdminAction) {
-  const response = await fetch("/api/admin/actions", {
-    method: "POST",
+export async function mutate(body: AdminMutation) {
+  const response = await fetch(body.path, {
+    method: body.method,
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify(body.payload),
   });
   const payload = await response.json() as { error?: string; result?: unknown; fields?: Record<string, string> };
   if (!response.ok) throw new AdminActionError(payload.error ?? "Action failed", payload.fields);
@@ -92,7 +91,7 @@ export function useAction() {
   const [fields, setFields] = useState<Record<string, string>>({});
   const [notice, setNoticeState] = useState<ActionNotice>(null);
 
-  async function run(body: AdminAction) {
+  async function run(body: AdminMutation) {
     setPending(true);
     setFields({});
     setNoticeState(null);
@@ -215,7 +214,7 @@ export function ActionButton({
   confirmTitle,
   confirmOkText,
 }: {
-  body: AdminAction;
+  body: AdminMutation;
   children: ReactNode;
   danger?: boolean;
   confirmText?: string;

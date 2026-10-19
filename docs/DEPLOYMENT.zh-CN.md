@@ -1,6 +1,6 @@
 # Envoy Docker 部署
 
-生产服务器直接拉取源码，通过 Docker Compose 构建并运行。生产环境包含 Web、Worker 和一次性 Migration 三个容器任务，统一加入
+生产服务器直接拉取源码，通过 Docker Compose 构建并运行。生产环境包含 Web、Worker 和一次性 V1 初始化三个容器任务，统一加入
 `envoy-network` bridge 网络；PostgreSQL 和 R2 使用外部服务。
 
 ## 1. 环境要求
@@ -78,6 +78,14 @@ docker compose run --rm migrate
 docker compose up -d web worker
 ```
 
+应用只保留 `db/migrations/001_initial.sql` 一个完整 V1 初始化脚本，包含最终表结构、索引、约束、函数和触发器。
+当前 V1 尚未发布：修改 `src/platform/database/schema/` 的类型化定义或 `src/platform/database/schema/behaviors.ts` 后，执行
+`pnpm db:generate` 重新生成同一个 V1，执行 `pnpm db:check` 验证一致性。禁止新增历史迁移补丁、迁移台账或旧数据兼容路径。
+所有表和字段的英文业务备注统一维护在 `src/platform/database/schema/documentation.ts`，并生成到同一个 V1；生成时禁止遗漏或空备注。
+
+首次初始化请使用空数据库。重复运行会比较现有数据库与最终 V1 的结构及表、字段备注；未知结构或备注漂移会报错，初始化不会自动升级或删除数据。
+V1 结构调整后改用新的空数据库即可。BullMQ 的内部版本记录由其官方库独立维护，不属于应用的迁移历史。
+
 Compose 默认只将服务绑定到本机 `127.0.0.1:6178`。请在同一主机上配置 HTTPS 反向代理，不要直接将 Compose 端口暴露到公网。
 健康检查：
 
@@ -105,7 +113,7 @@ docker compose run --rm migrate
 docker compose up -d web worker
 ```
 
-数据库迁移成功后才会更新 Web 和 Worker 容器。
+V1 初始化或结构校验成功后才会更新 Web 和 Worker 容器。
 
 ## 6. 常用命令
 
@@ -140,6 +148,6 @@ docker compose run --rm migrate
 docker compose up -d web worker
 ```
 
-数据库迁移不会自动回滚，回滚前需要确认旧代码兼容当前数据库结构。
+回滚只替换兼容当前 V1 结构的应用代码，不会自动恢复数据库；如需恢复数据，请使用经过验证的备份恢复流程。
 
-默认一个 Web 与一个 Worker 的连接预算最多为 48（另留迁移、监控及余量）；增加副本时同步调整数据库连接上限。迁移命令同时初始化业务与 BullMQ schema，运行进程只校验版本。R2 使用桶默认加密，不设置 AWS 专用 SSE 请求头。
+默认一个 Web 与一个 Worker 的连接预算最多为 48（另留迁移、监控及余量）；增加副本时同步调整数据库连接上限。初始化命令使用唯一 V1 建立业务结构，再调用 BullMQ 官方 API 初始化队列 schema；Web 和 Worker 不执行结构变更。R2 使用桶默认加密，不设置 AWS 专用 SSE 请求头。

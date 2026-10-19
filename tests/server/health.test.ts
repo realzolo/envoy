@@ -1,13 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("@/server/database", () => ({ databaseHealth: vi.fn() }));
-vi.mock("@/server/queues", () => ({ queueSchemaHealth: vi.fn() }));
-vi.mock("@/server/services/outbox", () => ({ outboxBacklog: vi.fn() }));
+vi.mock("@/platform/database", () => ({ databaseHealth: vi.fn() }));
+vi.mock("@/platform/queues", () => ({ queueSchemaHealth: vi.fn() }));
+vi.mock("@/platform/outbox/public", () => ({ outboxBacklog: vi.fn() }));
 
 import { GET } from "@/app/api/health/route";
-import { databaseHealth } from "@/server/database";
-import { queueSchemaHealth } from "@/server/queues";
-import { outboxBacklog } from "@/server/services/outbox";
+import { databaseHealth } from "@/platform/database";
+import { queueSchemaHealth } from "@/platform/queues";
+import { outboxBacklog } from "@/platform/outbox/public";
 
 describe("public health endpoint", () => {
   it("returns only the stable public success shape", async () => {

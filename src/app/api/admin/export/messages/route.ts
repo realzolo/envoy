@@ -1,6 +1,6 @@
+import { messageFilters } from "@/modules/admin/contracts";
 import { getAdminSession } from "@/server/admin-auth";
-import { messageFilters } from "@/modules/admin/message-filters";
-import { listEmailPage } from "@/modules/admin/queries";
+import { listEmailPage } from "@/server/admin-queries";
 
 export function csvCell(value: unknown) {
   const text = String(value ?? "");

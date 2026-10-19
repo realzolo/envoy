@@ -1,4 +1,4 @@
-import { listDeliveries } from "@/modules/core/resources/service";
+import { listDeliveries } from "@/modules/outbound/public";
 import { serviceRoute, apiProblem, pagination } from "@/server/service-api";
 
 import { deliveryStatuses } from "@/lib/contracts";

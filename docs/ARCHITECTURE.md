@@ -1,392 +1,81 @@
-# Envoy Architecture
+# V1 architecture
 
-## Trust boundaries
+Envoy is a modular monolith with a Next.js web application and a separate asynchronous worker. PostgreSQL is the authority for business state. The web and worker entry points compose the same framework-independent application services.
 
-Business services authenticate with service-scoped credentials and know nothing about the active email provider. Their
-request and callback contracts contain no provider-specific fields. Provider SDKs and native payloads are confined to
-modules under `src/modules/providers`.
+The structure follows the Next.js recommendation to use a server-side data access layer with authorization and minimal DTOs, and Spring Boot's business-module organization. Next.js does not prescribe an MVC directory or an ORM. Envoy makes these boundaries explicit so that a use case can be read without reading SQL.
 
-Business services own content definitions, localization, and rendering. They submit native sender and recipient fields, the final subject, HTML and/or plain text, optional attachments,
-thread references, and a stable message category (default `transactional`). Envoy persists only the resulting delivery payload needed for operations;
-it has no business content registry, versioning model, or rendering engine.
+| Responsibility | Location | Rules |
+| --- | --- | --- |
+| HTTP controllers and server pages | `src/app` | Parse input, identify caller, invoke a public capability, map HTTP results. No SQL. |
+| Interactive user interfaces | `src/features/<business>` | Consume explicit DTOs and send resource HTTP requests. No server capability imports. |
+| Shared visual components | `src/components` | Reusable presentation and form primitives. |
+| Use cases | `src/modules/<module>/application` | Authorization, business decisions, transaction scope and orchestration through ports. No database driver, ORM or infrastructure imports. |
+| Pure business rules | `src/modules/<module>/domain` | State transitions, policies and invariants without database/framework dependencies. |
+| Persistence | `src/modules/<module>/infrastructure` | Semantic Repository and ReadRepository implementations; SQL, locks, record mapping and constraint handling. |
+| Public module boundary | `public.ts`, `contracts.ts` | Server capabilities and browser-safe request/response contracts respectively. |
+| Composition | `src/bootstrap`, module `public.ts` | Assemble application ports with concrete adapters. |
+| Common infrastructure | `src/platform` | Database, transactions, queue, outbox, crypto, storage, runtime state and identifiers. |
+| External mail systems | `src/integrations/providers` | Provider contracts, registry and concrete SDK adapters. |
+| Background entry points | `src/worker` | Consume identifiers, invoke shared use cases, schedule recovery. No Next.js or `server-only`, including transitive imports. |
 
-The core domain imports only `CanonicalMessage`, `CanonicalEvent`, and `CanonicalProviderError`. A provider module
-exposes a descriptor, capabilities, and narrow ports for sending, webhook processing, identity management, inbound mail,
-suppression synchronization, reconciliation, and health checks.
+## Business ownership
 
-## Persistence and queues
+- `identity`: products, business services, credentials, permissions, capability discovery and service-owned content access.
+- `channels`: registered domains, provider accounts and credentials, provider identities and ingress security configuration.
+- `outbound`: message acceptance, routing, submissions, attempts, recipient delivery state, retries and reconciliation.
+- `inbound`: trustworthy envelope processing, receiving routes, retained copies and incremental change discovery.
+- `attachments`: private file ownership, scans, byte access and retention.
+- `callbacks`: callback endpoints, signing, delivery, replay and dead letters.
+- `suppressions`: scoped recipient protection and authorized management.
+- `admin`: explicit operator read contracts and cross-domain operational reports. Management writes live in the owning business modules.
 
-PostgreSQL is authoritative. Accepting a message writes the message, one delivery per recipient, and outbox events in
-one transaction. The message retains immutable From, To, Cc, Bcc, Reply-To, headers, thread references, and attachment
-snapshots. A recipient delivery retains its role. A submission groups the actual envelope recipients, and submission
-attempts record provider calls; a submission-to-delivery mapping permits recipient results without changing visible
-headers. Bcc never appears in visible headers. BullMQ job payloads contain only internal identifiers. A lost or duplicated queue job is recoverable
-from PostgreSQL and cannot create an additional attempt after an accepted attempt exists.
+Modules import each other's `public.ts` or `contracts.ts`. A `policy.ts` facet may expose pure business policies only when the architecture checker verifies its entire runtime dependency tree has no application orchestration, infrastructure, database, framework, or I/O dependency. An explicit type-only import of a domain type is permitted. Infrastructure may import the four internal identity SQL predicate builders (`domainPermission`, `effectiveDomainGrants`, `outboundDomainAccess`, `inboundDomainAccess`) because they enforce consistent permissions inside locked queries; runtime authorization operations use the public identity service with an opaque transaction context. These are the only cross-module infrastructure exceptions.
 
-Raw MIME, large native payloads, and attachments are written to the configured object store. The database stores
-metadata and object keys. Local object storage is development-only; production should use an encrypted S3-compatible
-bucket.
+## Request and query flow
 
-## Business domain authorization
+```text
+HTTP route / Worker
+  -> public application capability
+    -> domain rules
+    -> semantic Repository ports
+      -> Drizzle / parameterized PostgreSQL
+```
 
-`service_domain_grants` is the sole domain permission authority: one Service/domain row with sending and receiving flags, status and revision. A null `sending_domain_id` is an ALL grant covering every current and future registered domain, independently for sending and receiving. Each Service has at most one ALL grant. Effective authorization evaluates active grants. The Service configuration writer serializes on the Service row and atomically revokes the prior grants before activating the requested none/selected/ALL modes, so redundant historical grants cannot preserve access after narrowing permissions. Disabled rows retain revocation history. Disabled domains and suspended Products remain inaccessible. It replaces `sender_grants` without compatibility reads or Product-wide inheritance. Service credentials prove the stable business identity and inherit its grants across rotation. Envoy has no business APP or mailbox model.
+Routes are resource oriented: products, services, service credentials, provider accounts, domains, routing policies, callback endpoints and their explicit subordinate operations. The operator UI sends an HTTP method, resource URL and payload; there is no action-string dispatch endpoint.
 
-Services owns one editable configuration per Service: name, independent sending/receiving modes, Event callback URL and advanced permissions. Creation also issues its first API key; credential management operates on the same Service identity without changing that configuration. Both mail directions may be denied. Domain infrastructure, provider verification and caller authorization remain independent. Native mail supplies the exact From address; its domain is authorized at acceptance, submission and manual retry. Protected resource reads, attachment operations, events, change streams, content erasure and callback execution recheck frozen transport domain ownership. Unavailable or foreign resources are not exposed through known IDs. Files freeze an explicit sending domain and cannot be reused across From domains.
+Next.js server pages use `src/server/admin-queries.ts`. Each exported operation verifies the current administrator session before executing its reads. This facade is marked `server-only`; domain/application services and worker dependencies are not. ReadRepositories select safe fields and return named DTOs. A generic table renderer or form field dictionary is a UI implementation detail, never the contract for a database row.
 
-Configuration reads include grants and the Service configuration revision in one database snapshot. Updates require that revision and reject stale editors instead of overwriting a later change. A revoked ALL grant no longer expands domain discovery to future registrations. Clearing the Event callback URL disables delivery and retains its encrypted signing secret and delivery history; discovery reports polling mode.
+## Persistence and transaction boundaries
 
-There is at most one callback endpoint per Service; ingress routes select a provider, domain and target Service, never a business address pattern or per-route callback. Grant changes create signed `service.permissions_changed` notifications atomically with a durable outbox command. Product suppression management is a separate explicit Service permission, false by default.
+Drizzle schema definitions live in `src/platform/database/schema`, grouped by business ownership. Ordinary typed CRUD and credential lookup use Drizzle. Complex permission joins, row locks, operational aggregation and PostgreSQL-specific atomic operations remain explicit parameterized SQL inside infrastructure.
 
-## Routing
+Application services define the transaction boundary through `UnitOfWork<Repositories>.run`. The infrastructure factory binds all participating repositories to one connection. Cross-module operations use an opaque `TransactionContext` rather than exposing a `PoolClient` to application code. Repository methods describe an operation such as locking a configuration, saving permissions or recording an attempt; callers do not submit SQL strings.
 
-Each routing policy is bound to one sending domain, then evaluated against product, service, and category. It matches required mail features against provider capabilities and
-removes targets whose provider account is disabled or unhealthy, whose identity is not verified for that same domain,
-whose circuit is open, or whose quota or account/identity rate limit is exhausted. It then selects the lowest priority
-tier and performs deterministic weighted selection.
+Accepting a message persists its message, recipient/submission state and Outbox intents atomically. Network requests occur outside the sending state transaction. Workers recover interrupted attempts and treat indeterminate provider acceptance as `unknown`; automatic retries must not risk duplicate delivery. Queue delivery can repeat, so handlers recheck authoritative database state and current permissions.
 
-Every attempt stores:
+## One V1 database snapshot
 
-- the selected policy and target;
-- candidate eligibility, required capabilities, and routing decisions;
-- the provider account and verified identity;
-- a request fingerprint and provider idempotency key, when supported;
-- the determinate or unknown outcome and canonical error classification.
+`db/migrations/001_initial.sql` is the only application migration. It creates the complete final V1 structure on an empty database, including indexes, constraints and database functions. No `002`/`003` patches, historical migration log or compatibility data transformations are retained.
 
-The same visible From domain must be verified on every target used for failover.
+Before V1 is released, change the final Drizzle schema and V1 SQL together, then rebuild disposable development/test databases. The initialization command creates the application and queue structures; long-running web/worker processes check readiness instead of changing tables. Business audit logs, delivery attempts and provider event evidence are operational records and remain part of the V1 model.
 
-## Failure semantics
+## Enforcement and verification
 
-Failover is allowed only after a provider response proves that the request was not accepted. An external message ID is a
-point of no return and prevents provider switching. Network timeouts and response loss produce an `unknown` attempt; the
-reconciliation worker checks the original provider before any retry.
+`pnpm architecture:check` runs in CI before lint/typecheck/tests/build. It checks:
 
-Hard bounce, complaint, invalid recipient, and policy rejection do not trigger provider failover. Native idempotency is
-a capability and is used only by providers that support it. The admin console requires an explicit duplicate-risk
-acknowledgement before manually retrying an unknown delivery.
+1. Application/domain and HTTP source contain no SQL or database/infrastructure imports.
+2. Cross-module imports respect the public/contracts boundary and the narrow permission-predicate exception.
+3. The actual runtime import graph has no cycles; explicit type-only imports do not create runtime dependencies.
+4. Worker dependency paths cannot reach Next.js or `server-only`, and client components cannot reach server modules or platform infrastructure.
+5. Exactly one application migration, `001_initial.sql`, exists.
 
-Delivery facts are independent dimensions:
+Type checking verifies DTO and application-port contracts. Unit tests cover pure policies; PostgreSQL integration tests cover constraints, rollback, concurrency, idempotency and permissions. Pipeline/recovery tests cover repeated work, interruption, reconciliation and callback retries. A clean-database test executes the same V1 initialization used by setup/deployment.
 
-- lifecycle: `queued`, `submitting`, `accepted`, `deferred`, `delivered`, `bounced`, `failed`, `unknown`, `canceled`;
-- engagement: `unopened`, `opened`, `clicked`;
-- compliance: `clean`, `complained`, `unsubscribed`, `suppressed`.
+## References
 
-Event application locks each delivery, deduplicates stable source keys, and applies deterministic timestamp/state precedence. Local transitions and provider events commit canonical facts, projections, suppression effects, and callback outbox work together. Engagement does not regress from clicked to opened. Terminal facts may resolve an earlier transient state even when the transient write arrived later.
-
-## Provider setup
-
-Create a provider account in the operations console, enter its public configuration and write-only credential, then test
-connectivity. Credentials are never returned by the API. Rotation creates a new credential version, disables its routing
-eligibility until a successful fresh connection test, and revokes the prior version in one transaction.
-
-Register an inbound-only domain in **Domains** without selecting outbound providers. To enable sending, create or associate a sending domain in **Domains** and select the provider accounts that should carry it. For Resend,
-Envoy searches the account's domains with the official SDK, retrieves an existing domain's current status and DNS
-records, and creates a domain only when no match exists. **Refresh DNS** also recovers a failed association this way.
-For Amazon SES, Envoy creates the provider identity and displays its DNS records. For SendGrid, Mailgun, and Postmark,
-operators first verify the domain in the provider dashboard, then explicitly associate that existing verification with
-the account. Mailgun can be associated only with the exact sending domain configured on its account. Routing targets
-become eligible only after the relevant identity is verified.
-
-Supported modules:
-
-| Provider   | Webhook security                                             | Inbound mode                       |
-|------------|--------------------------------------------------------------|------------------------------------|
-| Resend     | Svix signature and replay window                             | Webhook plus API fetch             |
-| Amazon SES | SNS certificate signature and expected TopicArn              | Receipt Rule plus S3/SNS reference |
-| SendGrid   | ECDSA signed event webhook and Inbound Parse                 | Multipart Inbound Parse            |
-| Mailgun    | Timestamp, token, and HMAC signature                         | Routes multipart payload           |
-| Postmark   | Basic Auth, opaque endpoint, IP allowlist, schema validation | Inbound webhook                    |
-
-Postmark does not advertise a nonexistent HMAC mechanism.
-
-### Provider account setup
-
-The operations console uses provider-specific fields rather than exposing internal JSON documents. Provider API hosts are
-fixed to their official endpoints; operators can select a documented region where the provider offers regional APIs but
-cannot redirect authenticated requests to an arbitrary host.
-
-| Provider   | Connect account with                                            | Optional account settings                         | Configure after creation                              |
-|------------|-----------------------------------------------------------------|---------------------------------------------------|-------------------------------------------------------|
-| Resend     | API key                                                         | None                                              | Webhook signing secret                                |
-| Amazon SES | Runtime IAM credentials, an assumed role, or AWS access keys    | Region and configuration set                      | Expected SNS Topic ARN                                |
-| SendGrid   | API key with Mail Send permission                               | Global or EU API region                           | Event Webhook key; optional separate Inbound Parse key |
-| Mailgun    | API key and sending domain                                      | US or EU region                                   | Account webhook signing key                           |
-| Postmark   | Server API token                                                | Message stream, defaulting to `outbound`           | Basic Auth credentials and optional source allowlist  |
-
-Sending credentials and event-webhook verification material have separate encrypted lifecycles. Provider Accounts
-generates the opaque provider-event URL first. The operator then registers that URL in the provider dashboard and saves
-the verification material returned by the provider. For Postmark, saving Basic Auth generates a one-time,
-credential-bearing provider-event URL to paste into Postmark instead of the bare opaque path. This ordering mirrors the
-provider setup flow and allows sending to be configured without inventing webhook values in advance.
-
-After account creation, copy the opaque endpoint displayed under **Provider Accounts** into the provider console. Never
-place a provider credential in that URL. **Provider Accounts** owns provider event-webhook setup; **Callbacks** only
-configures outbound canonical callbacks to business services. Envoy removes plaintext headers and envelope-encrypts raw bodies, headers and the verified receipt before DB/object persistence. It retains the provider security version for audit. Workers parse that accepted receipt without requiring a fresh signature window or current verification key.
-
-### DNS and identity workflow
-
-1. Create the provider account and run **Test connection**.
-2. Create a sending domain and select every provider that may carry it.
-3. For Resend and SES, publish the returned DKIM, SPF, return-path, and ownership records at the authoritative DNS
-   provider, then use **Refresh DNS** until each intended identity is verified.
-4. For SendGrid, Mailgun, and Postmark, complete the provider's domain-verification workflow first; Sending Domains
-   records the operator-confirmed association and does not invent DNS records or a verification API. A Mailgun
-   association must exactly match that account's configured sending domain.
-5. Grant the business Service explicit domain sending permission, and create routing policies for that domain. Runtime routing rejects disabled domains,
-   mismatched policy/account/identity domains, mismatched account/identity pairs, and unverified identities.
-
-SES inbound requires a Receipt Rule that stores MIME in S3 and publishes the receipt event to the configured SNS topic.
-SendGrid Inbound Parse and Mailgun Routes post multipart payloads to the opaque endpoint. Resend posts the receive event
-and Envoy fetches the message through the provider API. Postmark posts the full inbound payload.
-
-For SendGrid, Event Webhook and Inbound Parse use independently configured signature-verification keys. Inbound Parse
-also requires its receiving domain, MX record, and security policy to be configured in the SendGrid dashboard.
-The connection test makes a deliberately invalid Mail Send request, so it verifies the permission Envoy actually uses
-without delivering a probe email or requiring unrelated profile permissions.
-
-## Inbound safety
-
-Inbound routes match a secured provider endpoint and trusted SMTP envelope recipients by exact domain. Receiving requires the target Service's active receiving grant. Every matching technical route participates; routes merge into one private Service copy, and different Services receive independent IDs, attachments and Bcc/envelope projections. The first durable dispatch decision is frozen; retries never gain newly configured recipients or expand to new Services. Current domain grants are checked again before unfinished copies are persisted and before any callback leaves Envoy.
-
-A multi-domain private copy becomes wholly unavailable if any envelope domain loses receiving permission. Raw MIME remains administrator-only. Visible To/Cc are email content headers and never determine ownership. There are no APP IDs or business mailbox purposes in these routes.
-
-Trusted sources in the adapters are:
-
-| Provider | Ownership source | Standard fields |
-|---|---|---|
-| SES | Signed SNS `receipt.recipients`, not `mail.destination` or MIME headers | Parsed MIME Message-ID, Reply-To, In-Reply-To, References |
-| SendGrid | Signed Inbound Parse `envelope.to`; malformed/missing envelopes stay unknown | MIME headers, including raw MIME mode |
-| Mailgun | Authenticated route payload `recipient`, with no To fallback | `message-headers`; transport token remains distinct from RFC Message-ID |
-| Postmark | Authenticated inbound `OriginalRecipient`, never ToFull/CcFull | `Headers` for RFC IDs plus `ReplyTo`; provider MessageID remains separate |
-| Resend | Unknown under the currently verified retrieval contract; quarantined | Retrieved message_id and standard headers are preserved for diagnosis |
-
-Authoritative references: [SES receiving contents](https://docs.aws.amazon.com/ses/latest/dg/receiving-email-notifications-contents.html),
-[SendGrid Inbound Parse](https://www.twilio.com/docs/sendgrid/for-developers/parsing-email/setting-up-the-inbound-parse-webhook),
-[Mailgun route payload](https://documentation.mailgun.com/docs/mailgun/user-manual/receive-forward-store/receive-http),
-[Postmark inbound webhook](https://postmarkapp.com/developer/webhooks/inbound-webhook), and
-[Resend received-email retrieval](https://resend.com/docs/api-reference/emails/retrieve-received-email).
-The last contract does not establish that its To/Bcc fields are SMTP envelope facts, so the adapter does not infer ownership.
-Missing or invalid envelopes and unmatched mail remain administrator-only with stable rejection codes. Old Date headers
-are content, not the database observation time reported as receiving evidence. Every business ingress route requires
-an explicitly authorized Service; quarantine records are not assigned to an arbitrary Product or Service.
-
-Raw MIME and attachments are size-limited and stored privately outside PostgreSQL; HTML is sanitized before persistence.
-Both directions register byte-bound persistent safety tasks. Inbound body readiness is separate from attachment usability.
-No attachment download or outbound submission is permitted without a current clean proof. Missing scanning fails closed.
-The event callback receives only canonical metadata and Envoy identifiers.
-
-## Suppression policy
-
-- Hard bounce and invalid mailbox may create a global suppression.
-- Complaint creates a permanent global suppression.
-- Unsubscribe is scoped to a product or list.
-- A single soft bounce never creates a permanent suppression. Repeated soft bounces cross a threshold and create an
-  expiring suppression.
-
-## Credential security
-
-Every provider or callback secret is encrypted with an independent random data encryption key using AES-256-GCM. The
-resource ID and credential version are authenticated as AAD. The data key is wrapped by `ENVOY_KEK_BASE64`; production
-deployments should source that root trust from a KMS-backed secret injection mechanism. Workers decrypt credentials only
-immediately before a provider call. Secrets never enter logs, queues, or caches.
-
-`ENVOY_KEK_VERSION` labels new envelopes. During root-key rotation, `ENVOY_KEK_KEYRING_JSON` supplies prior
-version-to-key mappings until those envelopes are rewrapped; an unavailable version fails closed.
-
-For Amazon SES, `roleArn` and optional `externalId` enable workload identity through AssumeRole. Static access keys are
-supported only as an encrypted fallback.
-
-## Canonical callbacks
-
-The **Services** page configures the Event callback URL; **Callbacks** manages subscriptions, secrets and delivery recovery. Provider event-webhook setup lives
-under **Provider Accounts**.
-
-Callbacks contain Envoy message, delivery, inbound, product, category, and recipient identifiers. They never expose
-provider account IDs, native event names, or provider payloads. Requests are signed as
-`HMAC-SHA256(timestamp + "." + body)` and retried with exponential backoff. Exhausted callbacks enter the dead-letter
-state and can be replayed from the console.
-
-Consumers should reject stale timestamps, compare signatures in constant time, and deduplicate on the stable
-`x-envoy-id` header. Callback delivery is at least once.
-
-## Service API
-
-The versioned service API is discovered at `/api/v1` and described by `/api/v1/openapi.json`. A service credential is
-scoped to one product and service. Ownership filters are applied to every message, delivery, event, inbound message,
-and suppression operation.
-
-Every service uses the fixed `SERVICE_REQUESTS_PER_MINUTE` request limit. The effective value is returned by
-`/api/v1/capabilities`; it is not a per-service administrator setting.
-
-Message acceptance is asynchronous and idempotent. A successful request commits the message, one delivery per
-recipient, and durable outbox work before returning `202`. The API also exposes cursor-paginated message, delivery,
-event, and inbound collections; sender authorization, receiving-route and evidence discovery; private attachment upload; product suppression management; pre-provider cancellation;
-and controlled retry. An `unknown` delivery can only be retried when the caller explicitly acknowledges duplicate risk.
-
-## Diagnostics
-
-The service API uses RFC 9457 problem responses with `requestId`. Request records are scoped to the calling service and
-remain queryable when validation or authorization failed before a message ID existed. Message and delivery queries,
-submission attempts, events, and signed callbacks share structured diagnostic fields: stable code, sanitized message,
-failed stage, provider acceptance certainty, retryability, retry decision, occurrence time, and available provider/SMTP codes.
-The console shows the accepted headers, recipient role, failure reason, attempts, and complete event payloads. Internal
-provider routing snapshots remain available to administrators. Retention of content and request/diagnostic history is independent.
-
-See [API.md](API.md) for the final public contract.
-
-## Operational recovery
-
-- A determinate provider rejection may use the next eligible account. Authentication, quota, rate, health, verified
-  identity, policy priority, target priority, and weight are evaluated before every attempt.
-- A transport ambiguity becomes `unknown` and is reconciled against the original provider. Envoy never performs
-  automatic cross-provider failover from an unknown outcome.
-- Repeated retryable provider, network, or rate-limit failures open the target circuit. An expired circuit is probed and
-  closes after a successful acceptance.
-- Exhausted provider quota or temporary lack of a healthy route moves the delivery to `deferred` and schedules a durable
-  re-evaluation.
-- Raw provider events and callback deliveries are replayable from the console. Manual retry of an unknown delivery
-  requires explicit duplicate-risk acknowledgement and is always audited.
-
-## PostgreSQL runtime
-
-BullMQ uses an explicit PostgreSQL backend factory and a dedicated `bullmq` schema. Business transactions retain an
-Outbox: BullMQ's public API uses its own pool and does not join a business `PoolClient` transaction. Dispatch uses the
-Outbox ID as the stable job ID. A crash after enqueue but before publication marking is safe to replay. State-based,
-bounded recovery replenishes missing delivery, reconciliation, event, inbound and callback work; published rows are not
-blindly replayed. PostgreSQL notifications only wake workers; durable table state survives disconnections.
-
-`pnpm db:migrate` applies both business and BullMQ migrations. Startup validates queue schema compatibility and does
-not implicitly migrate. Use PostgreSQL 14+ and direct or session-pooled connections; LISTEN must keep a session.
-With default business pool 10 and queue pool 2, a Web process budgets up to 18 connections and a Worker up to 30
-(including four LISTEN connections). One of each needs capacity for 48 plus migrations, monitoring and headroom;
-replicas multiply these limits. Configure `DATABASE_POOL_SIZE` and `QUEUE_POOL_SIZE` together.
-
-Shared fixed-window limits use database time, advisory locking and atomic UPSERT. Provider and identity reservations
-commit together or neither is consumed. Login protection fails closed if storage is unavailable. Worker heartbeats
-expire after 45 seconds; the public health endpoint checks database/schema readiness separately from operational
-pipeline health.
-
-## Bounded recovery and retention
-
-Provider calls have one 30-second submission deadline and no implicit non-idempotent SDK retry. A submission execution
-lease lasts two minutes. Current attempt and submission ownership fence lifecycle projections while historical
-provider facts remain available. Unknown attempts keep their uncertainty when an operator authorizes a fresh submission. Current suppression, product, sender authorization, accepted domain and content eligibility
-are rechecked at the send and retry boundary. Sender and From information are immutable acceptance snapshots.
-
-Missing routes defer for at most 60 cycles. Automatic reconciliation stops at 12 checks. An unassociated accepted raw
-event retries for at most 20 passes and remains visible for operator replay. Callback timing and attempts are owned by
-the database; exhausted delivery enters dead-letter state with scoped replay. Inbound processing claims one execution
-lease, so duplicate work does not create duplicate attachments or callbacks.
-
-Optional retention is an explicit dry-run/apply command. It clears eligible terminal content and objects, not message
-IDs, payload hashes or idempotency summaries. Active and unknown work is excluded. Age-based cleanup deletes objects before marking references purged. Explicit service content erasure instead commits tombstones and durable deletion intents first, so access revocation survives object-store failures; the same reference-aware cleanup retries physical deletion. Purged attachments cannot be downloaded.
-
-Server processes and database sessions use UTC; API timestamps are UTC ISO 8601 (`Z`). The console formats timestamps in the current browser timezone and labels that zone. Cohort/rate/quota windows are UTC and labeled explicitly.
-
-
-## Business connection boundary
-
-Envoy alone manages domains, provider identities/credentials, DNS instructions, Service domain grants and inbound routes.
-The domain administrator publishes records in the real DNS platform; Envoy detects/presents provider results. A business
-service binds its service key and chosen addresses, supplies native mail content, retrieves owned resources and consumes
-signed canonical events. It never holds administrator credentials or manages domain verification.
-
-The `mail` discovery object describes domain permissions, not physical mailboxes. Domain grants are never expanded to
-invented mailbox lists. Receiving configuration does not prove external delivery works.
-Configuration readiness, actual canonical send/receive facts, and callback HTTP delivery are independent dimensions.
-Runtime capacity and external receiving reachability remain unknown at discovery; no missing evidence is synthesized.
-An HTTP-success callback says nothing about the caller's conversation or ticket processing. See the exact status/error
-contract in [API.md](API.md#business-mail-connection-and-discovery).
-
-## Inbound clocks, dispatch plans and committed change streams
-
-`author_date` is optional untrusted content; `ingress_received_at` comes from the durable verified raw receipt;
-`created_at` records private-copy observation/storage; `ready_at` records completion of sanitized body storage.
-Public `receivedAt` records copy storage time. Lists preserve PostgreSQL microseconds; incremental recovery uses `/inbound-changes` and not temporal scans.
-Retention uses the later of storage and ready time, protecting delayed scans and recently received old mail. Unknown timestamps remain null; no history is guessed.
-
-`inbound_receipts` persists the first normalization decision, keyed by provider account plus transport receipt identity.
-Its content-free route snapshot fixes Service scopes and matched recipients. The current event callback is resolved by Service when each copy becomes ready. Subsequent retries
-ignore newly added routes; retained original scopes never expand implicitly. Each service group processes in a separate
-transaction/claim, and processing continues after another group's transient failure before requesting a raw-event retry.
-Ready/purged copies are deduplication tombstones; retries do not upload them again. Runtime callback checks remain live,
-so a historical binding does not grant access to a new endpoint owner. Explicit raw termination fences unfinished work.
-
-An update trigger appends `inbound.available` when a private copy becomes ready and `inbound.content_purged` on its first
-purge. The change and resource update share a transaction. Each service has an `inbound_streams` row with a transactional
-position, generation and retained floor. Allocating a position updates that row; its write lock stays held through commit.
-A reader takes FOR SHARE on the same head and reads only its committed prefix. Thus an uncommitted lower position cannot
-appear after a reader advances, including rollback, delayed commits, concurrent paged reads and late processing. Numeric
-positions are ordered as bigint, never lexically. Different services do not share a counter/authorization boundary.
-
-Pages contain 1–100 content-free changes, reusable event/page checkpoints, a watermark and retention boundary. The
-90-day cleanup locks the head and removes only an expired prefix; it cannot create gaps in the middle. A cursor below
-the floor or from an old generation yields a stable 410 with explicit gap/reset information; omission starts at the floor
-and advertises any truncation. Business consumers reconcile retained resources and record lost history before a reset.
-This feed is independent of the outbound `/events`, callback delivery, and business processing state.
-
-## Credentials, actual mail identity and content lifecycle
-
-Service rotation inserts a new credential under the same service and bounds the old credential's overlap to 24 hours
-(or its earlier expiry). A once-shown key, separate IDs, approximate usage timestamps and rotation/revocation audit support
-a staged caller switch; immediate revoke remains available. Each Service callback instead has one current signing secret.
-It is replaced manually only while the endpoint is paused and all in-flight attempts have finished or recovered. Pausing
-fences new claims but keeps live attempts visible. The worker signs `timestamp + "." + raw UTF-8 body` using HMAC-SHA256;
-retries preserve event identity/body and use the attempt's current Unix seconds. Consumers enforce a fixed 300-second
-window and constant-time verification before durable event-ID deduplication. The `v1=` algorithm prefix and payload API
-version are not secret selectors. Internal envelope `key_version` still selects the encryption KEK only.
-
-Submission attempts store a nullable confirmed `rfc_message_id`, separate from the Envoy resource/submission ID and
-provider `external_message_id`. Postmark sends an attempt-specific documented custom RFC header and confirms it after
-acceptance; Mailgun uses a valid returned RFC ID. SES overwrites MIME IDs; SendGrid/Resend current paths and unknown
-responses lack confirmed final RFC headers. They stay null. No shared/guessed RFC ID is manufactured across submissions.
-Native threading facts support caller-managed conversations without introducing conversation models into Envoy.
-
-Explicit service content erasure locks owned resources and active work, clears body/attachment/callback content and
-commits irreversible tombstones plus reference-aware object deletion intents. Inbound copies authorize independently.
-Shared files and administrative raw receipts remain until their other retained references no longer require them;
-provider-side source objects are outside the service erasure contract. Active/unknown sends, active scans and in-flight
-callbacks conflict instead of racing deletion. Future provider facts can still update minimal delivery history, but
-cannot enqueue content callbacks for a purged message. Deduplication, idempotency and scope/audit facts survive; replay
-never reconstructs purged content. Caller caches and backups require their own lifecycle controls.
-
-Dead letters mean recoverable work. Explicit audited termination is separate from delivered success and from content
-purge/age retention. Callback termination releases retention gates without fabricating an HTTP success. Raw-event
-termination fences frozen dispatch, rejects unfinished copies and preserves completed copies. Terminated/purged work
-cannot be replayed. `sendBefore` now adds a caller-supplied latest provider-submission instant, independent of the execution lease; scheduling
-and expiry enforcement remain outside the current send contract.
-
-## Shared attachment safety
-
-`modules/attachments` owns the scanner protocol, unified availability policy, durable tasks and guarded byte access.
-Neither files nor the outbound executor depends on inbound business logic. See [Attachment Safety](ATTACHMENT-SAFETY.md).
-`attachment_safety` binds a private resource, expected/scanned SHA-256 and policy version. It stores bounded reason codes,
-never engine responses/signatures. `attachment_scan_scopes` persists fair dispatch order, with at most one queued/live
-scan per owner; a large service cannot put its whole batch ahead of another. The scheduler atomically writes outbox jobs
-and dispatch leases, then the existing PostgreSQL queue executes them. Five claims, finite backoff, two-minute leases
-and random fencing tokens handle process death and duplicate tasks. Malicious/blocked verdicts are terminal to retry.
-
-Upload bytes and their task reference commit together after reference-aware object registration. Inbound normalization
-stores each private attachment and task with body readiness/callback publication. The task reads bounded bytes, verifies
-the immutable digest, scans outside locks, then locks parent/resource/safety in that order and commits only its current
-lease result. Purge triggers invalidate leases and revoke usability. Delayed results never recreate objects or content.
-
-Admission locks every owned file/proof and rejects unapproved files before creating message/idempotency records. The
-executor preserves its existing attempt/unknown logic and takes shared resource/proof locks through preparation and
-provider submission. All normal/inline attachments are loaded and digest-verified before the single provider boundary;
-current policy is checked again after I/O. A read-only guard commit failure cannot discard a definitive provider response.
-Downloads apply the same proof/digest checks while erasure/reprocessing waits on resource locks. These locks authorize
-an in-flight read; they cannot recall a previously downloaded copy. Retention semantics of `contentAvailable` are unchanged.
-
-Fresh installations use `001_initial.sql` as the sole application migration to create the final schema, including domain permissions and one callback per Service. Applied migration checksums remain enforced. There are no legacy scan adapters,
-unchecked-content bypasses, migration-adoption patches, provider capability compatibility views or automatic historical resends.
-
-
-## Generic bounded sensitive delivery
-
-`sendBefore` and `contentPolicy` are transport policy, independent of APPs, OTPs and category. Sensitive content requires a future UTC deadline within 900 seconds. Message free-form fields live only in a resource-bound AES-256-GCM envelope; public/admin projections are stored redacted, and normal message columns never contain the sensitive body or display names. Independent file references retain only the opaque identifiers/digests needed to pin bytes; reusable files keep their own lifecycle. Sensitive request/provider fingerprints are HMACs with a persisted KEK version, so low-entropy secrets cannot be recovered by offline SHA-256 enumeration. Old hash KEKs must remain available for durable idempotency comparisons after content destruction.
-
-Send preparation decrypts only after history/unknown/authorization/deadline gates. An AsyncLocalStorage submission scope carries the deadline and final current-authorization guard to native HTTP adapters. For deadline-bound mail, one Node HTTPS transport establishes DNS/TLS without writing HTTP headers/body, then rechecks the execution lease, domain permission and wall-clock deadline. SES uses that same transport as its one-attempt SDK request handler after credential/signing waits. A lost response after the write remains unknown; definite pre-write deadline expiry is failed/not_accepted. Claims, rate-capacity waits, attachment reads, manual retries, automatic failover and conclusive-negative reconciliation cannot bypass the deadline. Accepted/unknown attempts survive body expiry and continue to receive real facts.
-
-All verified provider raw copies are encrypted, including large object-store bodies/receipts, because unassociated early events may echo a sensitive message. Successful outbound normalization destroys those copies; content-free outbound facts are durably frozen before association and raw copies expire after 900 seconds without terminating fact replay or manufacturing message outcomes. Unknown or inbound classifications never inherit that deadline. Inbound encrypted receipts retain the recovery lifecycle. Sensitive canonical events/callbacks use a whitelist of delivery facts and fixed messages, and accepted provider response blobs are discarded. The mandatory 10-second worker privacy sweep clears expired message envelopes separately from optional normal-message retention and processes durable object-deletion intents. Physical deletion resumes after worker/storage outages; expired content remains unavailable to send/read throughout.
-
-Message-level `acceptedAt` remains Envoy queue acceptance. Message detail recipient rows additionally publish nullable provider `acceptedAt` and actual `deliveredAt`; only all-delivered messages have outcome `succeeded`. This metadata remains readable for sensitive mail even after body purge. API discovery publishes `messagePolicies` as documented in API.md, allowing callers to reject unsupported sensitive delivery before persisting requests. No business verification-code semantics, SMTP fallback, new dependency or version is introduced. The user-authorized pre-launch initial schema contains these columns directly; no existing deployment database is reset or checksum-adopted automatically.
+- [Next.js data security and DAL](https://nextjs.org/docs/app/guides/data-security)
+- [Next.js backend for frontend](https://nextjs.org/docs/app/guides/backend-for-frontend)
+- [Spring Boot code structure](https://docs.spring.io/spring-boot/reference/using/structuring-your-code.html)
+- [Spring Modulith module verification](https://docs.spring.io/spring-modulith/reference/verification.html)
+- [Drizzle transactions](https://orm.drizzle.team/docs/transactions)
+- [node-postgres transactions](https://node-postgres.com/features/transactions)

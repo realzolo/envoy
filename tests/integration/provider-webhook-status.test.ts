@@ -1,9 +1,10 @@
-import { describe, expect, it } from "vitest";
+vi.mock("@/server/admin-auth", () => ({ getAdminSession: vi.fn().mockResolvedValue({ email: "admin@example.test" }) }));
+import { describe, expect, it, vi } from "vitest";
 import { Webhook } from "svix";
-import { configureProviderWebhook, createProviderAccount } from "@/modules/admin/actions";
-import { adminData } from "@/modules/admin/queries";
-import { ingestProviderWebhook } from "@/modules/webhooks/ingress";
-import { query } from "@/server/database";
+import { configureProviderWebhook, createProviderAccount } from "@/modules/channels/public";
+import { adminData } from "@/server/admin-queries";
+import { ingestProviderWebhook } from "@/modules/inbound/public";
+import { query } from "@/platform/database";
 
 describe("provider webhook configuration and observed verification", () => {
   it("shows a valid event only after actual verification with the current settings, without returning secrets", async () => {

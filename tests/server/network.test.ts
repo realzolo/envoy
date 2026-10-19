@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { clientIpFromTrustedProxy } from "@/server/network";
+import { clientIpFromTrustedProxy } from "@/platform/network";
 
 afterEach(() => vi.unstubAllEnvs());
 

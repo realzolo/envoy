@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resendIdentityStatus, resendModule } from "@/modules/providers/resend";
-import type { ProviderSendContext } from "@/modules/providers/contracts";
+import { resendIdentityStatus, resendModule } from "@/integrations/providers/resend";
+import type { ProviderSendContext } from "@/integrations/providers/contracts";
 
 const context: ProviderSendContext = {
   accountId: "pa_resend",

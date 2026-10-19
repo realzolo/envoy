@@ -1,4 +1,4 @@
-import { getMessageAttempts } from "@/modules/core/resources/service";
+import { getMessageAttempts } from "@/modules/outbound/public";
 import { apiProblem, pagination, serviceRoute } from "@/server/service-api";
 export const GET = serviceRoute(async (request, identity, context: { params: Promise<{ id: string }> }) => {
   const page = pagination(request);

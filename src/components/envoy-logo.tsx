@@ -1,6 +1,6 @@
 "use client";
 
-import { Avatar, Typography } from "@arco-design/web-react";
+import { Avatar,Typography } from "@arco-design/web-react";
 import { IconBranch } from "@arco-design/web-react/icon";
 
 export function EnvoyLogo({ compact = false }: { compact?: boolean }) {

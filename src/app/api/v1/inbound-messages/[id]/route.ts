@@ -1,4 +1,4 @@
-import { getInboundMessage } from "@/modules/core/resources/service";
+import { getInboundMessage } from "@/modules/inbound/public";
 import { serviceRoute, apiProblem } from "@/server/service-api";
 
 export const GET = serviceRoute(async (request, identity, context: { params: Promise<{ id: string }> }) => {
