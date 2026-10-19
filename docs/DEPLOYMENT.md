@@ -183,8 +183,11 @@ Pull the source without overwriting the server's configuration files:
 
 ```bash
 cd /data/envoy
+git switch main
 git pull --ff-only
 ```
+
+Keep the deployment checkout on `main`; merge changes into `main` before deploying them.
 
 Apply any required configuration changes, then run:
 

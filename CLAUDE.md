@@ -4,6 +4,8 @@
 
 Read `docs/ARCHITECTURE.md` and `docs/API.md` for the final domain-permission contract. Envoy owns business Service identities, rotating Service Keys, domain sending/receiving grants and one unified callback per Service. Business APPs, exact mailbox purposes, templates and APP dispatch belong to callers.
 
+Envoy updates and test deployments use `main`. Merge reviewed changes into `main` before deployment; do not switch the deployment checkout to a feature branch.
+
 `service_domain_grants` is the sole business mail authorization authority. Service is the sole business identity and isolation boundary for credentials, messages, files, domain permissions, callbacks and recipient suppression rules. Every protected resource and background network operation must check ownership and current frozen domain permissions, including after storage or DNS waits at the final network boundary. Files require `X-Sending-Domain`; incoming ownership comes only from trusted envelope recipients. Suppression management is an independent Service permission, false by default. Grant changes produce durable signed `service.permissions_changed` events.
 
 Application migrations are immutable, contiguous SQL versions under `db/migrations`, with SHA-256 entries in
