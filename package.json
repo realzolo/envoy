@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "engines": {
-    "node": ">=20.9.0"
+    "node": "^24.0.0"
   },
   "scripts": {
     "dev": "next dev -p 6178",
@@ -25,16 +25,16 @@
   },
   "dependencies": {
     "@arco-design/web-react": "2.66.16",
-    "@aws-sdk/client-s3": "^3.1136.0",
-    "@aws-sdk/client-sesv2": "^3.1136.0",
-    "@aws-sdk/client-sts": "^3.1136.0",
-    "@aws-sdk/credential-providers": "^3.1136.0",
-    "@next/env": "16.3.5",
+    "@aws-sdk/client-s3": "^3.1152.0",
+    "@aws-sdk/client-sesv2": "^3.1152.0",
+    "@aws-sdk/client-sts": "^3.1152.0",
+    "@aws-sdk/credential-providers": "^3.1152.0",
+    "@next/env": "16.4.2",
     "bullmq": "^6.3.8",
     "drizzle-orm": "^0.45.4",
     "jose": "^6.2.12",
     "mailparser": "^3.9.28",
-    "next": "16.3.5",
+    "next": "16.4.2",
     "pg": "^8.23.0",
     "react": "19.2.8",
     "react-dom": "19.2.8",
@@ -42,7 +42,7 @@
     "sanitize-html": "^2.17.7",
     "server-only": "^0.0.1",
     "svix": "^2.5.0",
-    "tsx": "^4.23.13",
+    "tsx": "^4.23.15",
     "zod": "^4.6.5"
   },
   "devDependencies": {
@@ -56,7 +56,7 @@
     "concurrently": "^10.0.5",
     "drizzle-kit": "^0.31.11",
     "eslint": "^9",
-    "eslint-config-next": "16.3.5",
+    "eslint-config-next": "16.4.2",
     "typescript": "^5",
     "vitest": "^5.0.1"
   },
