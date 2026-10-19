@@ -15,7 +15,7 @@ export function SetupChecklist({state}:{state:SetupState}) {
   const chain=state.chains.find(row=>row.id===selected) ?? state.chains[0];
   const steps = [
     {title:"Service credential",done:chain?.credential,href:"/api-keys"},
-    {title:"Sender authorization",done:chain?.grant,href:"/api-keys#sender-permissions"},
+    {title:"Sending permission",done:chain?.grant,href:"/api-keys"},
     {title:"Tested provider",done:chain?.provider,href:"/providers"},
     {title:"Verified domain",done:chain?.identity,href:"/domains"},
     {title:"Matching route",done:chain?.route,href:"/routing"},
@@ -33,14 +33,14 @@ export function SetupChecklist({state}:{state:SetupState}) {
       </div>
       <Collapse bordered={false} style={{width:"100%"}}>
         <Collapse.Item name="checks" header={`${completed} of ${steps.length} checks complete`}>
-          <Typography.Text type="secondary">Checks apply to outbound configuration for the selected service, sender, and category. Runtime authorization and capacity are checked on every submission. Inbound routes, received-mail evidence, and callback delivery are separate; a successful callback does not prove business processing.</Typography.Text>
+          <Typography.Text type="secondary">Checks apply to outbound configuration for the selected service, sender, and category. Runtime authorization and capacity are checked on every submission. Inbound routes, received-mail evidence, and callback delivery are separate; a successful callback does not prove processing.</Typography.Text>
           <div className={styles.readinessSteps}>{steps.map(step=><div className={styles.readinessStep} key={step.title}><Badge status={step.done ? "success":"default"}/><Button href={step.href} type="text">{step.title}</Button></div>)}</div>
-          {!chain.observable && <Alert style={{marginTop:16}} type="info" content="Configure event verification on a provider used by this route to observe delivery events."/>}
+          {!chain.observable && <Alert style={{marginTop:16}} type="info" content="Configure provider webhook verification on a provider used by this route to observe delivery events."/>}
         </Collapse.Item>
       </Collapse>
     </Space> : <Space direction="vertical" size="medium" style={{width:"100%"}}>
       <Alert type="info" content="Connect a provider, verify a domain, then create a service credential and authorize its sender domain to start sending."/>
-      <Space wrap><Button href="/providers" type="primary">Connect provider</Button><Button href="/domains">Domains</Button><Button href="/api-keys">Service credentials and permissions</Button></Space>
+      <Space wrap><Button href="/providers" type="primary">Connect provider</Button><Button href="/domains">Domains</Button><Button href="/api-keys">Services</Button></Space>
     </Space>}
   </Card>
 }

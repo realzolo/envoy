@@ -16,7 +16,7 @@ export function effectiveDomainGrants(serviceId: string, domainId: string) {
     bool_or(dg.status='active' AND dg.receive_allowed) AS receive_allowed,
     sum(dg.revision)::integer AS revision
     FROM service_domain_grants dg
-    WHERE dg.service_id=${serviceId} AND (dg.sending_domain_id=${domainId} OR dg.sending_domain_id IS NULL)
+    WHERE dg.service_id=${serviceId} AND (dg.sending_domain_id=${domainId} OR (dg.sending_domain_id IS NULL AND dg.status='active'))
     HAVING count(*)>0`;
 }
 

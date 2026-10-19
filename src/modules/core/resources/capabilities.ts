@@ -38,7 +38,7 @@ export async function discoverMail(identity: ServiceIdentity) {
   const callback = (await query<{id:string;status:string;subscribed_events:string[];last_delivered_at:Date|null;latest:{status:string;attemptCount:number;deliveredAt:string|null}|null}>(`SELECT e.id,e.status,e.subscribed_events,
     (SELECT max(c.delivered_at) FROM callback_deliveries c WHERE c.endpoint_id=e.id) AS last_delivered_at,
     (SELECT jsonb_build_object('status',c.status,'attemptCount',c.attempt_count,'deliveredAt',c.delivered_at) FROM callback_deliveries c WHERE c.endpoint_id=e.id ORDER BY c.created_at DESC,c.id DESC LIMIT 1) AS latest
-    FROM callback_endpoints e WHERE e.service_id=$1`,[identity.serviceId])).rows[0];
+    FROM callback_endpoints e WHERE e.service_id=$1 AND e.url IS NOT NULL`,[identity.serviceId])).rows[0];
   return {
     kind:"domain_permissions" as const,
     domains:grants.map(row=>{

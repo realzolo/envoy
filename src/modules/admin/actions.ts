@@ -21,6 +21,7 @@ import { PROVIDER_EVENT_RECEIVED } from "@/server/outbox-events";
 import { queueForEvent } from "@/server/services/outbox";
 import { SERVICE_REQUESTS_PER_MINUTE } from "@/server/service-limits";
 import { domainPermission } from "@/modules/core/resources/authorization";
+import { queuePermissionsChanged } from "./permission-notifications";
 
 const identifierSchema = z.string().trim().min(1).max(160);
 const categorySchema = z.string().trim().min(2).max(80).regex(/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/, "category must be a stable lowercase key");
@@ -82,12 +83,6 @@ const adminSuppressionInputSchema = z.object({
 
 const inboundRouteInputSchema=z.object({webhookEndpointId:identifierSchema,domainId:identifierSchema,productId:identifierSchema,serviceId:identifierSchema}).strict();
 const domainGrantInputSchema=z.object({serviceId:identifierSchema,domainId:identifierSchema.nullable(),send:z.boolean(),receive:z.boolean()}).strict().refine(v=>v.send||v.receive,{message:"Select sending or receiving"});
-const serviceCredentialInputSchema=z.object({productId:identifierSchema,serviceName:z.string().trim().min(2).max(120),
-  domains:z.array(z.object({domainId:identifierSchema,send:z.boolean(),receive:z.boolean()}).strict().refine(v=>v.send||v.receive,{message:"Select sending or receiving"})).default([]),
-  allSendingDomains:z.boolean().default(false),allReceivingDomains:z.boolean().default(false),
-  callbackUrl:z.string().trim().url().max(2048).optional(),suppressionManagement:z.boolean().default(false),
-}).strict().refine(v=>new Set(v.domains.map(d=>d.domainId)).size===v.domains.length,{message:"Duplicate authorized domain"})
-  .refine(v=>v.domains.length>0||v.allSendingDomains||v.allReceivingDomains,{path:["domains"],message:"Select at least one sending or receiving domain, or ALL"});
 
 const callbackEventSchema = z.enum([
   "email.accepted",
@@ -532,17 +527,11 @@ export async function sendTestMessage(input: {
   return result.message;
 }
 
-async function queuePermissionsChanged(client:import('pg').PoolClient,serviceId:string){
-  const row=(await client.query<{id:string;product_id:string}>("SELECT e.id,s.product_id FROM callback_endpoints e JOIN services s ON s.id=e.service_id WHERE e.service_id=$1 AND e.status='active' AND 'service.permissions_changed'=ANY(e.subscribed_events)",[serviceId])).rows[0];
-  if(!row)return;
-  const id=createId('cbx'),payload={id:createId('evt'),apiVersion:'v1',type:'service.permissions_changed',occurredAt:new Date().toISOString(),data:{serviceId,productId:row.product_id}};
-  await client.query("INSERT INTO callback_deliveries(id,endpoint_id,event_type,payload) VALUES($1,$2,'service.permissions_changed',$3)",[id,row.id,payload]);
-  await client.query("INSERT INTO outbox_events(id,aggregate_type,aggregate_id,event_type,payload) VALUES($1,'callback',$2,'callback.requested',$3)",[createId('out'),id,{callbackDeliveryId:id}]);
-}
 export async function setDomainGrant(input:z.input<typeof domainGrantInputSchema>,actor:string){
   const v=domainGrantInputSchema.parse(input);
   return transaction(async client=>{
-    if(!(await client.query("SELECT s.id FROM services s JOIN products p ON p.id=s.product_id WHERE s.id=$1 AND p.status='active' AND ($2::text IS NULL OR EXISTS(SELECT 1 FROM sending_domains d WHERE d.id=$2 AND d.status='active'))",[v.serviceId,v.domainId])).rowCount) throw new Error("Select an active business service and domain");
+    if(!(await client.query("SELECT s.id FROM services s JOIN products p ON p.id=s.product_id WHERE s.id=$1 AND p.status='active' AND ($2::text IS NULL OR EXISTS(SELECT 1 FROM sending_domains d WHERE d.id=$2 AND d.status='active')) FOR UPDATE OF s",[v.serviceId,v.domainId])).rowCount) throw new Error("Select an active business service and domain");
+    await client.query("UPDATE services SET configuration_revision=configuration_revision+1,updated_at=now() WHERE id=$1",[v.serviceId]);
     const conflictTarget=v.domainId===null?"(service_id) WHERE sending_domain_id IS NULL":"(service_id,sending_domain_id)";
     const id=(await client.query<{id:string}>(`INSERT INTO service_domain_grants(id,service_id,sending_domain_id,send_allowed,receive_allowed) VALUES($1,$2,$3,$4,$5)
       ON CONFLICT ${conflictTarget} DO UPDATE SET send_allowed=EXCLUDED.send_allowed,receive_allowed=EXCLUDED.receive_allowed,status='active',revision=service_domain_grants.revision+1,updated_at=now() RETURNING id`,[createId('dg'),v.serviceId,v.domainId,v.send,v.receive])).rows[0].id;
@@ -551,37 +540,14 @@ export async function setDomainGrant(input:z.input<typeof domainGrantInputSchema
 }
 export async function toggleDomainGrant(id:string,enabled:boolean,actor:string){
   await transaction(async client=>{
+    const owner=(await client.query<{service_id:string}>("SELECT g.service_id FROM service_domain_grants g JOIN services s ON s.id=g.service_id WHERE g.id=$1 FOR UPDATE OF s",[id])).rows[0];
+    if (!owner) throw new Error("Domain grant not found");
+    await client.query("UPDATE services SET configuration_revision=configuration_revision+1,updated_at=now() WHERE id=$1",[owner.service_id]);
     if(!(await client.query("UPDATE service_domain_grants SET status=$2,revision=revision+1,updated_at=now() WHERE id=$1 RETURNING id",[id,enabled?'active':'disabled'])).rowCount) throw new Error("Domain grant not found");
     await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES($1,'domain_grant.toggle','service_domain_grant',$2,$3)",[actor,id,{enabled}]);
     const grant=(await client.query<{service_id:string}>("SELECT service_id FROM service_domain_grants WHERE id=$1",[id])).rows[0];await queuePermissionsChanged(client,grant.service_id);
   });
 }
-export async function createServiceCredential(input:z.input<typeof serviceCredentialInputSchema>,actor:string){
-  const v=serviceCredentialInputSchema.parse(input);
-  const callbackTarget=v.callbackUrl?await resolveCallbackTarget(v.callbackUrl):null;
-  return transaction(async client=>{
-    if(!(await client.query("SELECT id FROM products WHERE id=$1 AND status='active'",[v.productId])).rowCount) throw new Error("Active product required");
-    const serviceId=createId('svc');
-    await client.query("INSERT INTO services(id,product_id,name,suppression_management_allowed) VALUES($1,$2,$3,$4)",[serviceId,v.productId,v.serviceName,v.suppressionManagement]);
-    if(v.allSendingDomains||v.allReceivingDomains){
-      await client.query("INSERT INTO service_domain_grants(id,service_id,sending_domain_id,send_allowed,receive_allowed) VALUES($1,$2,NULL,$3,$4)",[createId('dg'),serviceId,v.allSendingDomains,v.allReceivingDomains]);
-    }
-    for(const domain of v.domains){
-      if(!(await client.query("SELECT id FROM sending_domains WHERE id=$1 AND status='active'",[domain.domainId])).rowCount) throw new Error("Active domain required");
-      await client.query("INSERT INTO service_domain_grants(id,service_id,sending_domain_id,send_allowed,receive_allowed) VALUES($1,$2,$3,$4,$5)",[createId('dg'),serviceId,domain.domainId,domain.send,domain.receive]);
-    }
-    let callback: {id:string;secret:string}|undefined;
-    if(callbackTarget){
-      const id=createId('cb'),secret=`ev_cb_${randomBytes(24).toString('base64url')}`,env=sealSecret({secret},id,1);
-      await client.query("INSERT INTO callback_endpoints(id,service_id,name,url,secret_ciphertext,encrypted_dek,key_version,subscribed_events) VALUES($1,$2,$3,$4,$5,$6,$7,$8)",[id,serviceId,v.serviceName,callbackTarget.url.toString(),env.secretCiphertext,env.encryptedDek,env.keyVersion,['email.accepted','email.delivered','email.bounced','email.failed','email.suppressed','inbound.received','service.permissions_changed']]);callback={id,secret};
-    }
-    const key=`ev_live_${randomBytes(24).toString('base64url')}`,id=createId('cred');
-    await client.query("INSERT INTO service_credentials(id,service_id,key_prefix,key_hash) VALUES($1,$2,$3,$4)",[id,serviceId,key.slice(0,12),hashApiKey(key)]);
-    await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES($1,'service_credential.create','service_credential',$2,$3)",[actor,id,{serviceId,domains:v.domains,allSendingDomains:v.allSendingDomains,allReceivingDomains:v.allReceivingDomains,suppressionManagement:v.suppressionManagement}]);
-    return {id,serviceId,key,callback};
-  });
-}
-
 export async function rotateServiceCredential(id: string, actor: string) {
   return transaction(async client => {
     const previous = (await client.query<{ service_id: string }>("SELECT service_id FROM service_credentials WHERE id=$1 AND status='active' AND (valid_to IS NULL OR valid_to>now()) FOR UPDATE",[id])).rows[0];
@@ -624,8 +590,8 @@ export async function createCallback(input: {
 
 export async function toggleCallback(id: string, enabled: boolean, actor: string) {
   await transaction(async client => {
-    const endpoint = await client.query("UPDATE callback_endpoints SET status=$2,updated_at=now() WHERE id=$1 RETURNING id", [id, enabled ? "active" : "disabled"]);
-    if (!endpoint.rows[0]) throw new Error("Callback endpoint not found");
+    const endpoint = await client.query("UPDATE callback_endpoints SET status=$2,updated_at=now() WHERE id=$1 AND (NOT $3 OR url IS NOT NULL) RETURNING id", [id, enabled ? "active" : "disabled", enabled]);
+    if (!endpoint.rows[0]) throw new Error("Configure an Event callback URL before enabling callback delivery");
     if (!enabled) await client.query(`UPDATE callback_deliveries SET status='dead_letter',last_error='Callback endpoint disabled by operator',updated_at=now()
       WHERE endpoint_id=$1 AND status IN ('pending','retrying')`, [id]);
     await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES ($1,'callback_endpoint.toggle','callback_endpoint',$2,$3)", [actor, id, { enabled }]);
@@ -695,15 +661,14 @@ export async function toggleInboundRoute(id: string, enabled: boolean, actor: st
   await audit(actor, "inbound_route.toggle", "inbound_route", id, { enabled })
 }
 
-export async function updateCallback(id: string, input: { name: string; url: string; events: string[] }, actor: string) {
-  const validated = callbackInputSchema.omit({ serviceId: true, secret: true }).parse(input);
-  const target = await resolveCallbackTarget(validated.url);
+export async function updateCallback(id: string, input: { events: string[] }, actor: string) {
+  const validated = callbackInputSchema.pick({ events: true }).strict().parse(input);
   await transaction(async client => {
-    const updated = await client.query("UPDATE callback_endpoints SET name=$2,url=$3,subscribed_events=$4,updated_at=now() WHERE id=$1 RETURNING id", [id, validated.name, target.url.toString(), validated.events]);
+    const updated = await client.query("UPDATE callback_endpoints SET subscribed_events=$2,updated_at=now() WHERE id=$1 AND url IS NOT NULL RETURNING id", [id, validated.events]);
     if (!updated.rowCount) throw new Error("Callback endpoint not found");
     await client.query(`UPDATE callback_deliveries SET status='dead_letter',last_error='CALLBACK_EVENT_NOT_SUBSCRIBED',updated_at=now()
       WHERE endpoint_id=$1 AND NOT(event_type=ANY($2::text[])) AND status IN ('pending','retrying')`,[id,validated.events]);
-    await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES ($1,'callback_endpoint.update','callback_endpoint',$2,$3)", [actor,id,{name:validated.name,url:target.url.toString(),events:validated.events}]);
+    await client.query("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES ($1,'callback_endpoint.update','callback_endpoint',$2,$3)", [actor,id,{events:validated.events}]);
   })
 }
 

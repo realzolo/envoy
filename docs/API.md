@@ -9,7 +9,7 @@ Use `Authorization: Bearer <service-key>`. Each key belongs to one service and p
 on every request, including files, events, and request diagnostics; another service's identifiers are not accessible.
 `GET /capabilities` returns product/service identity, current limits, native mail features, explicit domain sending/receiving permissions, configuration status and observed evidence. See the business connection contract below.
 
-An administrator grants each business Service explicit domain sending/receiving permissions under **Service Credentials**. Product-wide inheritance and exact-address grants are not supported. Verification
+An administrator grants each business Service explicit domain sending/receiving permissions under **Services**. Product-wide inheritance and exact-address grants are not supported. Verification
 of a domain on a provider is a separate prerequisite. A caller may directly specify any authorized From address and name.
 Both API submissions and console test messages supply From, Reply-To, and category directly.
 
@@ -170,7 +170,7 @@ report `delivered` while a separately authorized newer submission is still `subm
 deduplicate by stable event ID and query the current resource when necessary. Submission-scoped provider events remain
 submission-scoped rather than inventing recipient attribution. Verify HMAC-SHA256 over `timestamp + "." + original UTF-8 body`
 with one current secret, enforce at most 300 seconds of absolute clock skew, and durably deduplicate `x-envoy-id`.
-Configure the business callback URL and secret through administrator settings.
+Configure the event callback URL and secret through administrator settings.
 
 ## Retention and time
 
@@ -181,7 +181,7 @@ content cleanup; identifiers, state, errors, and idempotency summaries remain us
 
 ## Business mail connection and discovery
 
-Business configuration consists of one Envoy URL, a Service Key, and optionally one business callback URL and signing secret. A Service can use multiple explicitly authorized domains. Business APPs, exact address purposes, templates and APP routing belong entirely to the caller; Envoy never needs APP identifiers or a mailbox entity.
+Business configuration consists of one Envoy URL, a Service Key, and optionally one event callback URL and signing secret. A Service can use multiple explicitly authorized domains. Business APPs, exact address purposes, templates and APP routing belong entirely to the caller; Envoy never needs APP identifiers or a mailbox entity.
 
 `GET /capabilities` returns `product`, `service`, limits and native features plus:
 
@@ -189,9 +189,11 @@ Business configuration consists of one Envoy URL, a Service Key, and optionally 
 {"kind":"domain_permissions","domains":[{"id":"sd_example","domain":"mail.example.com","authorization":"granted","revision":1,"permissions":{"send":true,"receive":true},"sending":{"state":"configured","reasonCodes":[]},"receiving":{"state":"configured","reasonCodes":[]},"notification":{"mode":"callback_and_polling","state":"configured","reasonCodes":[]},"evidence":{"lastAcceptedAt":null,"lastDeliveredAt":null,"lastReceivedAt":null}}],"callbacks":{"configuration":"configured","latest":null,"lastDeliveredAt":null,"businessProcessing":"unknown"}}
 ```
 
-The example is the `mail` object, not the entire response. Domain IDs are stable `sending_domains` IDs. Permission is independent of DNS and transport readiness. `configured` never guarantees external delivery or receiving; evidence is an actual retained fact or null. No mailbox list is invented. An exact domain grant does not include subdomains. Disabled grants remain discoverable with `authorization:"revoked"` and false effective permissions.
+The example is the `mail` object, not the entire response. Domain IDs are stable `sending_domains` IDs. Permission is independent of DNS and transport readiness. `configured` never guarantees external delivery or receiving; evidence is an actual retained fact or null. No mailbox list is invented. An exact domain grant does not include subdomains. Disabled exact-domain grants remain discoverable with `authorization:"revoked"` and false effective permissions.
 
-The console's **ALL (current and future domains)** option grants sending or receiving permission to every registered domain, including domains registered after the credential was issued. Sending and receiving can use ALL independently. Discovery resolves ALL to current domain IDs and combines it with any exact-domain grants, returning each domain once. Grants are additive: revoke the ALL grant under **Business domain permissions** to restrict access to exact-domain grants. Disabled domains and suspended Products remain unusable. ALL grants permission only; outbound provider identities/routing and inbound routes must still be configured for each domain.
+Under **Services**, create or edit one configuration containing the Service name, sending permission, receiving permission, Event callback URL, and advanced permissions. Each mail direction independently uses one of three exclusive modes: **No permission**, **Selected domains**, or **All domains**. Both directions can be denied; the UI explicitly identifies Services with no mail permissions. Manually selecting all current domains remains a fixed selection. Choosing All domains grants permission to every current and future registered, enabled domain; subdomains must be registered separately. Saving the full configuration atomically replaces both directions, revoking redundant grants so that changing All domains to selected domains or no permission immediately narrows access. These changes apply to every active key without reissuance. Discovery returns each current domain once; disabled exact-domain grants remain as revoked entries. Revoked ALL grants no longer expose future registered domains. Disabled domains and suspended Products remain unusable. Domain verification and outbound/inbound routing are configured separately.
+
+**Manage credentials** only issues, rotates, or revokes keys of the same Service. The first key is issued on Service creation and plaintext is shown once. Changes to names, callbacks, domain permissions, or Product suppression management belong in **Edit configuration**. Product suppression management is disabled by default; enabling it allows the API to list, add, and remove Product recipient suppression rules, affecting all Services and sending domains in that Product. Editors save against the configuration revision they loaded; stale saves are rejected so a previous form cannot restore revoked access. Configuration changes are audited and send `service.permissions_changed` through the current active callback subscription. An empty Event callback URL selects polling only; removing a URL disables delivery while retaining callback history.
 
 Reason codes include `DOMAIN_SEND_NOT_AUTHORIZED`, `DOMAIN_RECEIVE_NOT_AUTHORIZED`, `SENDING_DOMAIN_DISABLED`, `INBOUND_DOMAIN_DISABLED`, `NO_ELIGIBLE_ROUTE`, `INBOUND_INGRESS_UNAVAILABLE`, `CALLBACK_DISABLED` and `CALLBACK_EVENT_NOT_SUBSCRIBED`. Handle unknown future codes generically. The send API retains `SENDER_NOT_AUTHORIZED` and `NO_ELIGIBLE_ROUTE` problem codes.
 
@@ -324,7 +326,7 @@ The stored-time list uses `inbound.` browse cursors. Malformed cursors return 40
 
 ## Receiver notifications and key rotation
 
-`mail.domains[].receiving` describes domain ingress readiness. Each Service has at most one callback endpoint. Its `notification` reports `polling` or `callback_and_polling` and current subscription/configuration errors. No callback is valid polling-only configuration. Receiving uses that business callback automatically; ingress routes never select their own signing secrets or callback endpoints.
+`mail.domains[].receiving` describes domain ingress readiness. Each Service has at most one callback endpoint. Its `notification` reports `polling` or `callback_and_polling` and current subscription/configuration errors. No callback is valid polling-only configuration. Receiving uses that event callback automatically; ingress routes never select their own signing secrets or callback endpoints.
 
 Subscribe to `service.permissions_changed` to invalidate cached authorization. This signed event has `{id,apiVersion:"v1",type:"service.permissions_changed",occurredAt,data:{serviceId,productId}}`; it is committed atomically with grant updates/revocation and a durable outbox command. Refresh capabilities to observe the new truth. This notification is independent of now-revoked domain mail access. A bounded cache expiry is still needed if notification delivery fails.
 

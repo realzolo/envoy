@@ -2,18 +2,17 @@
 
 import styles from "@/components/admin-views.module.css";
 
-import { Button, Card, Checkbox, Collapse, Form, Grid, Input, List, Select, Space, Typography, type SelectProps } from "@arco-design/web-react";
+import { Button, Card, Checkbox, Collapse, Grid, Input, List, Select, Space, Typography } from "@arco-design/web-react";
 import { IconDelete, IconExclamationCircle, IconRefresh, IconRotateLeft } from "@arco-design/web-react/icon";
 
 import { useState } from "react";
 import { ProviderAccounts } from "@/components/provider-accounts";
 
-import { ActionForm, type Row, type Data, type FormValues, requiredRule, rows, record, value, formValue, formValues, optionalValue, date, StatusTag, useAction, Field, Panel, Submit, Notice, ActionButton, EmptyState, Prerequisite, DataTable, TableCard, DnsRecords, RoutingSimulation, Secret, CopyableValue, JsonPreview } from "@/components/admin-console-shared";
+import { ActionForm, type Row, type Data, type FormValues, requiredRule, rows, record, value, formValue, formValues, optionalValue, date, StatusTag, useAction, Field, Panel, Submit, Notice, ActionButton, EmptyState, Prerequisite, DataTable, TableCard, DnsRecords, RoutingSimulation, CopyableValue, JsonPreview } from "@/components/admin-console-shared";
 import { EditRouting, AddDomainProvider } from "@/components/admin-config-editors";
 import { Callbacks } from "@/components/admin-callbacks";
 import { Inbound } from "@/components/admin-inbound";
-
-const ALL_DOMAINS = "__all_domains__";
+import { Services } from "@/components/service-management";
 
 function Providers({ data }: { data: Data }) {
   return <ProviderAccounts data={data} />;
@@ -120,28 +119,6 @@ function Domains({ data }: { data: Data }) {
       {addingProvider && <AddDomainProvider key={value(addingProvider, "id")} domain={addingProvider} providers={providers} onClose={() => setAddingProvider(null)} />}
     </Space>
   );
-}
-
-function DomainGrants({data}:{data:Data}){
-  const action=useAction(),domains=rows(data.domains).filter(d=>d.status==='active');
-  async function submit(v:FormValues){try{const domainId=formValue(v,"domainId");await action.run({action:"domain_grant.set",serviceId:formValue(v,"serviceId"),domainId:domainId===ALL_DOMAINS?null:domainId,send:v.send===true,receive:v.receive===true});}catch{}}
-  return <Space direction="vertical" size="large" className={styles.stack}>
-    <Panel title="Business domain permissions" description="Choose a business service, domain and sending/receiving permissions. All current and rotated keys of this service share these permissions.">
-      <ActionForm fieldErrors={action.fields} layout="vertical" onSubmit={v=>void submit(v as FormValues)}><Grid.Row gutter={[16,0]}>
-        <Grid.Col md={12} xs={24}><Field field="serviceId" label="Business service" required rules={requiredRule}><Select options={rows(data.services).map(s=>({value:value(s,'id'),label:`${value(s,'product')} / ${value(s,'name')}`}))}/></Field></Grid.Col>
-        <Grid.Col md={12} xs={24}><Field field="domainId" label="Domain" required rules={requiredRule} hint="ALL includes current and future registered domains. Grants are combined; revoke ALL to restrict access to selected domains."><Select options={[{value:ALL_DOMAINS,label:"ALL (current and future domains)"},...domains.map(d=>({value:value(d,'id'),label:value(d,'domain')}))]}/></Field></Grid.Col>
-        <Grid.Col md={12} xs={24}><Field field="send" label="Sending" triggerPropName="checked"><Checkbox>Allow sending from this domain</Checkbox></Field></Grid.Col>
-        <Grid.Col md={12} xs={24}><Field field="receive" label="Receiving" triggerPropName="checked"><Checkbox>Allow receiving and forwarding this domain</Checkbox></Field></Grid.Col>
-        <Grid.Col xs={24}><Submit pending={action.pending} labelText="Save domain permissions"/></Grid.Col>
-      </Grid.Row></ActionForm><Notice notice={action.notice}/>
-    </Panel>
-    <TableCard title="Authorized domains"><DataTable data={rows(data.grants)} columns={[
-      {title:'Business',render:(_,g)=>`${value(g,'product')} / ${value(g,'service')}`},
-      {title:'Domain',render:(_,g)=>value(g,'domain')},{title:'Sending',render:(_,g)=>g.send_allowed?'Allowed':'Disabled'},
-      {title:'Receiving',render:(_,g)=>g.receive_allowed?'Allowed':'Disabled'}, {title:'Status',render:(_,g)=><StatusTag>{value(g,'status')}</StatusTag>},
-      {title:'Action',render:(_,g)=><ActionButton body={{action:'domain_grant.toggle',id:g.id,enabled:g.status!=='active'}} confirmText="Current resource access and queued work will be checked again.">{g.status==='active'?'Revoke':'Activate'}</ActionButton>}
-    ]}/></TableCard>
-  </Space>;
 }
 
 function Routing({ data }: { data: Data }) {
@@ -269,161 +246,6 @@ function Routing({ data }: { data: Data }) {
         </Card>
       ))}
       {editingPolicy && <EditRouting key={value(editingPolicy, "id")} policy={editingPolicy} data={data} onClose={() => setEditingPolicy(null)} />}
-    </Space>
-  );
-}
-
-function DomainMultiSelect({ domains, value: selected = [], onChange, ...props }: Omit<SelectProps, "options" | "value" | "onChange"> & {
-  domains: Row[];
-  value?: string[];
-  onChange?: (value: string[]) => void;
-}) {
-  return (
-    <Select
-      {...props}
-      mode="multiple"
-      showSearch
-      allowClear
-      maxTagCount={2}
-      placeholder="Select domains"
-      value={selected}
-      onChange={(next: string[]) => onChange?.(
-        next.includes(ALL_DOMAINS) && !selected.includes(ALL_DOMAINS)
-          ? [ALL_DOMAINS]
-          : next.filter(id => id !== ALL_DOMAINS)
-      )}
-      options={[
-        { value: ALL_DOMAINS, label: "ALL (current and future domains)" },
-        ...domains.map(domain => ({ value: value(domain, "id"), label: value(domain, "domain") })),
-      ]}
-    />
-  );
-}
-
-function Credentials({ data }: { data: Data }) {
-  const action = useAction();
-  const productAction = useAction();
-  const [productForm] = Form.useForm();
-  const [key, setKey] = useState("");
-  const products = rows(data.products);
-  const activeProducts = products.filter(product => product.status === "active");
-  const credentials = rows(data.credentials);
-  const activeDomains = rows(data.domains).filter(domain => domain.status === "active");
-
-  async function createProduct(values: FormValues) {
-    try {
-      await productAction.run({ action: "product.create", name: formValue(values, "name") });
-      productForm.resetFields();
-    } catch {
-      // Inline notice owns failures from this request.
-    }
-  }
-
-  async function submit(values: FormValues) {
-    try {
-      setKey("");
-      const sendIds=formValues(values,"sendDomainIds"),receiveIds=formValues(values,"receiveDomainIds");
-      const result=await action.run({action:"credential.create",productId:formValue(values,"productId"),serviceName:formValue(values,"serviceName"),allSendingDomains:sendIds.includes(ALL_DOMAINS),allReceivingDomains:receiveIds.includes(ALL_DOMAINS),domains:[...new Set([...sendIds,...receiveIds])].filter(domainId=>domainId!==ALL_DOMAINS).map(domainId=>({domainId,send:sendIds.includes(domainId),receive:receiveIds.includes(domainId)})),callbackUrl:formValue(values,"callbackUrl"),suppressionManagement:values.suppressionManagement===true}) as {key?:string;callback?:{secret:string}};
-      setKey([result?.key,result?.callback?.secret?`Callback secret: ${result.callback.secret}`:null].filter(Boolean).join("\n"));
-    } catch {
-      // Inline notice owns failures from this request.
-    }
-  }
-
-  async function rotate(id: string) {
-    try {
-      setKey("");
-      const result = await action.run({ action: "credential.rotate", id }) as { key?: string };
-      setKey(result.key ?? "");
-      action.setNotice("Replacement issued for the same service. Old key remains active for at most 24 hours: switch callers, verify use, then explicitly revoke the old credential.");
-    } catch {
-      // Inline notice owns failures from this request.
-    }
-  }
-
-  return (
-    <Space direction="vertical" size="large" className={styles.stack}>
-      <Panel
-        title="Create product"
-        description="A product owns its services, sending permissions, and delivery rules."
-        defaultExpanded={products.length === 0}
-      >
-        <ActionForm fieldErrors={productAction.fields} form={productForm} layout="vertical" onSubmit={values => void createProduct(values as FormValues)}>
-          <Grid.Row gutter={[16, 0]}>
-            <Grid.Col xs={24}><Field field="name" label="Name" required rules={requiredRule}><Input /></Field></Grid.Col>
-            <Grid.Col xs={24}><Space><Submit pending={productAction.pending} labelText="Create product" /></Space></Grid.Col>
-          </Grid.Row>
-        </ActionForm>
-        <Notice notice={productAction.notice} />
-      </Panel>
-      {products.length ? (
-        <TableCard title="Products">
-          <DataTable
-            data={products}
-            minWidth="440px"
-            columns={[
-              { title: "Product", render: (_, product) => value(product, "name") },
-              { title: "Status", render: (_, product) => <StatusTag>{value(product, "status")}</StatusTag> },
-              { title: "Action", render: (_, product) => <ActionButton body={{ action: "product.toggle", id: product.id, enabled: product.status !== "active" }}>{product.status === "active" ? "Suspend" : "Activate"}</ActionButton> },
-            ]}
-          />
-        </TableCard>
-      ) : <EmptyState text="No products configured. Create the first product to issue a service credential." />}
-      {activeProducts.length ? (
-        <>
-          <Panel
-            title="Issue service credential"
-            description="The plaintext key is shown once. Rotation adds a credential with up to 24 hours of overlap; revoke the old one after switching callers."
-            defaultExpanded={credentials.length === 0}
-          >
-            <ActionForm fieldErrors={action.fields} layout="vertical" onSubmit={values => void submit(values as FormValues)}>
-              <Grid.Row gutter={[16, 0]}>
-                <Grid.Col md={12} xs={24}><Field field="productId" label="Product" initialValue={value(activeProducts[0], "id")} required rules={requiredRule}><Select options={activeProducts.map(product => ({ value: value(product, "id"), label: value(product, "name") }))} /></Field></Grid.Col>
-                <Grid.Col md={12} xs={24}><Field field="serviceName" label="Service name" required rules={requiredRule}><Input /></Field></Grid.Col>
-                <Grid.Col md={12} xs={24}><Field field="sendDomainIds" label="Sending domains" hint="ALL includes current and future registered domains. Leave empty for no sending permission."><DomainMultiSelect domains={activeDomains} /></Field></Grid.Col>
-                <Grid.Col md={12} xs={24}><Field field="receiveDomainIds" label="Receiving domains" hint="ALL includes current and future registered domains. Leave empty for no receiving permission."><DomainMultiSelect domains={activeDomains} /></Field></Grid.Col>
-                <Grid.Col xs={24}><Field field="callbackUrl" label="Business callback URL" hint="Optional for polling-only connections. The callback secret is shown once with the key."><Input placeholder="https://business.example.com/mail/events"/></Field></Grid.Col>
-                <Grid.Col xs={24}><Field field="suppressionManagement" label="Advanced permission" triggerPropName="checked"><Checkbox>Allow product-wide suppression management</Checkbox></Field></Grid.Col>
-                <Grid.Col xs={24}><Space><Submit pending={action.pending} labelText="Issue credential" /></Space></Grid.Col>
-              </Grid.Row>
-            </ActionForm>
-            {key && <Secret value={key} />}
-            <Notice notice={action.notice} />
-          </Panel>
-          <TableCard title="Service credentials">
-            <DataTable
-              data={credentials}
-              columns={[
-                { title: "Service", render: (_, credential) => value(credential, "service") },
-                { title: "Product", render: (_, credential) => value(credential, "product") },
-                { title: "Credential ID", render: (_, credential) => <Typography.Text code>{value(credential,"id")}</Typography.Text> },
-                { title: "Prefix", render: (_, credential) => <Typography.Text code>{value(credential, "key_prefix")}...</Typography.Text> },
-                { title: "Last used", render: (_, credential) => date(credential.last_used_at) },
-                { title: "Valid until", render: (_, credential) => credential.valid_to ? date(credential.valid_to) : "No fixed expiry" },
-                { title: "Status", render: (_, credential) => <StatusTag>{value(credential, "status")}</StatusTag> },
-                {
-                  title: "Actions",
-                  render: (_, credential) => (
-                    <Space size="small">
-                      <Button size="small" icon={<IconRotateLeft />} disabled={credential.status !== "active"} loading={action.pending} onClick={() => void rotate(value(credential, "id"))}>Issue replacement</Button>
-                      <ActionButton
-                        danger
-                        body={{ action: "credential.revoke", id: credential.id }}
-                        confirmOkText="Revoke"
-                        confirmText="This immediately invalidates the credential and cannot be undone."
-                        confirmTitle="Revoke credential?"
-                      >
-                        <IconDelete />Revoke
-                      </ActionButton>
-                    </Space>
-                  ),
-                },
-              ]}
-            />
-          </TableCard>
-        </>
-      ) : <Prerequisite title="Create an active product first" description="A service credential must be scoped to an active product." href="/api-keys" action="Create product" />}
-      <DomainGrants data={data} />
     </Space>
   );
 }
@@ -591,7 +413,7 @@ export function AdminConsole({ section, data }: { section: string; data: Data })
   if (section === "providers") return <Providers data={data} />;
   if (section === "domains") return <Domains data={data} />;
   if (section === "routing") return <Routing data={data} />;
-  if (section === "api-keys") return <Credentials data={data} />;
+  if (section === "api-keys") return <Services data={data} />;
   if (section === "webhooks") return <Callbacks data={data} />;
   if (section === "events") return <Events data={data} />;
   if (section === "suppressions") return <Suppressions data={data} />;

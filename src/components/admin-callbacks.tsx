@@ -2,12 +2,13 @@
 
 import styles from "@/components/admin-views.module.css";
 
-import { Alert, Modal, Button, Checkbox, Collapse, Descriptions, Form, Grid, Input, Select, Space, Typography } from "@arco-design/web-react";
+import { Alert, Modal, Button, Checkbox, Collapse, Descriptions, Form, Input, Space, Typography } from "@arco-design/web-react";
+import Link from "next/link";
 import { IconRotateLeft, IconSend } from "@arco-design/web-react/icon";
 
 import { useState } from "react";
 
-import { ActionForm, type Row, type Data, type FormValues, requiredRule, rows, value, formValue, StatusTag, useAction, Field, Panel, Submit, Notice, ActionButton, Prerequisite, DataTable, TableCard, Secret, date, record, CopyableValue } from "@/components/admin-console-shared";
+import { ActionForm, type Row, type Data, rows, value, StatusTag, useAction, Field, Notice, ActionButton, Prerequisite, DataTable, TableCard, Secret, date, record, CopyableValue } from "@/components/admin-console-shared";
 import { ResourceDetail } from "@/components/admin-resource-detail";
 
 function ReplaceCallback({ callback }: { callback: Row }) {
@@ -51,55 +52,16 @@ export function Callbacks({ data }: { data: Data }) {
   const action = useAction();
   const services = rows(data.services).filter(service => service.product_status === "active");
   const callbacks = rows(data.callbacks);
-  const unconfiguredServices = services.filter(service => !callbacks.some(callback => value(callback, "service_id") === value(service, "id")));
   const deliveries = rows(data.callbackDeliveries);
   const [selectedDeliveryId, setSelectedDeliveryId] = useState<string | null>(null);
   const [editing, setEditing] = useState<Row | null>(null);
-  const [events, setEvents] = useState(["email.delivered", "email.bounced", "email.failed", "inbound.received", "service.permissions_changed"]);
-  const [secret, setSecret] = useState("");
-  const eventOptions = [
-    ["email.accepted", "Accepted"],
-    ["email.delivered", "Delivered"],
-    ["email.bounced", "Bounced"],
-    ["email.failed", "Failed"],
-    ["email.suppressed", "Suppressed"],
-    ["inbound.received", "Inbound received"],
-    ["service.permissions_changed", "Domain permissions changed"],
-  ] as const;
-
-  async function submit(values: FormValues) {
-    try {
-      const result = await action.run({ action: "callback.create", serviceId: formValue(values, "serviceId"), name: formValue(values, "name"), url: formValue(values, "url"), events }) as { secret?: string };
-      setSecret(result.secret ?? "");
-      action.setNotice("Callback endpoint created. Copy the generated signing secret below.");
-    } catch {
-      // Inline notice owns failures from this request.
-    }
-  }
-
   if (!services.length) {
-    return <Prerequisite title="Create an active service first" description="Callbacks are owned by a service so recipients can identify the product that emitted each event." href="/api-keys" action="Create a service credential" />;
+    return <Prerequisite title="Create an active service first" description="Callbacks are owned by a service so recipients can identify the product that emitted each event." href="/api-keys" action="Create a service" />;
   }
 
   return (
     <Space direction="vertical" size="large" className={styles.stack}>
-      <Panel
-        title="Add callback endpoint"
-        description="One callback per business Service, with canonical events and HMAC signatures"
-        defaultExpanded={callbacks.length === 0}
-      >
-        {unconfiguredServices.length ? <ActionForm fieldErrors={action.fields} layout="vertical" onSubmit={values => void submit(values as FormValues)}>
-          <Grid.Row gutter={[16, 0]}>
-            <Grid.Col md={12} xs={24}><Field field="serviceId" label="Service" initialValue={value(unconfiguredServices[0], "id")} required rules={requiredRule}><Select options={unconfiguredServices.map(service => ({ value: value(service, "id"), label: `${value(service, "product")} / ${value(service, "name")}` }))} /></Field></Grid.Col>
-            <Grid.Col md={12} xs={24}><Field field="name" label="Name" required rules={requiredRule}><Input /></Field></Grid.Col>
-            <Grid.Col md={12} xs={24}><Field field="url" label="URL" required rules={requiredRule}><Input type="url" placeholder="https://api.example.com/envoy/events" /></Field></Grid.Col>
-            <Grid.Col md={12} xs={24}><Field label="Events" required><Checkbox.Group value={events} options={eventOptions.map(([event, title]) => ({ value: event, label: title }))} onChange={next => setEvents(next.map(String))} /></Field></Grid.Col>
-            <Grid.Col xs={24}><Space><Submit pending={action.pending} disabled={!events.length} labelText="Add endpoint" /></Space></Grid.Col>
-          </Grid.Row>
-        </ActionForm> : <Typography.Text type="secondary">All active Services already have a business callback. Manage their endpoint and subscriptions below.</Typography.Text>}
-        <Notice notice={action.notice} />
-        {secret && <Secret value={secret} label="Generated signing secret. Store it in the callback consumer now." />}
-      </Panel>
+      <Alert type="info" content={<span>Configure the Event callback URL in <Link href="/api-keys">Services</Link>. Manage subscriptions, signing secrets, and delivery recovery here.</span>} />
       <Collapse bordered={false}><Collapse.Item name="advanced" header="Advanced recovery"><Alert type="warning" content={`Recorded dead letters: ${callbacks.reduce((total, row) => total + Number(row.dead_letters ?? 0), 0)}. Only records with active endpoints and retained payloads are eligible. Prefer the endpoint or individual controls below.`} showIcon /><Space wrap>
         <ActionButton
           body={{ action: "callback.replay_dlq" }}
@@ -117,7 +79,7 @@ export function Callbacks({ data }: { data: Data }) {
           columns={[
             { title: "Endpoint", render: (_, callback) => <Space direction="vertical" size="mini"><Typography.Text>{value(callback, "name")}</Typography.Text><StatusTag>{value(callback, "status")}</StatusTag></Space> },
             { title: "Service", render: (_, callback) => `${value(callback, "product")} / ${value(callback, "service")}` },
-            { title: "URL", width: 260, render: (_, callback) => <Typography.Text ellipsis={{ showTooltip: true }}>{value(callback, "url")}</Typography.Text> },
+            { title: "Event callback URL", width: 260, render: (_, callback) => <Typography.Text ellipsis={{ showTooltip: true }}>{value(callback, "url")}</Typography.Text> },
             { title: "Events", width: 240, render: (_, callback) => Array.isArray(callback.subscribed_events) ? callback.subscribed_events.join(", ") : "" },
             { title: "DLQ", width: 72, render: (_, callback) => value(callback, "dead_letters") },
             { title: "In flight", width: 80, render: (_, callback) => value(callback, "in_flight") },
@@ -127,9 +89,9 @@ export function Callbacks({ data }: { data: Data }) {
               render: (_, callback) => (
                 <div className={styles.actions}>
                   {callback.status === "active" && <Button size="small" loading={action.pending} onClick={async () => { try { const result = record(await action.run({ action: "callback.test", id: callback.id })); if (typeof result.deliveryId === "string") setSelectedDeliveryId(result.deliveryId); } catch { /* Inline notice handles the error. */ } }}><IconSend />Test</Button>}
-                  <Button size="small" onClick={() => setEditing(callback)}>Edit</Button>
+                  <Button size="small" disabled={!callback.url} onClick={() => setEditing(callback)}>Subscriptions and secret</Button>
                   {Number(callback.dead_letters ?? 0) > 0 && <ActionButton body={{ action: "callback.replay_dlq", endpointId: callback.id }} confirmTitle="Replay endpoint dead letters?" confirmText={`Queue ${value(callback, "dead_letters")} failed callbacks for ${value(callback, "name")}?`}><IconRotateLeft />Replay endpoint</ActionButton>}
-                  <ActionButton body={{ action: "callback.toggle", id: callback.id, enabled: callback.status !== "active" }}>{callback.status === "active" ? "Pause" : "Resume"}</ActionButton>
+                  {Boolean(callback.url) && <ActionButton body={{ action: "callback.toggle", id: callback.id, enabled: callback.status !== "active" }}>{callback.status === "active" ? "Pause" : "Resume"}</ActionButton>}
                 </div>
               ),
             },
@@ -175,13 +137,12 @@ function EditCallback({ callback, onClose }: { callback: Row; onClose: () => voi
   const [form] = Form.useForm();
   const initialEvents = Array.isArray(callback.subscribed_events) ? callback.subscribed_events.map(String) : [];
   const [events, setEvents] = useState(initialEvents);
-  return <Modal title="Edit callback endpoint" style={{ width: 640, maxWidth: "calc(100vw - 32px)" }} visible onCancel={onClose} confirmLoading={action.pending} onOk={async () => {
-    const values = await form.validate();
-    try { await action.run({ action: "callback.update", id: callback.id, name: formValue(values, "name"), url: formValue(values, "url"), events }); onClose(); } catch { /* Preserve the form for correction. */ }
+  return <Modal title="Callback subscriptions and secret" style={{ width: 640, maxWidth: "calc(100vw - 32px)" }} visible onCancel={onClose} confirmLoading={action.pending} onOk={async () => {
+    await form.validate();
+    try { await action.run({ action: "callback.update", id: callback.id, events }); onClose(); } catch { /* Preserve the form for correction. */ }
   }} okButtonProps={{ disabled: !events.length }}>
     <ActionForm fieldErrors={action.fields} form={form} layout="vertical" initialValues={{ name: callback.name, url: callback.url }}>
-      <Field field="name" label="Name" required rules={requiredRule}><Input /></Field>
-      <Field field="url" label="URL" required rules={requiredRule}><Input type="url" /></Field>
+      <Typography.Text>Event callback URL: {value(callback, "url")}</Typography.Text>
       <Field label="Subscribed events" required><Checkbox.Group value={events} onChange={next => setEvents(next.map(String))} options={["email.accepted", "email.delivered", "email.bounced", "email.failed", "email.suppressed", "inbound.received", "service.permissions_changed"]} /></Field>
     </ActionForm><Notice notice={action.notice} />
     <ReplaceCallback callback={callback} />

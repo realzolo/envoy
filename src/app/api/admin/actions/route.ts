@@ -8,6 +8,7 @@ import { getAdminSession } from "@/server/admin-auth";
 import { recordRequest } from "@/server/request-log";
 import { terminateCallback } from "@/modules/callbacks/service";
 import * as actions from "@/modules/admin/actions";
+import { createService, updateService, issueServiceCredential, ServiceConfigurationConflictError } from "@/modules/admin/service-configuration";
 
 type Body = { action?: string; [key: string]: unknown };
 
@@ -167,14 +168,15 @@ export async function POST(request: Request) {
         }, session.email);
         status = 202;
         break;
-      case"domain_grant.set":
-        result={id:await actions.setDomainGrant({serviceId:text(body,"serviceId"),domainId:body.domainId===null?null:text(body,"domainId"),send:body.send===true,receive:body.receive===true},session.email)};
+      case "service.create":
+        result = await createService(object(body, "configuration"), session.email);
+        status = 201;
         break;
-      case"domain_grant.toggle":
-        await actions.toggleDomainGrant(text(body,"id"),body.enabled===true,session.email);
+      case "service.update":
+        result = await updateService(text(body, "id"), object(body, "configuration"), z.number().int().positive().parse(body.revision), session.email);
         break;
-      case"credential.create":
-        result=await actions.createServiceCredential({productId:text(body,"productId"),serviceName:text(body,"serviceName"),domains:body.domains as Array<{domainId:string;send:boolean;receive:boolean}>,allSendingDomains:body.allSendingDomains===true,allReceivingDomains:body.allReceivingDomains===true,callbackUrl:typeof body.callbackUrl==='string'&&body.callbackUrl.trim()?body.callbackUrl:undefined,suppressionManagement:body.suppressionManagement===true},session.email);
+      case "credential.issue":
+        result = await issueServiceCredential(text(body, "serviceId"), session.email);
         status=201;
         break;
       case"credential.rotate":
@@ -183,18 +185,8 @@ export async function POST(request: Request) {
       case"credential.revoke":
         await actions.revokeServiceCredential(text(body, "id"), session.email);
         break;
-      case"callback.create":
-        result = await actions.createCallback({
-          serviceId: text(body, "serviceId"),
-          name: text(body, "name"),
-          url: text(body, "url"),
-          secret: typeof body.secret === "string" && body.secret.trim() ? body.secret : undefined,
-          events: strings(body.events)
-        }, session.email);
-        status = 201;
-        break;
       case"callback.update":
-        await actions.updateCallback(text(body,"id"), { name:text(body,"name"), url:text(body,"url"), events:strings(body.events) },session.email);
+        await actions.updateCallback(text(body,"id"), { events:strings(body.events) },session.email);
         break;
       case"callback.toggle":
         await actions.toggleCallback(text(body, "id"), body.enabled === true, session.email);
@@ -241,7 +233,7 @@ export async function POST(request: Request) {
     return Response.json({ ok: true, result }, { status })
   } catch (error) {
     const code = typeof error === "object" && error && "code" in error ? String(error.code) : "";
-    status = error instanceof IdempotencyConflictError || error instanceof DuplicateRiskError || code === "23505" ? 409
+    status = error instanceof ServiceConfigurationConflictError || error instanceof IdempotencyConflictError || error instanceof DuplicateRiskError || code === "23505" ? 409
       : error instanceof BodyTooLargeError ? 413 : error instanceof SyntaxError ? 400 : /^(08|53|57)/.test(code) ? 503 : code ? 500 : 422;
     const message = code ? code === "23505" ? "This configuration already exists." : status === 503 ? "The database is temporarily unavailable." : "The operation could not be completed. Check the server logs."
       : error instanceof MessageValidationError ? error.issues.join("; ") : error instanceof z.ZodError ? "Check the highlighted fields."

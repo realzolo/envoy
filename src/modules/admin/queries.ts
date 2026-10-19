@@ -151,12 +151,12 @@ export type AdminSection =
 
 const adminQueries = {
   products: () => query("SELECT id,name,status FROM products ORDER BY name"),
-  services: () => query("SELECT s.id,s.name,p.name AS product,p.id AS product_id,p.status AS product_status FROM services s JOIN products p ON p.id=s.product_id ORDER BY p.name,s.name"),
+  services: () => query("SELECT s.id,s.name,s.suppression_management_allowed,s.configuration_revision,COALESCE((SELECT json_agg(g.* ORDER BY g.id) FROM service_domain_grants g WHERE g.service_id=s.id),'[]'::json) AS domain_grants,p.name AS product,p.id AS product_id,p.status AS product_status,e.id AS callback_id,e.url AS callback_url,e.status AS callback_status FROM services s JOIN products p ON p.id=s.product_id LEFT JOIN callback_endpoints e ON e.service_id=s.id ORDER BY p.name,s.name"),
   providers: () => query(`SELECT a.id,a.type,a.name,a.status,a.public_config,
     coalesce(a.health->>'status','unknown') AS health,a.health AS health_details,a.quota,a.created_at,
     c.credential_version,e.id AS webhook_endpoint_id,e.opaque_token,e.status AS webhook_status,
     e.security_configured,e.expected_topic_arn,e.ip_allowlist,
-    (SELECT max(r.received_at) FROM raw_provider_events r WHERE r.provider_account_id=a.id) AS last_event_at
+    (SELECT max(r.received_at) FROM raw_provider_events r WHERE r.provider_account_id=a.id AND r.webhook_endpoint_id=e.id AND r.signature_valid AND r.replay_valid AND r.security_version=e.security_version) AS last_event_at
     FROM provider_accounts a
     JOIN provider_credentials c ON c.provider_account_id=a.id AND c.status='active'
     JOIN provider_webhook_endpoints e ON e.provider_account_id=a.id
@@ -168,7 +168,7 @@ const adminQueries = {
     LEFT JOIN provider_identities pi ON pi.sending_domain_id=sd.id
     LEFT JOIN provider_accounts pa ON pa.id=pi.provider_account_id
     GROUP BY sd.id ORDER BY sd.domain`),
-  grants:()=>query(`SELECT g.*,s.product_id,p.name AS product,s.name AS service,COALESCE(d.domain,'ALL (current and future domains)') AS domain FROM service_domain_grants g JOIN services s ON s.id=g.service_id JOIN products p ON p.id=s.product_id LEFT JOIN sending_domains d ON d.id=g.sending_domain_id ORDER BY p.name,s.name,d.domain NULLS FIRST`),
+  grants:()=>query(`SELECT g.*,s.product_id,p.name AS product,s.name AS service,COALESCE(d.domain,'All domains (current and future)') AS domain FROM service_domain_grants g JOIN services s ON s.id=g.service_id JOIN products p ON p.id=s.product_id LEFT JOIN sending_domains d ON d.id=g.sending_domain_id ORDER BY p.name,s.name,d.domain NULLS FIRST`),
   policies: () => query(`SELECT rp.id,rp.name,rp.priority,rp.status,rp.product_id,rp.service_id,rp.sending_domain_id,p.name AS product,s.name AS service,sd_policy.domain AS sending_domain,rp.message_category,
     json_agg(json_build_object('id',rt.id,'accountId',pa.id,'account',pa.name,'type',pa.type,'identityId',pi.id,'domain',sd.domain,'priority',rt.priority,'weight',rt.weight,'rateLimit',rt.rate_limit_per_minute,'status',rt.status,'circuitOpenUntil',rt.circuit_open_until) ORDER BY rt.priority)
       FILTER(WHERE rt.id IS NOT NULL) AS targets
@@ -181,7 +181,7 @@ const adminQueries = {
     LEFT JOIN provider_identities pi ON pi.id=rt.provider_identity_id
     LEFT JOIN sending_domains sd ON sd.id=pi.sending_domain_id
     GROUP BY rp.id,p.name,s.name,sd_policy.domain ORDER BY rp.priority,rp.name`),
-  credentials: () => query(`SELECT c.id,c.key_prefix,c.status,c.valid_from,c.valid_to,c.last_used_at,s.name AS service,s.id AS service_id,p.name AS product
+  credentials: () => query(`SELECT c.id,c.key_prefix,c.status,c.created_at,c.valid_from,c.valid_to,c.last_used_at,s.name AS service,s.id AS service_id,p.name AS product
     FROM service_credentials c JOIN services s ON s.id=c.service_id JOIN products p ON p.id=s.product_id ORDER BY c.created_at DESC`),
   webhooks: () => query(`SELECT e.id,e.opaque_token,e.status,e.security_configured,e.expected_topic_arn,e.ip_allowlist,e.created_at,pa.id AS provider_account_id,pa.name AS account,pa.type
     FROM provider_webhook_endpoints e JOIN provider_accounts pa ON pa.id=e.provider_account_id ORDER BY e.created_at DESC`),
@@ -192,6 +192,7 @@ const adminQueries = {
     JOIN services s ON s.id=e.service_id
     JOIN products p ON p.id=s.product_id
     LEFT JOIN callback_deliveries d ON d.endpoint_id=e.id
+    WHERE e.url IS NOT NULL
     GROUP BY e.id,s.id,s.name,p.id,p.name ORDER BY e.created_at DESC`),
   callbackDeliveries: () => query(`SELECT d.id,d.endpoint_id,e.name AS endpoint,d.event_type,d.payload->>'id' AS event_id,d.payload_purged_at,d.status,d.attempt_count,d.next_attempt_at,d.response_code,d.last_error,d.delivered_at,d.created_at
     FROM callback_deliveries d JOIN callback_endpoints e ON e.id=d.endpoint_id ORDER BY d.created_at DESC LIMIT 200`),
@@ -220,7 +221,7 @@ const adminQueries = {
     LEFT JOIN services s ON s.id=r.service_id
     JOIN provider_webhook_endpoints e ON e.id=r.provider_webhook_endpoint_id
     JOIN provider_accounts pa ON pa.id=e.provider_account_id
-    LEFT JOIN callback_endpoints ce ON ce.service_id=r.service_id
+    LEFT JOIN callback_endpoints ce ON ce.service_id=r.service_id AND ce.url IS NOT NULL
     ORDER BY r.created_at DESC`),
   failedWork: () => query("SELECT id,aggregate_type,aggregate_id,event_type,status,attempt_count,available_at,created_at FROM outbox_events WHERE status='failed' OR (status='pending' AND available_at<now()-interval '1 minute') ORDER BY available_at LIMIT 200"),
   audit: () => query("SELECT id,actor,action,resource_type,resource_id,details,created_at FROM audit_logs ORDER BY created_at DESC LIMIT 300")

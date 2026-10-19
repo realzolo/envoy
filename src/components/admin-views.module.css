@@ -12,6 +12,11 @@
   min-width: 0;
 }
 
+.readable :global(.arco-typography) {
+  word-break: normal;
+  overflow-wrap: anywhere;
+}
+
 .form {
   width: 100%;
   max-width: 1120px;

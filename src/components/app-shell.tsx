@@ -60,7 +60,7 @@ const navigation = [
   {
     label: "Developer",
     items: [
-      { href: "/api-keys", label: "Service Credentials", icon: IconLock },
+      { href: "/api-keys", label: "Services", icon: IconLock },
       { href: "/webhooks", label: "Callbacks", icon: IconSettings },
       { href: "/suppressions", label: "Suppressions", icon: IconMessageBanned },
       { href: "/logs", label: "Audit Log", icon: IconFile },

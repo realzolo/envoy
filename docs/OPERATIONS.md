@@ -29,7 +29,7 @@ Use a direct or session-pooled connection and reserve the documented connection 
 | API rejects a request before message creation | Save `requestId` and query `/api/v1/requests/{requestId}` with the same service credential. Check field errors and sender authorization. |
 | Messages remain queued or deferred | Check structured delivery errors and submission attempts, Worker heartbeat/logs, overdue work, domain grants, active routing targets, verified provider identities, quotas, and provider account health. |
 | Provider webhook is rejected | Verify the provider event URL, provider-specific signature material, allowed source configuration, and server clock. For Postmark, use the credential-bearing URL generated when Basic Auth is saved. |
-| Outbound callback delivery fails | Inspect the business callback endpoint URL, signing secret, consumer response, and dead-letter/replay state in the operations console. |
+| Outbound callback delivery fails | Inspect the event callback endpoint URL, signing secret, consumer response, and dead-letter/replay state in the operations console. |
 | Credentials cannot be read after deployment | Verify that `ENVOY_KEK_BASE64`, `ENVOY_KEK_VERSION`, and any `ENVOY_KEK_KEYRING_JSON` entries match the keys used to encrypt existing envelopes. |
 
 Use `docker compose logs -f web` and `docker compose logs -f worker` while investigating. Redact credentials,
@@ -64,12 +64,12 @@ Envoy; inspect the dry-run before applying.
 
 Configure these resources in Envoy, not in each business system:
 
-1. **Service Credentials**: create a product/service per required isolation boundary and issue its limited key. Give the
+1. **Services**: create a Product and Service per required isolation boundary. Configure mail permissions and the optional Event callback URL in the same form; creation issues the first key. Give the
    caller the Envoy URL and service key; do not share an administrator session or provider credentials.
 2. **Provider Accounts / Domains**: associate provider identities and retrieve/present available DNS records.
    The domain administrator publishes them on the actual DNS platform. Refresh the result in Envoy. Provider-specific
    workflows stay with Envoy operators; sending-domain verification is not proof that inbound MX/rules work.
-3. **Service Credentials → Business domain permissions**: grant each Service explicit domain sending/receiving permission.
+3. **Services → Edit configuration**: select no permission, selected domains, or All domains independently for sending and receiving. The All domains option includes future enabled registered domains. Saving replaces previous permissions and applies to all active keys.
    Enter the From address and display name directly when sending. Revocation blocks new submissions and retries even
    if a caller discovered the grant earlier.
 4. **Routing**: configure outbound policies and categories. Discovery reports domain readiness, not a reserved quota
@@ -80,7 +80,7 @@ Configure these resources in Envoy, not in each business system:
    Domain matching is case normalized and exact; every local part belongs to the authorized domain scope.
    Every route requires a Service with explicit receiving permission. Multiple authorized Services on the same domain
    intentionally receive private copies; review that choice as a receiving-data authorization.
-6. **Callbacks**: configure the business HTTPS URL, subscriptions and single signature secret once per Service.
+6. **Services → Edit configuration**: set the Event callback URL; the signing secret is shown when first configured. **Callbacks** manages subscriptions, secret replacement and delivery recovery.
    Inbound and outbound events use that same endpoint automatically. Give the caller its callback connection
    secret. Callback retries/replay acknowledge transport receipt, never completed business work.
 
@@ -88,6 +88,18 @@ Use `/api/v1/capabilities` with the caller's service key to review `mail`: sende
 configuration, canonical send facts, actual inbound observation and callback delivery are separate. `null` evidence and
 `unknown` external/runtime states mean unverified; do not relabel them as success. Provider errors/DNS records are
 operator diagnostics; callers receive stable reason codes and Envoy request/resource IDs.
+
+In **Provider Accounts → Provider event webhook**, configure verification once per provider webhook endpoint. For Resend,
+add Envoy's public HTTPS Provider webhook URL in Resend → Webhooks, select events, then open that webhook's details and
+copy its `whsec_...` Signing secret into **Resend webhook signing secret**. See the
+[official verification guide](https://resend.com/docs/webhooks/verify-webhooks-requests). The other providers retain their
+own public-key, SNS-topic, signing-key or Basic Auth settings. These credentials verify provider → Envoy traffic; the
+Event callback signing secret authenticates Envoy → your application. Neither replaces an API key.
+
+Saved verification settings are encrypted and never echoed. Updating requires complete replacement settings; leaving
+the form untouched preserves the current configuration. Saving shows configured/waiting, and only an actual verified
+event with the current settings produces a valid-event timestamp. A working provider API can submit mail before
+webhook verification is configured, but API acceptance alone does not establish recipient delivery.
 
 The Inbound detail drawer distinguishes the Envoy ID, RFC Message-ID, SMTP recipients, standard reply/thread fields,
 and the representative route for each merged service copy. Inspect the full verified raw provider event when diagnosing

@@ -70,7 +70,7 @@ const providerMeta: Record<Exclude<ProviderType, "mock">, {
     requirement: "API key",
     credentialPath: "API Keys",
     credentialDocs: "https://resend.com/docs/dashboard/api-keys/introduction",
-    webhookPath: "Webhooks > Signing secret",
+    webhookPath: "Webhooks > open your webhook > Signing secret",
     webhookDocs: "https://resend.com/docs/webhooks/verify-webhooks-requests",
   },
   ses: {
@@ -219,7 +219,7 @@ function Field({
       field={field}
       label={label}
       required={isRequired}
-      initialValue={initialValue}
+      {...(initialValue !== undefined ? { initialValue } : {})}
       rules={rules}
       extra={hint}
     >
@@ -417,7 +417,7 @@ function CreateProvider({ onClose, alwaysOpen = false }: { onClose: () => void; 
                 <Space direction="vertical" size="small">
                   <Typography.Text>{selected.credentialPath}</Typography.Text>
                   <Button type="text" href={selected.credentialDocs} target="_blank" icon={<IconLaunch />}>Open official documentation</Button>
-                  <Typography.Text type="secondary">Event verification is configured after this account is created, when its unique provider webhook URL is available.</Typography.Text>
+                  <Typography.Text type="secondary">Provider webhook verification is configured after this account is created, when its unique provider webhook URL is available.</Typography.Text>
                 </Space>
               )}
             />
@@ -472,18 +472,20 @@ function CopyableEndpoint({ path }: { path: string }) {
   return (
     <Typography.Text
       code
+      style={{ overflowWrap: "anywhere" }}
       copyable={endpoint ? {
         text: endpoint,
         tooltips: ["Copy full provider webhook URL", "Copied"],
       } : false}
     >
-      {path}
+      {endpoint || path}
     </Typography.Text>
   );
 }
 
 function WebhookForm({ account }: { account: Row }) {
   const action = useProviderAction();
+  const [form] = Form.useForm();
   const type = value(account, "type") as ProviderType;
   const selected = meta(type);
   const endpointPath = `/api/provider-events/${type}/${value(account, "opaque_token")}`;
@@ -510,7 +512,8 @@ function WebhookForm({ account }: { account: Row }) {
     }
     if (type === "ses") settings = { expectedTopicArn: required(values, "expectedTopicArn") };
     try {
-      await action.run({ action: "webhook.rotate_security", id: account.webhook_endpoint_id, settings }, "Event verification saved");
+      await action.run({ action: "webhook.rotate_security", id: account.webhook_endpoint_id, settings }, "Webhook verification configured. Waiting for the first valid event with these settings.");
+      form.resetFields();
       if (type === "postmark") setPostmarkUrl(postmarkWebhookUrl(endpointPath, postmarkUsername, postmarkPassword, window.location.origin));
     } catch {
       // The in-form Alert renders request failures.
@@ -519,10 +522,17 @@ function WebhookForm({ account }: { account: Row }) {
 
   return (
     <Grid.Row gutter={24} align="start">
+      <Grid.Col xs={24}>
+        <Space direction="vertical" size="small" className={styles.stack} style={{ marginBottom: 16 }}>
+          <Typography.Text>Envoy verifies the source and integrity of delivery, bounce, and other events from {selected.name}. These settings are shared by this provider webhook endpoint; configure them once for all Services, API keys, and domains using it.</Typography.Text>
+          <Typography.Text type="secondary">{account.security_configured ? "Verification is configured and stored encrypted. Saved values are never shown. To update verification, enter the complete replacement settings below; otherwise the current settings stay in use." : "Verification is not configured. A working provider API connection can still submit mail, but this webhook cannot verify or process provider events yet."}</Typography.Text>
+          <Typography.Text type="secondary">Service API key: your application → Envoy. Provider API key: Envoy → {selected.name}. Webhook verification: {selected.name} → Envoy. The Event callback URL in Services sends events from Envoy → your application.</Typography.Text>
+        </Space>
+      </Grid.Col>
       <Grid.Col xs={24} xl={16}>
-        <ActionForm fieldErrors={action.fields} layout="vertical" onSubmit={values => void submit(values as FormValues)}>
+        <ActionForm fieldErrors={action.fields} form={form} layout="vertical" onSubmit={values => void submit(values as FormValues)}>
           <Grid.Row gutter={16}>
-            {type === "resend" && <FormColumn><SecretField field="signingSecret" label="Signing secret" placeholder="whsec_..." /></FormColumn>}
+            {type === "resend" && <FormColumn span={24}><SecretField field="signingSecret" label="Resend webhook signing secret" placeholder="whsec_..." hint="Paste the Signing secret supplied by Resend for this webhook. This is separate from your Resend API key and the Envoy Event callback signing secret." /></FormColumn>}
             {type === "sendgrid" && <>
               <FormColumn span={24}><Field field="eventWebhookPublicKey" label="Event Webhook public key" required rules={requiredRule} hint="Required for delivery and engagement events."><Input.TextArea autoSize={{ minRows: 5, maxRows: 8 }} placeholder="-----BEGIN PUBLIC KEY-----" /></Field></FormColumn>
               <FormColumn span={24}><Field field="inboundParsePublicKey" label="Inbound Parse public key" hint="Add the separate Parse security-policy key only when receiving inbound email."><Input.TextArea autoSize={{ minRows: 5, maxRows: 8 }} placeholder="-----BEGIN PUBLIC KEY-----" /></Field></FormColumn>
@@ -534,7 +544,7 @@ function WebhookForm({ account }: { account: Row }) {
               <FormColumn span={24}><Field field="ipAllowlist" label="Postmark source IPs" hint="Optional. Separate exact IP addresses with commas."><Input placeholder="3.134.147.250, 50.31.156.6" /></Field></FormColumn>
             </>}
             {type === "ses" && <FormColumn span={24}><Field field="expectedTopicArn" label="Expected SNS topic ARN" required rules={requiredRule} hint="The exact SNS topic configured as the SES event destination."><Input placeholder="arn:aws:sns:us-east-1:123456789012:envoy-events" /></Field></FormColumn>}
-            <FormColumn span={24}><SubmitButton pending={action.pending} icon={<IconSafe />}>Save verification</SubmitButton></FormColumn>
+            <FormColumn span={24}><SubmitButton pending={action.pending} icon={<IconSafe />}>{account.security_configured ? "Update webhook verification" : "Save webhook verification"}</SubmitButton></FormColumn>
           </Grid.Row>
         </ActionForm>
       </Grid.Col>
@@ -542,10 +552,14 @@ function WebhookForm({ account }: { account: Row }) {
         <Alert
           type="info"
           showIcon
-          title={`Find this in ${selected.name}`}
+          title={type === "resend" ? "Connect Resend event notifications" : `Find this in ${selected.name}`}
           content={(
             <Space direction="vertical" size="small">
-              <Typography.Text>{selected.webhookPath}</Typography.Text>
+              {type === "resend" ? <ol style={{ paddingInlineStart: 20, margin: 0 }}>
+                <li>Add Envoy’s public HTTPS Provider webhook URL to Resend → Webhooks and select the events you need.<br /><CopyableEndpoint path={endpointPath} /></li>
+                <li>Open that webhook’s details and copy its Signing secret starting with whsec_.</li>
+                <li>Paste it here and save webhook verification.</li>
+              </ol> : <Typography.Text>{selected.webhookPath}</Typography.Text>}
               <Button type="text" href={selected.webhookDocs} target="_blank" icon={<IconLaunch />}>Official webhook guide</Button>
               {type === "sendgrid" && <Button type="text" href="https://www.twilio.com/docs/sendgrid/for-developers/parsing-email/securing-your-parse-webhooks" target="_blank" icon={<IconLaunch />}>Inbound Parse security guide</Button>}
             </Space>
@@ -661,40 +675,42 @@ function Account({ account }: { account: Row }) {
   const publicConfig = record(account.public_config);
   const configRegion = value(publicConfig, "region");
   const detail = type === "mailgun" ? String(publicConfig.sendingDomain ?? "") : type === "postmark" ? `Stream: ${String(publicConfig.messageStream ?? "outbound")}` : type === "ses" ? configRegion : type === "sendgrid" ? configRegion === "eu" ? "EU region" : "Global region" : "";
-  const sending = active && health === "healthy" ? { status: "Ready", tone: "good" as const } : active || waitingForTest ? { status: "Needs test", tone: "warn" as const } : { status: "Disabled", tone: "muted" as const };
-  const eventWebhook = !webhookActive ? { status: "Disabled", tone: "muted" as const } : !configured ? { status: "Verification needed", tone: "warn" as const } : { status: "Ready to receive", tone: "good" as const };
+  const sending = active && health === "healthy" ? { status: "Connection verified", tone: "good" as const } : active || waitingForTest ? { status: "Needs connection test", tone: "warn" as const } : { status: "Disabled", tone: "muted" as const };
+  const eventWebhook = !webhookActive ? { status: "Disabled", tone: "muted" as const } : !configured ? { status: "Verification not configured", tone: "warn" as const } : account.last_event_at ? { status: "Valid event received", tone: "good" as const } : { status: "Configured · awaiting first valid event", tone: "warn" as const };
 
   return (
     <Card
-      className={styles.card}
+      className={`${styles.card} ${styles.readable}`}
       title={value(account, "name") || selected.name}
       extra={<Tag color={selected.color}>{selected.name}</Tag>}
     >
       <Space direction="vertical" size="large" className={styles.stack}>
         <Descriptions
-          column={{ xs: 1, sm: 2 }}
+          column={{ xs: 1, sm: 1, md: 1, lg: 1, xl: 2, xxl: 2, xxxl: 2 }}
           data={[
             {
               label: "Provider",
               value: <Space size="small"><Tag color={selected.color}>{selected.mark}</Tag><Typography.Text>{selected.name}{detail ? ` · ${detail}` : ""}</Typography.Text></Space>,
             },
             {
-              label: "Sending",
+              label: "Sending API",
               value: <Badge status={badgeStatus(sending.tone)} text={sending.status} />,
             },
             {
               label: "Last verified event",
-              value: account.last_event_at ? <Typography.Text><LocalTime value={account.last_event_at instanceof Date ? account.last_event_at.toISOString() : String(account.last_event_at)} /></Typography.Text> : <Typography.Text type="secondary">No event received yet</Typography.Text>,
+              value: account.last_event_at ? <Typography.Text><LocalTime value={account.last_event_at instanceof Date ? account.last_event_at.toISOString() : String(account.last_event_at)} /></Typography.Text> : <Typography.Text type="secondary">None with current verification settings</Typography.Text>,
             },
             {
-              label: "Event webhook",
+              label: "Provider event webhook",
               value: <Badge status={badgeStatus(eventWebhook.tone)} text={eventWebhook.status} />,
             },
           ]}
         />
+        <Typography.Text type="secondary">API submission and recipient delivery are separate. Only delivery events confirm delivery to a recipient’s mail server.</Typography.Text>
+        {!configured && <Alert type="info" content="A working provider API connection can still submit mail. Configure webhook verification to accept provider event notifications." />}
         <Space direction="vertical" size="mini">
           <Typography.Text type="secondary">Provider webhook URL</Typography.Text>
-          {type === "postmark" ? <Typography.Text type="secondary">Save event verification below to generate its Basic Auth URL.</Typography.Text> : <CopyableEndpoint path={endpointPath} />}
+          {type === "postmark" ? <Typography.Text type="secondary">Save webhook verification below to generate its Basic Auth URL.</Typography.Text> : <CopyableEndpoint path={endpointPath} />}
         </Space>
         <Space wrap size="small">
           <ActionButton body={{ action: "provider.test", id: account.id }} success={result => {
@@ -705,7 +721,7 @@ function Account({ account }: { account: Row }) {
           {!waitingForTest && <ActionButton body={{ action: "provider.toggle", id: account.id, enabled: !active }} success={active ? "Account disabled" : "Account enabled for testing"} danger={active}><IconPoweroff />{active ? "Disable" : "Enable for test"}</ActionButton>}
         </Space>
         <Collapse bordered>
-          <Collapse.Item name="webhook" header={<Space size="small"><IconSettings />{configured ? "Update event verification" : "Configure event verification"}</Space>}>
+          <Collapse.Item name="webhook" header={<Space size="small"><IconSettings />Provider event webhook <Typography.Text type="secondary">{configured ? "Verification configured" : "Setup required"}</Typography.Text></Space>}>
             <WebhookForm account={account} />
           </Collapse.Item>
           <Collapse.Item name="credentials" header={<Space size="small"><IconRefresh />Rotate credential <Typography.Text type="secondary">v{value(account, "credential_version")}</Typography.Text></Space>}>
@@ -730,7 +746,7 @@ export function ProviderAccounts({ data }: { data: Data }) {
         <Grid.Col flex="auto">
           <Space direction="vertical" size="mini">
             <Typography.Text>{providers.length} connected {providers.length === 1 ? "account" : "accounts"}</Typography.Text>
-            <Typography.Text type="secondary">Credentials and event verification are managed independently.</Typography.Text>
+            <Typography.Text type="secondary">Provider API credentials and event webhook verification are managed independently.</Typography.Text>
           </Space>
         </Grid.Col>
         {!showCreate && <Grid.Col flex="none"><Button type="primary" icon={<IconPlus />} onClick={() => setShowCreate(true)}>Add provider</Button></Grid.Col>}

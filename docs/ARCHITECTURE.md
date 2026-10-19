@@ -29,9 +29,11 @@ bucket.
 
 ## Business domain authorization
 
-`service_domain_grants` is the sole domain permission authority: one Service/domain row with sending and receiving flags, status and revision. A null `sending_domain_id` is an ALL grant covering every current and future registered domain, independently for sending and receiving. Each Service has at most one ALL grant. Active grants are additive: an exact-domain grant and ALL are combined, so revoking an exact grant does not override an active ALL grant. Disabled domains and suspended Products remain inaccessible. It replaces `sender_grants` without compatibility reads or Product-wide inheritance. Service credentials prove the stable business identity and inherit its grants across rotation. Envoy has no business APP or mailbox model.
+`service_domain_grants` is the sole domain permission authority: one Service/domain row with sending and receiving flags, status and revision. A null `sending_domain_id` is an ALL grant covering every current and future registered domain, independently for sending and receiving. Each Service has at most one ALL grant. Effective authorization evaluates active grants. The Service configuration writer serializes on the Service row and atomically revokes the prior grants before activating the requested none/selected/ALL modes, so redundant historical grants cannot preserve access after narrowing permissions. Disabled rows retain revocation history. Disabled domains and suspended Products remain inaccessible. It replaces `sender_grants` without compatibility reads or Product-wide inheritance. Service credentials prove the stable business identity and inherit its grants across rotation. Envoy has no business APP or mailbox model.
 
-Service Credentials issues a business key with selected sending/receiving domains and an optional business callback. Domain infrastructure, provider verification and caller authorization remain independent. Native mail supplies the exact From address; its domain is authorized at acceptance, submission and manual retry. Protected resource reads, attachment operations, events, change streams, content erasure and callback execution recheck frozen transport domain ownership. Unavailable or foreign resources are not exposed through known IDs. Files freeze an explicit sending domain and cannot be reused across From domains.
+Services owns one editable configuration per Service: name, independent sending/receiving modes, Event callback URL and advanced permissions. Creation also issues its first API key; credential management operates on the same Service identity without changing that configuration. Both mail directions may be denied. Domain infrastructure, provider verification and caller authorization remain independent. Native mail supplies the exact From address; its domain is authorized at acceptance, submission and manual retry. Protected resource reads, attachment operations, events, change streams, content erasure and callback execution recheck frozen transport domain ownership. Unavailable or foreign resources are not exposed through known IDs. Files freeze an explicit sending domain and cannot be reused across From domains.
+
+Configuration reads include grants and the Service configuration revision in one database snapshot. Updates require that revision and reject stale editors instead of overwriting a later change. A revoked ALL grant no longer expands domain discovery to future registrations. Clearing the Event callback URL disables delivery and retains its encrypted signing secret and delivery history; discovery reports polling mode.
 
 There is at most one callback endpoint per Service; ingress routes select a provider, domain and target Service, never a business address pattern or per-route callback. Grant changes create signed `service.permissions_changed` notifications atomically with a durable outbox command. Product suppression management is a separate explicit Service permission, false by default.
 
@@ -170,7 +172,7 @@ an explicitly authorized Service; quarantine records are not assigned to an arbi
 Raw MIME and attachments are size-limited and stored privately outside PostgreSQL; HTML is sanitized before persistence.
 Both directions register byte-bound persistent safety tasks. Inbound body readiness is separate from attachment usability.
 No attachment download or outbound submission is permitted without a current clean proof. Missing scanning fails closed.
-The business callback receives only canonical metadata and Envoy identifiers.
+The event callback receives only canonical metadata and Envoy identifiers.
 
 ## Suppression policy
 
@@ -195,7 +197,7 @@ supported only as an encrypted fallback.
 
 ## Canonical callbacks
 
-The **Callbacks** page configures outbound canonical callbacks to business services. Provider event-webhook setup lives
+The **Services** page configures the Event callback URL; **Callbacks** manages subscriptions, secrets and delivery recovery. Provider event-webhook setup lives
 under **Provider Accounts**.
 
 Callbacks contain Envoy message, delivery, inbound, product, category, and recipient identifiers. They never expose
@@ -303,7 +305,7 @@ Public `receivedAt` records copy storage time. Lists preserve PostgreSQL microse
 Retention uses the later of storage and ready time, protecting delayed scans and recently received old mail. Unknown timestamps remain null; no history is guessed.
 
 `inbound_receipts` persists the first normalization decision, keyed by provider account plus transport receipt identity.
-Its content-free route snapshot fixes Service scopes and matched recipients. The current business callback is resolved by Service when each copy becomes ready. Subsequent retries
+Its content-free route snapshot fixes Service scopes and matched recipients. The current event callback is resolved by Service when each copy becomes ready. Subsequent retries
 ignore newly added routes; retained original scopes never expand implicitly. Each service group processes in a separate
 transaction/claim, and processing continues after another group's transient failure before requesting a raw-event retry.
 Ready/purged copies are deduplication tombstones; retries do not upload them again. Runtime callback checks remain live,

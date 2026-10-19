@@ -56,15 +56,15 @@ export function Inbound({ data }: { data: Data }) {
   }
 
   if (!endpoints.length || !products.length || !availableDomains.length) {
-    return <Prerequisite title="Create inbound route prerequisites" description={!endpoints.length ? "Configure event verification on an active provider account before accepting inbound mail." : !availableDomains.length ? "Register an active domain for inbound routing; outbound verification is separate." : "Create an active product before routing inbound mail."} href={!endpoints.length ? "/providers" : !availableDomains.length ? "/domains" : "/api-keys"} action={!endpoints.length ? "Configure provider webhooks" : !availableDomains.length ? "Manage domains" : "Create a product"} />;
+    return <Prerequisite title="Create inbound route prerequisites" description={!endpoints.length ? "Configure provider webhook verification on an active provider account before accepting inbound mail." : !availableDomains.length ? "Register an active domain for inbound routing; outbound verification is separate." : "Create an active product before routing inbound mail."} href={!endpoints.length ? "/providers" : !availableDomains.length ? "/domains" : "/api-keys"} action={!endpoints.length ? "Configure provider webhooks" : !availableDomains.length ? "Manage domains" : "Create a product"} />;
   }
 
   return (
     <Space direction="vertical" size="large" className={styles.stack}>
-      <Alert type="info" content="Inbound routes use authenticated envelope recipients and require domain receiving permission. Each business service receives one private copy and uses its business callback. Domain verification does not prove receiving works; providers without a trustworthy envelope remain unavailable." />
+      <Alert type="info" content="Inbound routes use authenticated envelope recipients and require domain receiving permission. Each service receives one private copy and uses its event callback. Domain verification does not prove receiving works; providers without a trustworthy envelope remain unavailable." />
       <Panel
         title="Create inbound route"
-        description="Route the entire authorized domain to a business service; its business callback is used automatically"
+        description="Route the entire authorized domain to a service; its event callback is used automatically"
         defaultExpanded={inboundRoutes.length === 0}
       >
         <ActionForm fieldErrors={action.fields} layout="vertical" onSubmit={() => void submit()}>

@@ -48,7 +48,7 @@ Open [http://localhost:6178](http://localhost:6178) and sign in with the `ENVOY_
 `ENVOY_ADMIN_PASSWORD` values from `.env.local`.
 
 The database starts with no products, services, domains, providers, messages, or inbound mail. Create the first product
-under **Service Credentials**, then configure real provider accounts and their write-only credentials under **Provider
+under **Services**, then configure real provider accounts and their write-only credentials under **Provider
 Accounts**. No provider key belongs in an environment file.
 
 The web process and worker are intentionally separate. The production Compose file runs them as independently
@@ -99,9 +99,9 @@ The service API is self-describing at `GET /api/v1` and `GET /api/v1/openapi.jso
 | `/messages/{id}/attempts` | Inspect submission attempts and structured diagnostics |
 | `/capabilities`         | Discover product/service, domain sending/receiving permissions, limits, configuration status and evidence                            |
 
-Business Service Keys are issued under **Service Credentials** with explicit domain sending/receiving permissions and one optional business callback. A Service can use several domains; keys rotate without changing its identity or grants. Envoy does not configure business APPs or their mailbox purposes. The caller selects its complete From/Reply-To addresses within authorized domains and performs internal APP routing from trustworthy envelope recipients.
+Create a Service under **Services** with its sending/receiving permissions, optional Event callback URL, and advanced permissions. Creation issues the first API key; **Edit configuration** changes the same configuration for every key of that Service. **Manage credentials** handles key issuance, replacement, and revocation. A Service can use several domains; keys rotate without changing its identity or grants. Envoy does not configure business APPs or their mailbox purposes. The caller selects its complete From/Reply-To addresses within authorized domains and performs internal APP routing from trustworthy envelope recipients.
 
-For sending and receiving independently, choose **ALL (current and future domains)** to automatically authorize newly registered domains. ALL grants can be updated or revoked under **Business domain permissions**. Domain activation and mail routing still apply.
+For sending and receiving independently, choose **All domains (current and future)** to automatically authorize newly registered domains. Each direction has three exclusive modes: no permission, selected domains, or All domains. Edit the Service configuration to change modes; saving replaces previous permissions atomically. Domain activation and mail routing still apply.
 
 See [the final service API contract](docs/API.md) for full request fields, file upload, result semantics, and failure diagnosis.
 
@@ -127,7 +127,7 @@ The HTTP path verifies the provider signature and replay window, stores the immu
 one transaction, and returns immediately. Workers normalize and apply canonical events asynchronously.
 
 Open **Inbound** to inspect sanitized messages received through configured provider accounts, **Callbacks** to monitor
-signed business callback delivery, and **Audit Log** to review administrator actions.
+signed event callback delivery, and **Audit Log** to review administrator actions.
 
 ## Production deployment
 
