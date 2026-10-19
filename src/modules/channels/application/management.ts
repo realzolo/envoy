@@ -34,6 +34,7 @@ const identifierSchema = z.string().trim().min(1).max(160);
 const domainInputSchema = z.object({
   domain: domainNameSchema,
   accountIds: z.array(identifierSchema).max(20),
+  inboundProviderAccountId: identifierSchema.nullable().optional(),
 }).strict().superRefine((input, context) => {
   const accounts = new Set<string>();
   input.accountIds.forEach((accountId, index) => {
@@ -162,10 +163,12 @@ async function toggleWebhookEndpoint(id: string, enabled: boolean, actor: string
 }
 async function createDomain(input: {
   domain: string;
-  accountIds: string[]
+  accountIds: string[];
+  inboundProviderAccountId?: string | null;
 }, actor: string) {
   const validated = domainInputSchema.parse(input);
   const domain = validated.domain;
+  if (validated.inboundProviderAccountId) await validateInboundProvider(validated.inboundProviderAccountId);
   const accounts = await Promise.all(validated.accountIds.map(async accountId => {
     const account = await loadProviderAccount(accountId);
     return { accountId, account, identity: account.module.identity }
@@ -176,6 +179,7 @@ async function createDomain(input: {
     }
   }
   const domainId = (await repository.upsertDomain({id:createId("sd"),domain:domain})).rows[0].id;
+  if (validated.inboundProviderAccountId) await repository.setInboundProvider({id:domainId,providerAccountId:validated.inboundProviderAccountId});
   const results = [];
   for (const { accountId, account, identity } of accounts) {
     const existing = (await repository.findDomainIdentity({sendingDomainId:domainId,providerAccountId:accountId})).rows[0];
@@ -200,6 +204,19 @@ async function createDomain(input: {
     identities: results
   });
   return { domainId, identities: results }
+}
+async function validateInboundProvider(accountId: string) {
+  const account = await loadProviderAccount(accountId);
+  if (!account.module.descriptor.capabilities.inboundEnvelopeRecipients) {
+    throw new Error("This provider does not supply trusted envelope recipients for inbound routing");
+  }
+}
+async function setDomainInboundProvider(id: string, providerAccountId: string | null, actor: string) {
+  const accountId = providerAccountId === null ? null : identifierSchema.parse(providerAccountId);
+  if (accountId) await validateInboundProvider(accountId);
+  const updated = await repository.setInboundProvider({id,providerAccountId:accountId});
+  if (!updated.rowCount) throw new Error("Domain not found");
+  await audit(actor,"sending_domain.inbound_provider_update","sending_domain",id,{providerAccountId:accountId});
 }
 async function toggleDomain(id: string, enabled: boolean, actor: string) {
   await repository.setDomainStatus({id:id,status:enabled ? "active" : "disabled"});
@@ -228,5 +245,5 @@ async function toggleIdentity(id: string, enabled: boolean, actor: string) {
   await audit(actor, "provider_identity.toggle", "provider_identity", id, { enabled })
 }
 
-return {createProviderAccount,testProviderAccount,toggleProvider,updateProviderQuota,rotateProviderCredential,configureProviderWebhook,toggleWebhookEndpoint,createDomain,toggleDomain,refreshIdentity,toggleIdentity};
+return {createProviderAccount,testProviderAccount,toggleProvider,updateProviderQuota,rotateProviderCredential,configureProviderWebhook,toggleWebhookEndpoint,createDomain,setDomainInboundProvider,toggleDomain,refreshIdentity,toggleIdentity};
 }

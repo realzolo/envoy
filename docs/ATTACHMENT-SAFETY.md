@@ -114,7 +114,7 @@ sending workers stopped/drained. No mixed-policy rolling deployment or automatic
 Executed SQL migrations are immutable and changes append ordered versions with checksums. `pnpm db:setup` applies
 missing versions under a transaction lock after catalog verification. `pnpm db:generate` updates the typed
 `db/schema.sql` snapshot; `pnpm db:check` validates it and migration checksums. Setup rejects drift and preserves
-business records; V2 upgrades matching V1 installations with no content reset. Unverified bytes are never
+business records in future ordered upgrades. This fresh-project baseline requires a new database. Unverified bytes are never
 backfilled clean.
 
 ## Minimal business flow
@@ -156,4 +156,4 @@ provider transmission. A successful send acceptance still means queued, not actu
 
 This repository changes Envoy only; no Morph or Sonaops source/configuration has been modified.
 
-Outbound uploads require `X-Sending-Domain`, freezing the Service-authorized From domain. Files cannot be attached across domains. Revoked sending/receiving grants block file metadata, reprocessing, downloads and erasure through the service API. `examples/attachment-mail.mjs` takes `ENVOY_SENDING_DOMAIN`.
+Outbound uploads require `X-Sending-Domain`, freezing the Service-authorized From domain. Files cannot be attached across domains. Removed Service-domain bindings block file metadata, reprocessing, downloads and erasure through the service API. `examples/attachment-mail.mjs` takes `ENVOY_SENDING_DOMAIN`.

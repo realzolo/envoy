@@ -27,10 +27,11 @@ export const schemaDocumentation = {
     validFrom: "Credential validity start time (timestamptz)", validTo: "Credential validity end time (timestamptz); null means no configured expiration",
     lastUsedAt: "Last successful use of this credential (timestamptz)", createdAt: created,
   } },
-  serviceDomainGrants: { table: "Service permissions to send and receive through domains; a null domain grants access to all domains", columns: {
-    id: "Unique domain grant identifier", serviceId: "Service receiving this grant", sendingDomainId: "Granted domain identifier; null means all domains, with at most one such grant per service",
-    sendAllowed: "Whether this grant permits sending mail", receiveAllowed: "Whether this grant permits receiving inbound mail; at least one send/receive permission must be enabled",
-    status: "Grant status: active (effective) or disabled", revision: "Grant revision used for permission update concurrency control", createdAt: created, updatedAt: updated,
+  serviceDomainBindings: { table: "Service and domain associations; receiving can fan out to multiple services and each service chooses its own outbound identity", columns: {
+    id: "Unique service-domain binding identifier", serviceId: "Service bound to the domain", sendingDomainId: "Bound email domain",
+    receiveEnabled: "Whether this service receives a private copy of inbound mail for the domain",
+    outboundProviderIdentityId: "Provider sending identity for this service and domain; null disables sending",
+    createdAt: created, updatedAt: updated,
   } },
   providerAccounts: { table: "Email provider accounts and non-secret configuration; authentication secrets are encrypted in a separate credentials table", columns: {
     id: "Unique provider account identifier", type: "Provider type: resend, ses, sendgrid, mailgun, postmark or mock", name: "Globally unique provider account name",
@@ -56,29 +57,15 @@ export const schemaDocumentation = {
     expectedTopicArn: "Allowed SES SNS topic ARN used to restrict notification sources", ipAllowlist: "Allowed source IP addresses or CIDR ranges for providers requiring source address checks",
     createdAt: created, updatedAt: updated,
   } },
-  sendingDomains: { table: "Managed email domains used as outbound sending identities and inbound routing boundaries", columns: {
-    id: "Unique email domain identifier", domain: "Globally unique normalized email domain", status: "Domain status: active (available) or disabled", createdAt: created, updatedAt: updated,
+  sendingDomains: { table: "Managed email domains shared by service bindings and assigned one inbound provider account", columns: {
+    id: "Unique email domain identifier", domain: "Globally unique normalized email domain", inboundProviderAccountId: "Provider account that receives mail for this domain; null disables inbound reception",
+    status: "Domain status: active (available) or disabled", createdAt: created, updatedAt: updated,
   } },
   providerIdentities: { table: "Domain sending identities within provider accounts and their DNS verification status", columns: {
     id: "Unique provider sending identity identifier", sendingDomainId: "Managed email domain represented by this identity", providerAccountId: "Provider account that owns this identity",
     externalIdentityId: "Provider-side identity identifier; may be null before a remote identity is created", status: "Identity status: pending (awaiting verification), verified, failed or disabled",
     dnsRecords: "JSON array of required DNS records, including names, types, values and verification details; empty when unavailable",
     lastCheckedAt: "Last provider identity verification check (timestamptz)", createdAt: created, updatedAt: updated,
-  } },
-  routingPolicies: { table: "Outbound routing policies selecting provider targets by service scope, sending domain and message category", columns: {
-    id: "Unique routing policy identifier", name: "Routing policy display name", serviceScope: "Service scope: all (current and future services) or selected (explicit membership)", sendingDomainId: "Sending domain matched by this policy",
-    messageCategory: "Message category filter; null matches any category", priority: "Policy priority; lower values take precedence",
-    status: "Policy status: active (enabled) or disabled", createdAt: created, updatedAt: updated,
-  } },
-  routingPolicyServices: { table: "Explicit service membership of routing policies with selected service scope; provider targets remain shared by the policy", columns: {
-    policyId: "Routing policy selecting this service", serviceId: "Service matched by the policy; composite primary key with policy_id",
-  } },
-  routingTargets: { table: "Provider sending targets within routing policies, including priority, weight, rate limits and circuit breaker state", columns: {
-    id: "Unique routing target identifier", policyId: "Owning routing policy identifier", providerAccountId: "Target provider account identifier", providerIdentityId: "Target sending identity; must belong to the same provider account",
-    priority: "Target priority within the policy; lower values take precedence", weight: "Positive selection weight among targets of the same priority",
-    rateLimitPerMinute: "Positive per-minute sending quota reservation limit, measured in recipients",
-    status: "Target status: active (available) or circuit_open (temporarily blocked)", circuitOpenUntil: "Earliest circuit recovery time (timestamptz); null when no recovery time is set",
-    createdAt: created, updatedAt: updated,
   } },
   messages: { table: "Outbound message requests and immutable sending snapshots; deduplicated by service and idempotency key, with sensitive content envelope-encrypted", columns: {
     contentPurgedAt: purged, id: "Unique outbound message identifier", serviceId: "Service that submitted this message",
@@ -98,7 +85,7 @@ export const schemaDocumentation = {
     payloadHashKeyVersion: "Master key version used for the sensitive request digest; may be null for normal messages", referenceId: "Caller business reference for lookup; does not provide idempotency",
     metadata: "Caller business metadata JSON object; must be empty in sensitive message plaintext", recipientCount: "Total primary, carbon-copy and blind-copy recipients; must be positive",
     subject: "Email subject; fixed to [Sensitive content] in sensitive message plaintext and may be cleared after content purge", htmlBody: "Normal message HTML body; must be null in sensitive message plaintext",
-    textBody: "Normal message plain-text body; must be null in sensitive message plaintext", messageCategory: "Business message category used for routing policy matching",
+    textBody: "Normal message plain-text body; must be null in sensitive message plaintext", messageCategory: "Optional business message classification retained for reporting",
     replyTo: "JSON array of reply addresses with email and optional name; empty in sensitive message plaintext", providerTags: "Provider tag JSON object; must be empty in sensitive message plaintext",
     acceptedAt: "System message acceptance time (timestamptz, defaults to database transaction time); distinct from provider acceptance", updatedAt: updated,
   } },
@@ -163,12 +150,8 @@ export const schemaDocumentation = {
     messageId: "Outbound message being retried", idempotencyKey: "Caller retry operation key, unique within the message", payloadHash: "Retry request digest detecting different requests reusing the same idempotency key",
     result: "Initial retry operation result JSON returned unchanged for repeated requests", createdAt: created,
   } },
-  inboundRoutes: { table: "Inbound routes from provider endpoints to services, matching envelope domains and preserving service ownership", columns: {
-    id: "Unique inbound route identifier", providerWebhookEndpointId: "Provider webhook endpoint receiving inbound notifications", sendingDomainId: "Email domain matched by this route",
-    serviceId: "Service receiving inbound mail", status: "Route status: active (enabled) or disabled", createdAt: created,
-  } },
   inboundMessages: { table: "Inbound messages and service-isolated copies; quarantined mail has no service owner and business reads require completed scanning", columns: {
-    contentPurgedAt: purged, id: "Unique inbound message identifier", inboundRouteId: "Matched inbound route; null if unmatched or after route deletion",
+    contentPurgedAt: purged, id: "Unique inbound message identifier",
     serviceId: "Owning service; null for quarantined mail or after service deletion", providerAccountId: "Provider account receiving the message", rawProviderEventId: "Source raw webhook event; null after source event deletion",
     externalMessageId: "Provider inbound message identifier, deduplicated with account and delivery scope", messageId: "RFC Message-ID from email headers; not an outbound messages primary key",
     deliveryScope: "Ownership scope key for isolated copies; quarantine for unassigned mail, service-specific for routed copies; used for provider message deduplication",

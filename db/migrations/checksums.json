@@ -1,10 +1,6 @@
 [
   {
     "file": "001_initial.sql",
-    "sha256": "67b0bf001b78c6cf2f8bf169f305dd7d556319f3c6fba6c64366cd6e681b7e13"
-  },
-  {
-    "file": "002_outbound_changes.sql",
-    "sha256": "95846832de1b4a25981dc16507e7ac3005b25bc7fc0fd739c0ccec7e885bb312"
+    "sha256": "1b5746e8d7aeed5d6520d2487ee50cda0f8d9a7876a1b22dde204359243ebf2c"
   }
 ]

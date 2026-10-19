@@ -26,9 +26,9 @@ export function createMessageService(dependencies: Omit<OutboundDependencies, "m
         email: string;
         name?: string;
     }[]) {
-        const rows = (await client.message.findConfiguredProviderTypes({ sendingDomainId: message.sending_domain_id, serviceId: message.service_id, messageCategory: message.message_category })).rows;
+        const rows = (await client.message.findBoundProviderType({ sendingDomainId: message.sending_domain_id, serviceId: message.service_id })).rows;
         if (!rows.length)
-            throw new MessageValidationError(["No verified routing target is configured for this sender and message category."], "NO_ELIGIBLE_ROUTE");
+            throw new MessageValidationError(["No verified sending provider is bound to this service and domain."], "NO_ELIGIBLE_ROUTE");
         const envelope = subsetEnvelope(message, recipients);
         const issues = rows.map(row => capabilityIssue(message, dependencies.providerCapabilities(row.type), envelope));
         if (issues.every(Boolean))

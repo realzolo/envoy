@@ -1,5 +1,5 @@
 import type { CanonicalEvent, CanonicalEventType, ProviderType } from "@/integrations/providers/contracts";
-import type { Attempt, Candidate, DeliveryStateEvent, MessageContent, MessageRow, Recipient, SimulationRow, Submission } from "../contracts";
+import type { Attempt, Candidate, DeliveryStateEvent, MessageContent, MessageRow, Recipient, Submission } from "../contracts";
 import type { Diagnostic } from "../domain/diagnostics";
 export type RepositoryResult<Row> = {
     rows: Row[];
@@ -11,10 +11,9 @@ export interface MessageRepository {
         serviceId: string;
         listId: string | null;
     }): Promise<RepositoryResult<Record<string, unknown>>>;
-    findConfiguredProviderTypes(input: {
+    findBoundProviderType(input: {
         sendingDomainId: string;
         serviceId: string;
-        messageCategory: string;
     }): Promise<RepositoryResult<{
         type: ProviderType;
     }>>;
@@ -541,56 +540,17 @@ export interface RoutingRepository {
     cancelChangedEnvelope(input: {
         submissionId: string;
     }): Promise<RepositoryResult<Record<string, unknown>>>;
-    listRoutingCandidates(input: {
+    findBoundProvider(input: {
         sendingDomainId: string;
         serviceId: string;
-        messageCategory: string;
     }): Promise<RepositoryResult<Candidate>>;
-    listFailedAccounts(input: {
-        submissionId: string;
-    }): Promise<RepositoryResult<{
-        provider_account_id: string;
-    }>>;
-    beginCapacityReservation(): Promise<RepositoryResult<Record<string, unknown>>>;
-    commitCapacityReservation(): Promise<RepositoryResult<Record<string, unknown>>>;
-    rollbackCapacityReservation(): Promise<RepositoryResult<Record<string, unknown>>>;
-    releaseCapacityReservation(): Promise<RepositoryResult<Record<string, unknown>>>;
-    closeExpiredCircuit(input: {
-        targetId: string;
-    }): Promise<RepositoryResult<Record<string, unknown>>>;
     insertAttempt(input: {
         attemptId: string;
         submissionId: string;
         attemptNumber: number;
         providerAccountId: string;
         providerIdentityId: string;
-        snapshot: {
-            policy: {
-                id: string;
-                name: string;
-                priority: number;
-            };
-            chosen: {
-                targetId: string;
-                accountId: string;
-                identityId: string;
-                providerType: "resend" | "ses" | "sendgrid" | "mailgun" | "postmark" | "mock";
-                nativeIdempotency: boolean;
-            };
-            candidates: {
-                targetId: string;
-                policyId: string;
-                policyPriority: number;
-                accountId: string;
-                identityId: string;
-                priority: number;
-                weight: number;
-                reasons: string[];
-                capabilityIssue: string | null;
-            }[];
-            selectedAt: string;
-            recipientCount: number;
-        };
+        snapshot: Record<string, unknown>;
         fingerprint: string;
         providerIdempotencyKey: string | null;
     }): Promise<RepositoryResult<Record<string, unknown>>>;
@@ -626,9 +586,6 @@ export interface RoutingRepository {
     acceptSubmission(input: {
         submissionId: string;
     }): Promise<RepositoryResult<Record<string, unknown>>>;
-    resetCircuit(input: {
-        targetId: string;
-    }): Promise<RepositoryResult<Record<string, unknown>>>;
     markAttemptUnknown(input: {
         attemptId: string;
         code: string;
@@ -648,18 +605,6 @@ export interface RoutingRepository {
     setFailureResult(input: {
         submissionId: string;
         status: "failed" | "deferred";
-    }): Promise<RepositoryResult<Record<string, unknown>>>;
-    readCircuitFailureWindow(input: {
-        targetId: string;
-        categories: string[];
-        threshold: number;
-    }): Promise<RepositoryResult<{
-        sample_count: string;
-        all_failed: boolean;
-    }>>;
-    openCircuit(input: {
-        targetId: string;
-        seconds: number;
     }): Promise<RepositoryResult<Record<string, unknown>>>;
     claimReconciliation(input: {
         attemptId: string;
@@ -717,12 +662,6 @@ export interface OutboundRepositories {
         serviceId: string;
     }, email: string): Promise<string | null>;
     resolveOutboundAttachments(serviceId: string, attachments: import("@/lib/contracts").CreateMessageInput["attachments"], domainId: string): Promise<import("../contracts").StoredAttachment[]>;
-    reserveRateLimits(entries: {
-        scope: string;
-        key: string;
-        limit: number;
-        units?: number;
-    }[]): Promise<boolean>;
 }
 export interface EventOperations {
     applyDeliveryEvent(repositories: OutboundRepositories, deliveryId: string, event: DeliveryStateEvent, sourceKey: string, options?: {
@@ -767,76 +706,6 @@ export interface ManagementRepository {
         resourceId: string | null;
         details: Record<string, unknown>;
     }): Promise<RepositoryResult<Record<string, unknown>>>;
-    findServices(input:{serviceIds:string[]}):Promise<RepositoryResult<{id:string}>>;
-    replacePolicyServices(input:{policyId:string;serviceIds:string[]}):Promise<void>;
-    findDomain(input: {
-        domainId: string;
-    }): Promise<RepositoryResult<{
-        id: string;
-        status: string;
-    }>>;
-    listTargetIdentities(input: {
-        identityIds: string[];
-    }): Promise<RepositoryResult<{
-        id: string;
-        sending_domain_id: string;
-        provider_account_id: string;
-        status: string;
-        account_status: string;
-    }>>;
-    lockPolicy(input: {
-        policyId: string;
-    }): Promise<RepositoryResult<Record<string, unknown>>>;
-    deleteUnselectedTargets(input: {
-        policyId: string;
-        identityIds: string[];
-    }): Promise<RepositoryResult<Record<string, unknown>>>;
-    updatePolicy(input: {
-        id: string;
-        name: string;
-        serviceScope: "all" | "selected";
-        domainId: string;
-        category: string | null;
-        priority: number;
-    }): Promise<RepositoryResult<Record<string, unknown>>>;
-    insertPolicy(input: {
-        id: string;
-        name: string;
-        serviceScope: "all" | "selected";
-        domainId: string;
-        category: string | null;
-        priority: number;
-    }): Promise<RepositoryResult<Record<string, unknown>>>;
-    saveTarget(input: {
-        id: string;
-        policyId: string;
-        accountId: string;
-        identityId: string;
-        priority: number;
-        weight: number;
-        rateLimit: number;
-    }): Promise<RepositoryResult<Record<string, unknown>>>;
-    recordPolicyAudit(input: {
-        actor: string;
-        policyId: string;
-        details: {
-            services: {mode:"all"|"selected";serviceIds:string[]};
-            domainId: string;
-            category: string | null;
-            priority: number;
-            targetCount: number;
-        };
-        action: "routing_policy.update" | "routing_policy.create";
-    }): Promise<RepositoryResult<Record<string, unknown>>>;
-    setPolicyStatus(input: {
-        policyId: string;
-        status: "active" | "disabled";
-    }): Promise<RepositoryResult<Record<string, unknown>>>;
-    listSimulationCandidates(input: {
-        domainId: string;
-        serviceId: string | null;
-        category: string | null;
-    }): Promise<RepositoryResult<SimulationRow>>;
     findTestService(input: {
         serviceId: string;
     }): Promise<RepositoryResult<{

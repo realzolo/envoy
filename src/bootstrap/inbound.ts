@@ -16,14 +16,13 @@ import { inboundRepository } from "@/modules/inbound/infrastructure/message.repo
 import { inboundChangesRepository } from "@/modules/inbound/infrastructure/changes.read-repository";
 import { createInboundManagement } from "@/modules/inbound/application/management";
 import { inboundManagementRepository } from "@/modules/inbound/infrastructure/management.repository";
-import { providerRegistry } from "@/integrations/providers/registry";
 
 export const inbound = createInboundService({
   get repository() { return inboundRepository(); }, unitOfWork: createUnitOfWork(inboundRepository), id: createId,
   digest, sanitizeHtml, uploads: { register: registerObjectUpload, put: (key, bytes, contentType) => objectStore().put(key, bytes, contentType) },
 });
 export const listInboundChanges = createInboundChanges(createUnitOfWork(inboundChangesRepository));
-export const inboundManagement = createInboundManagement(createUnitOfWork(inboundManagementRepository), { id: createId, supportsInbound: type => !!providerRegistry(type).inbound });
+export const inboundManagement = createInboundManagement(createUnitOfWork(inboundManagementRepository), { id: createId });
 
 export const webhookIngress = createWebhookIngress({
   loadEndpoint: loadWebhookEndpoint, unitOfWork: createUnitOfWork(webhookRepository), id: createId,

@@ -43,7 +43,7 @@ Run `pnpm db:setup` against the target PostgreSQL database before starting Web o
 database or applies missing ordered migrations to an existing supported schema, then invokes BullMQ's official
 PostgreSQL initializer. Application migrations run under one advisory transaction lock with checksum and complete
 catalog verification. Re-running setup validates without replaying SQL; schema drift is rejected without repair or
-business-data removal. A deployed V1 is recognized by its exact catalog and upgraded through V2 with its data retained.
+business-data removal. This fresh-project baseline has one V1 migration; initialize a new database for this version.
 
 ```bash
 pnpm install
@@ -106,9 +106,9 @@ The service API is self-describing at `GET /api/v1` and `GET /api/v1/openapi.jso
 | `/messages/{id}/attempts` | Inspect submission attempts and structured diagnostics |
 | `/capabilities`         | Discover service, domain sending/receiving permissions, limits, configuration status and evidence                            |
 
-Create a Service under **Services** with its sending/receiving permissions, optional Event callback URL, and advanced permissions. Creation issues the first API key; **Edit configuration** changes the same configuration for every key of that Service. **Manage credentials** handles key issuance, replacement, and revocation. A Service can use several domains; keys rotate without changing its identity or grants. Envoy does not configure business APPs or their mailbox purposes. The caller selects its complete From/Reply-To addresses within authorized domains and performs internal APP routing from trustworthy envelope recipients.
+Create a Service under **Services**, then bind its domains under **Edit configuration**. Creation issues the first API key; **Manage credentials** handles key issuance, replacement, and revocation. A Service can use several domains, and a domain can deliver private inbound copies to several Services. Keys rotate without changing the Service's domain bindings. Envoy does not configure business APPs or their mailbox purposes. The caller selects its complete From/Reply-To addresses within configured domains.
 
-For sending and receiving independently, choose **All domains (current and future)** to automatically authorize newly registered domains. Each direction has three exclusive modes: no permission, selected domains, or All domains. Edit the Service configuration to change modes; saving replaces previous permissions atomically. Domain activation and mail routing still apply.
+For each Service-domain binding, enable receiving and choose an outbound provider identity independently. Leaving the outbound identity empty disables sending from that domain for the Service. Set the domain's inbound provider account to receive mail; leaving it empty disables inbound delivery for that domain. Saving Service configuration replaces its domain bindings atomically.
 
 See [the final service API contract](docs/API.md) for full request fields, file upload, result semantics, and failure diagnosis.
 
@@ -185,9 +185,9 @@ a dot and the original UTF-8 body within a fixed 300-second window, then durably
 secret only by pausing delivery, waiting for in-flight requests to finish, updating both sides and resuming; replay and
 incremental recovery remain available. See [callback operations](docs/OPERATIONS.md).
 
-Application SQL migrations under `db/migrations/` are immutable once executed. `001_initial.sql` remains unchanged;
-`002_outbound_changes.sql` adds and backfills the Service outbound recovery stream. Maintain their ordered SHA-256
-entries in `db/migrations/checksums.json`. Change typed definitions or native behaviors, add the next SQL migration,
+Application SQL migrations under `db/migrations/` are immutable once executed. This fresh-project reset combines the
+application schema and outbound recovery stream in `001_initial.sql`. Maintain ordered SHA-256 entries in
+`db/migrations/checksums.json`. For future changes, update typed definitions or native behaviors and add the next SQL migration,
 then run `pnpm db:generate` and `pnpm db:check`. Generation writes the complete current `db/schema.sql` snapshot,
 checks every typed table/column, and leaves migration files untouched. Setup verifies recorded checksums and the
 complete catalog before and after upgrading, and records successful versions in `envoy_meta.migrations` in the same

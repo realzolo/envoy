@@ -17,7 +17,6 @@ Typography,
 } from "@arco-design/web-react";
 import {
 IconBook,
-IconBranch,
 IconCloud,
 IconDashboard,
 IconFile,
@@ -53,7 +52,6 @@ const navigation = [
       { href: "/attachments", label: "Attachment Safety", icon: IconFile },
       { href: "/providers", label: "Provider Accounts", icon: IconCloud },
       { href: "/domains", label: "Domains", icon: IconPublic },
-      { href: "/routing", label: "Routing", icon: IconBranch },
       { href: "/events", label: "Provider Events", icon: IconLiveBroadcast },
     ],
   },

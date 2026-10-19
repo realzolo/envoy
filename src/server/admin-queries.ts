@@ -33,13 +33,9 @@ export async function adminData(section: AdminSection):Promise<AdminData> {
       const [providers, domains] = await Promise.all([readRows(channelsAdminReads.providers), readRows(channelsAdminReads.domains)]);
       return { providers, domains, descriptors: providerDescriptors() };
     }
-    case "routing": {
-      const [services, domains, policies] = await Promise.all([readRows(identityAdminReads.services), readRows(channelsAdminReads.domains), readRows(outboundAdminReads.policies)]);
-      return { services, domains, policies };
-    }
     case "api-keys": {
-      const [services, domains, credentials, grants] = await Promise.all([readRows(identityAdminReads.services), readRows(channelsAdminReads.domains), readRows(identityAdminReads.credentials), readRows(identityAdminReads.grants)]);
-      return { services, domains, credentials, grants };
+      const [services, domains, credentials] = await Promise.all([readRows(identityAdminReads.services), readRows(channelsAdminReads.domains), readRows(identityAdminReads.credentials)]);
+      return { services, domains, credentials };
     }
     case "webhooks": {
       const [services, callbacks, callbackDeliveries] = await Promise.all([readRows(identityAdminReads.services), readRows(callbackAdminReads.callbacks), readRows(callbackAdminReads.callbackDeliveries)]);
@@ -54,10 +50,7 @@ export async function adminData(section: AdminSection):Promise<AdminData> {
       return { services, suppressions };
     }
     case "inbound": {
-      const [inbound, inboundRoutes, webhooks, domains, services, callbacks] = await Promise.all([
-        readRows(inboundAdminReads.inbound), readRows(inboundAdminReads.inboundRoutes), readRows(channelsAdminReads.webhooks), readRows(channelsAdminReads.domains), readRows(identityAdminReads.services), readRows(callbackAdminReads.callbacks)
-      ]);
-      return { inbound, inboundRoutes, webhooks, domains, services, callbacks };
+      return { inbound: await readRows(inboundAdminReads.inbound) };
     }
     case "logs": {
       const [audit,failedWork]=await Promise.all([readRows(reportingReads.audit),readRows(reportingReads.failedWork)]);

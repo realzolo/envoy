@@ -8,16 +8,14 @@ const iso = (value: Date | null) => value?.toISOString() ?? null;
 
 /** Discovery separates permission, configured transport and historical evidence. */
 export function createDiscoveryService(repository:DiscoveryRepository){return async function discoverMail(identity: ServiceIdentity) {
-  const grants = (await repository.listDomainCapabilities(identity.serviceId)).rows;
-  const routes = (await repository.listInboundRoutes(identity.serviceId)).rows;
+  const bindings = (await repository.listDomainCapabilities(identity.serviceId)).rows;
   const callback = (await repository.findServiceCallback(identity.serviceId)).rows[0];
   return {
     kind:"domain_permissions" as const,
-    domains:grants.map(row=>{
+    domains:bindings.map(row=>{
       const active=row.status==='active';
-      const sendingReasons=[...(!active||!row.send_allowed?['DOMAIN_SEND_NOT_AUTHORIZED']:[]),...(row.domain_status!=='active'?['SENDING_DOMAIN_DISABLED']:[]),...(!row.sending_configured?['NO_ELIGIBLE_ROUTE']:[])];
-      const ownRoutes=routes.filter(route=>route.domain_id===row.id);
-      const ingress=ownRoutes.some(route=>route.status==='active'&&route.endpoint_status==='active'&&route.security_configured&&providerRegistry(route.provider_type).descriptor.capabilities.inboundEnvelopeRecipients);
+      const sendingReasons=[...(!active||!row.send_allowed?['DOMAIN_SEND_NOT_AUTHORIZED']:[]),...(row.domain_status!=='active'?['SENDING_DOMAIN_DISABLED']:[]),...(!row.sending_configured?['PROVIDER_UNAVAILABLE']:[])];
+      const ingress=row.inbound_ready && row.inbound_provider_type !== null && providerRegistry(row.inbound_provider_type).descriptor.capabilities.inboundEnvelopeRecipients;
       const receivingReasons=[...(!active||!row.receive_allowed?['DOMAIN_RECEIVE_NOT_AUTHORIZED']:[]),...(row.domain_status!=='active'?['INBOUND_DOMAIN_DISABLED']:[]),...(!ingress?['INBOUND_INGRESS_UNAVAILABLE']:[])];
       const notificationReasons=callback?[...(callback.status!=='active'?['CALLBACK_DISABLED']:[]),...(!callback.subscribed_events.includes('inbound.received')?['CALLBACK_EVENT_NOT_SUBSCRIBED']:[])]:[];
       return {id:row.id,domain:row.domain,authorization:active?'granted' as const:'revoked' as const,revision:row.revision,

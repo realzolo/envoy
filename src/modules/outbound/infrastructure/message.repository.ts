@@ -31,19 +31,18 @@ export function createMessageRepository(client: Pool | PoolClient): MessageRepos
     AND (expires_at IS NULL OR expires_at>now()) AND (scope_type='global' OR (scope_type='service' AND service_id=$2)
     OR (scope_type='list' AND service_id=$2 AND list_id=$3)) LIMIT 1`, [input.email, input.serviceId, input.listId]);
         },
-        findConfiguredProviderTypes(input: {
+        findBoundProviderType(input: {
             sendingDomainId: string;
             serviceId: string;
-            messageCategory: string;
         }) {
             return client.query<{
                 type: ProviderType;
-            }>(`SELECT DISTINCT pa.type FROM routing_policies rp
-    JOIN routing_targets rt ON rt.policy_id=rp.id JOIN provider_accounts pa ON pa.id=rt.provider_account_id
-    JOIN provider_identities pi ON pi.id=rt.provider_identity_id AND pi.provider_account_id=pa.id
-    WHERE rp.sending_domain_id=$1 AND pi.sending_domain_id=$1 AND pi.status='verified' AND rp.status='active'
-      AND (rp.service_scope='all' OR EXISTS(SELECT 1 FROM routing_policy_services rs WHERE rs.policy_id=rp.id AND rs.service_id=$2))
-      AND (rp.message_category IS NULL OR rp.message_category=$3)`, [input.sendingDomainId, input.serviceId, input.messageCategory]);
+            }>(`SELECT pa.type FROM service_domain_bindings b
+    JOIN provider_identities pi ON pi.id=b.outbound_provider_identity_id
+    JOIN provider_accounts pa ON pa.id=pi.provider_account_id
+    JOIN sending_domains sd ON sd.id=b.sending_domain_id
+    WHERE b.sending_domain_id=$1 AND b.service_id=$2 AND pi.sending_domain_id=$1
+      AND sd.status='active' AND pi.status='verified' AND pa.status='active'`, [input.sendingDomainId, input.serviceId]);
         },
         insertSubmission(input: {
             id: string;

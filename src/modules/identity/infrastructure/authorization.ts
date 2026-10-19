@@ -3,21 +3,24 @@ import type { PoolClient } from "pg";
 
 /** SQL expressions passed here come from internal queries, never request input. */
 export function domainPermission(serviceId: string, domainId: string, permission: "send" | "receive") {
-  return `EXISTS(SELECT 1 FROM service_domain_grants dg JOIN sending_domains dd ON dd.id=${domainId}
-    JOIN services ds ON ds.id=dg.service_id
-    WHERE dg.service_id=${serviceId} AND (dg.sending_domain_id=dd.id OR dg.sending_domain_id IS NULL)
-      AND dg.status='active' AND dg.${permission}_allowed AND dd.status='active' AND ds.status='active')`;
+  const direction = permission === "send" ? "b.outbound_provider_identity_id IS NOT NULL" : "b.receive_enabled AND d.inbound_provider_account_id IS NOT NULL";
+  return `EXISTS(SELECT 1 FROM service_domain_bindings b
+    JOIN sending_domains d ON d.id=b.sending_domain_id
+    JOIN services s ON s.id=b.service_id
+    WHERE b.service_id=${serviceId} AND b.sending_domain_id=${domainId}
+      AND ${direction} AND d.status='active' AND s.status='active')`;
 }
 
-/** Merge additive exact-domain and ALL grants into one discovery row per domain. */
-export function effectiveDomainGrants(serviceId: string, domainId: string) {
-  return `SELECT CASE WHEN bool_or(dg.status='active') THEN 'active' ELSE 'disabled' END AS status,
-    bool_or(dg.status='active' AND dg.send_allowed) AS send_allowed,
-    bool_or(dg.status='active' AND dg.receive_allowed) AS receive_allowed,
-    sum(dg.revision)::integer AS revision
-    FROM service_domain_grants dg
-    WHERE dg.service_id=${serviceId} AND (dg.sending_domain_id=${domainId} OR (dg.sending_domain_id IS NULL AND dg.status='active'))
-    HAVING count(*)>0`;
+/** One row per Service and domain; the Service revision fences configuration edits. */
+export function effectiveDomainBinding(serviceId: string, domainId: string) {
+  return `SELECT 'active' AS status,
+    (b.outbound_provider_identity_id IS NOT NULL) AS send_allowed,
+    (b.receive_enabled AND d.inbound_provider_account_id IS NOT NULL) AS receive_allowed,
+    s.configuration_revision AS revision
+    FROM service_domain_bindings b
+    JOIN sending_domains d ON d.id=b.sending_domain_id
+    JOIN services s ON s.id=b.service_id
+    WHERE b.service_id=${serviceId} AND b.sending_domain_id=${domainId}`;
 }
 
 /** These predicates use frozen transport ownership, never caller-supplied domain claims. */
@@ -29,6 +32,7 @@ export function inboundDomainAccess(alias: string) {
   return `(cardinality(${alias}.envelope_recipients)>0 AND NOT EXISTS(
     SELECT 1 FROM unnest(${alias}.envelope_recipients) er WHERE NOT EXISTS(
       SELECT 1 FROM sending_domains d WHERE d.domain=split_part(er,'@',2)
+        AND d.inbound_provider_account_id=${alias}.provider_account_id
         AND ${domainPermission(`${alias}.service_id`, "d.id", "receive")})))`;
 }
 export async function authorizedSendingDomain(serviceId: string, domain: string, client?: PoolClient) {

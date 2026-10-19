@@ -4,11 +4,6 @@ import { sealSecret } from "@/platform/crypto/envelope";
 import { hashApiKey } from "@/platform/crypto/hash";
 import { createId } from "@/platform/ids";
 import { randomBytes } from "node:crypto";
-import { z } from "zod";
-
-const identifierSchema = z.string().trim().min(1).max(160);
-
-const domainGrantInputSchema=z.object({serviceId:identifierSchema,domainId:identifierSchema.nullable(),send:z.boolean(),receive:z.boolean()}).strict().refine(v=>v.send||v.receive,{message:"Select sending or receiving"});
 
 import { ServiceConfigurationConflictError } from '../contracts';
 import type { ManagementRepository,ManagementUnitOfWork } from './ports';
@@ -23,26 +18,6 @@ async function toggleService(id: string, enabled: boolean, actor: string) {
     await client.setServiceStatus({ id, status: enabled ? "active" : "suspended" });
     await client.recordAudit({ actor, action: "service.toggle", resourceType: "service", resourceId: id, details: { enabled } });
     await client.queuePermissionsChanged(id);
-  });
-}
-async function setDomainGrant(input:z.input<typeof domainGrantInputSchema>,actor:string){
-  const v=domainGrantInputSchema.parse(input);
-  return unitOfWork.run(async client =>{
-    if(!(await client.lockActiveServiceAndDomain({id:v.serviceId,idValue:v.domainId})).rowCount) throw new Error("Select an active business service and domain");
-    await client.incrementGrantConfigurationRevision({id:v.serviceId});
-    
-    const id=(await client.upsertDomainGrant({id:createId('dg'),serviceId:v.serviceId,sendingDomainId:v.domainId,sendAllowed:v.send,receiveAllowed:v.receive}, v.domainId)).rows[0].id;
-    await client.recordDomainGrant({actor:actor,resourceId:id,details:v});await client.queuePermissionsChanged(v.serviceId);return id;
-  });
-}
-async function toggleDomainGrant(id:string,enabled:boolean,actor:string){
-  await unitOfWork.run(async client =>{
-    const owner=(await client.lockGrantService({id:id})).rows[0];
-    if (!owner) throw new Error("Domain grant not found");
-    await client.incrementConfigurationRevision({id:owner.service_id});
-    if(!(await client.setDomainGrantStatus({id:id,status:enabled?'active':'disabled'})).rowCount) throw new Error("Domain grant not found");
-    await client.recordGrantStatusChange({actor:actor,resourceId:id,details:{enabled}});
-    const grant=(await client.findGrantService({id:id})).rows[0];await client.queuePermissionsChanged(grant.service_id);
   });
 }
 async function rotateServiceCredential(id: string, actor: string) {
@@ -61,19 +36,28 @@ async function revokeServiceCredential(id: string, actor: string) {
   await repository.revokeCredential({id:id});
   await audit(actor, "service_credential.revoke", "service_credential", id)
 }
-async function replacePermissions(client: ManagementRepository, serviceId: string, config: ServiceConfiguration) {
-  const selectedIds = [...new Set([...config.sending.domainIds, ...config.receiving.domainIds])];
-  const registered = await client.findRegisteredDomains({selectedIds:selectedIds});
-  if (registered.rowCount !== selectedIds.length) throw new Error("Selected domains must be registered");
-
-  // Revoke every previous grant before activating only the requested configuration.
-  await client.revokeServiceDomainGrants({serviceId:serviceId});
-  const grants = selectedIds.map(domainId => ({ domainId: domainId as string | null, send: config.sending.domainIds.includes(domainId), receive: config.receiving.domainIds.includes(domainId) }));
-  if (config.sending.mode === "all" || config.receiving.mode === "all") {
-    grants.push({ domainId: null, send: config.sending.mode === "all", receive: config.receiving.mode === "all" });
+async function replaceBindings(client: ManagementRepository, serviceId: string, config: ServiceConfiguration) {
+  const selectedIds = config.domains.map(binding => binding.domainId);
+  const registered = await client.findRegisteredDomains({ selectedIds });
+  if (registered.rows.length !== selectedIds.length || registered.rows.some(domain => domain.status !== "active")) {
+    throw new Error("Every selected domain must be registered and active");
   }
-  for (const grant of grants) {
-    await client.upsertServiceDomainPermission({id:createId("dg"),serviceId:serviceId,sendingDomainId:grant.domainId,sendAllowed:grant.send,receiveAllowed:grant.receive}, grant.domainId);
+  const domains = new Map(registered.rows.map(domain => [domain.id, domain]));
+  if (config.domains.some(binding => binding.receive && !domains.get(binding.domainId)?.inbound_ready)) {
+    throw new Error("Receiving requires a configured inbound provider for the domain");
+  }
+  const identityIds = config.domains.flatMap(binding => binding.outboundIdentityId ? [binding.outboundIdentityId] : []);
+  const identities = await client.findProviderIdentities({ identityIds });
+  const byId = new Map(identities.rows.map(identity => [identity.id, identity]));
+  if (identities.rows.length !== identityIds.length || config.domains.some(binding => {
+    if (!binding.outboundIdentityId) return false;
+    const identity = byId.get(binding.outboundIdentityId);
+    return !identity || identity.sending_domain_id !== binding.domainId || identity.status !== "verified" || identity.account_status !== "active";
+  })) throw new Error("Sending requires a verified provider identity for the selected domain");
+  await client.deleteServiceBindings({ serviceId });
+  for (const binding of config.domains) {
+    await client.insertServiceBinding({ id: createId("sdb"), serviceId, domainId: binding.domainId,
+      receive: binding.receive, outboundIdentityId: binding.outboundIdentityId });
   }
 }
 
@@ -106,7 +90,7 @@ async function createService(input: unknown, actor: string) {
   return unitOfWork.run(async client => {
     const serviceId = createId("svc");
     await client.insertService({id:serviceId,name:config.serviceName,suppressionManagementAllowed:config.suppressionManagement});
-    await replacePermissions(client, serviceId, config);
+    await replaceBindings(client, serviceId, config);
     const callback = await saveCallback(client, serviceId, config.serviceName, target ?? "");
     const credential = await issueKey(client, serviceId, actor);
     await client.recordServiceCreation({actor:actor,resourceId:serviceId,details:{ configuration: config }});
@@ -123,12 +107,12 @@ async function updateService(serviceId: string, input: unknown, expectedRevision
     const before = (await client.lockServiceConfiguration({id:serviceId})).rows[0];
     if (!before) throw new Error("Service not found");
     if (before.configuration_revision !== expectedRevision) throw new ServiceConfigurationConflictError();
-    const previousGrants = (await client.findServiceDomainPermissions({serviceId:serviceId})).rows;
+    const previousBindings = (await client.findServiceBindings({serviceId:serviceId})).rows;
     const previousCallback = (await client.findServiceCallback({serviceId:serviceId})).rows[0] ?? null;
     await client.updateServiceConfiguration({id:serviceId,name:config.serviceName,suppressionManagementAllowed:config.suppressionManagement});
-    await replacePermissions(client, serviceId, config);
+    await replaceBindings(client, serviceId, config);
     const callback = await saveCallback(client, serviceId, config.serviceName, callbackUrl);
-    await client.recordServiceUpdate({actor:actor,resourceId:serviceId,details:{ before: { service: before, grants: previousGrants, callback: previousCallback }, configuration: config, appliesTo: "all_service_credentials" }});
+    await client.recordServiceUpdate({actor:actor,resourceId:serviceId,details:{ before: { service: before, bindings: previousBindings, callback: previousCallback }, configuration: config, appliesTo: "all_service_credentials" }});
     await client.queuePermissionsChanged(serviceId);
     return { id: serviceId, callback };
   });
@@ -141,5 +125,5 @@ async function issueServiceCredential(serviceId: string, actor: string) {
   });
 }
 
-return {toggleService,setDomainGrant,toggleDomainGrant,rotateServiceCredential,revokeServiceCredential,createService,updateService,issueServiceCredential};
+return {toggleService,rotateServiceCredential,revokeServiceCredential,createService,updateService,issueServiceCredential};
 }

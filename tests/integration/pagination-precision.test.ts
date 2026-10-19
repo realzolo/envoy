@@ -15,7 +15,7 @@ afterAll(async () => {
 
 it("pages every message, delivery, event and inbound row at one exact PostgreSQL microsecond", async () => {
   await query("INSERT INTO services(id,name) VALUES ($1,$1)", [serviceId]);
-  await query("INSERT INTO service_domain_grants(id,service_id,sending_domain_id,send_allowed,receive_allowed) VALUES($1,$2,'sd_atlas',true,true)",[`grant_${key}`,serviceId]);
+  await query("INSERT INTO service_domain_bindings(id,service_id,sending_domain_id,receive_enabled,outbound_provider_identity_id) VALUES($1,$2,'sd_atlas',true,'pi_atlas_mock')",[`binding_${key}`,serviceId]);
   await query(`INSERT INTO messages(id,service_id,sending_domain_id,idempotency_key,payload_hash,recipient_count,subject,text_body,message_category,sender_snapshot,accepted_at)
     SELECT 'msg_'||$1||'_'||lpad(i::text,3,'0'),$2,'sd_atlas',i::text,'fixture',1,'Pagination','body','security',$3,'2026-10-17T00:00:00.123456Z'::timestamptz FROM generate_series(1,225) i`, [key, serviceId, { service: "Atlas Auth", fromName: "Atlas", fromEmail: "security@mail.atlas.test", domainId: "sd_atlas" }]);
   await query(`INSERT INTO deliveries(id,message_id,recipient_email,recipient_role,queued_at) SELECT 'dlv_'||$1||'_'||lpad(i::text,3,'0'),'msg_'||$1||'_'||lpad(i::text,3,'0'),'pagination-'||i||'@example.net','to','2026-10-17T00:00:00.123456Z'::timestamptz FROM generate_series(1,225) i`, [key]);

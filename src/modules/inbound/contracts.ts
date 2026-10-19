@@ -6,8 +6,8 @@ export type InboundInput = {
   message: CanonicalInboundMessage;
   ingressReceivedAt?: Date;
 };
-export type InboundRoute = {
-  id: string; service_id: string;
+export type InboundDispatch = {
+  service_id: string;
   recipients: string[];
 };
 

@@ -9,8 +9,9 @@ Use `Authorization: Bearer <service-key>`. Each key belongs to one Service. Reso
 on every request, including files, events, and request diagnostics; another service's identifiers are not accessible.
 `GET /capabilities` returns Service identity, current limits, native mail features, explicit domain sending/receiving permissions, configuration status and observed evidence. See the business connection contract below.
 
-An administrator grants each business Service explicit domain sending/receiving permissions under **Services**. Verification
-of a domain on a provider is a separate prerequisite. A caller may directly specify any authorized From address and name.
+An administrator binds each business Service to its exact domains under **Services**. Each binding independently enables
+receiving and selects one outbound provider identity; no selected identity means sending is disabled. Verification
+of that identity is a separate prerequisite. A caller may directly specify any configured From address and name.
 Both API submissions and console test messages supply From, Reply-To, and category directly.
 
 ## Submit a mail message
@@ -154,8 +155,8 @@ Administrator queries additionally expose routing snapshots and operational deta
 
 ## Retry and event semantics
 
-Explicit non-acceptance from a provider permits safe retry/failover if the error and route allow it. A timeout or lost
-response becomes `unknown`; Envoy reconciles against the original provider and does not automatically switch providers.
+Explicit non-acceptance from a provider permits a safe retry through the same configured identity when the error allows it. A timeout or lost
+response becomes `unknown`; Envoy reconciles against the original provider and does not automatically resubmit.
 An accepted provider submission is followed through provider events. A provider-managed delivery deferral cannot be
 manually resubmitted while the provider is still handling it. Permanent bounces, complaints, and suppressions
 are not ordinary retryable submissions. Revoked authorization, suspended service or disabled domain, suppression, and expired content
@@ -163,7 +164,7 @@ are rechecked before send and manual retry. Provider-native idempotency is reuse
 
 `POST /messages/{id}/retry` requires its own `Idempotency-Key` header and takes `{"acknowledgeDuplicateRisk":false}` by default; optional `deliveryIds` selects specific recipient records. Unknown retries require `true`, are
 audited, and retain the original attempt's unknown fact. Already successful recipients are not repeated. Automatic
-routing deferral and reconciliation are bounded; exhausted work remains inspectable with a specific reason.
+provider-readiness deferral and reconciliation are bounded; exhausted work remains inspectable with a specific reason.
 
 Callbacks use the same canonical event and diagnostic model as polling. For lifecycle events, callback `data.lifecycle`
 expresses the event fact; `data.currentLifecycle` is the current recipient projection. A late historical event can therefore
@@ -193,7 +194,7 @@ checkpoint a processed prefix. `hasMore:false` reaches the committed head at tha
 poll again for later appends. Positions are scoped to the Service, ordered under a row lock through commit, independent
 of provider `occurredAt`. Transaction rollback cannot publish a gap or let an uncommitted lower position appear after
 a consumer has advanced. Credential rotation preserves the stream. Current domain permissions hide unauthorized
-messages; the page still advances past filtered positions. Restoring a grant does not replay skipped references;
+messages; the page still advances past filtered positions. Restoring a binding does not replay skipped references;
 reconcile owned message snapshots when authorization changes.
 
 Retention is `{earliestCursor,historyTruncated,days:90}`. Omitting a cursor starts at the retained floor; inspect
@@ -204,12 +205,12 @@ browse retained `/messages` when reconstructing a consumer), then adopt the rese
 the retention floor cannot be recreated from this feed. Cursors are opaque and cannot be shared with `/events`,
 `/inbound-changes` or message browsing. `/events` retains descending historical pagination and is not a recovery cursor.
 
-V2 backfills retained canonical delivery/submission events with their IDs, Service/message ownership and a local
-insertion clock before installing change triggers. Existing mail facts remain queryable and participate in the feed.
+The initial V1 schema records canonical delivery/submission events with their IDs, Service/message ownership and a local
+insertion clock through change triggers.
 
 ## Business mail connection and discovery
 
-Business configuration consists of one Envoy URL, a Service Key, and optionally one event callback URL and signing secret. A Service can use multiple explicitly authorized domains. Business APPs, exact address purposes, templates and APP routing belong entirely to the caller; Envoy never needs APP identifiers or a mailbox entity.
+Business configuration consists of one Envoy URL, a Service Key, and optionally one event callback URL and signing secret. A Service can bind multiple exact domains, and a domain can deliver to multiple Services. Business APPs, exact address purposes, templates and APP routing belong entirely to the caller; Envoy never needs APP identifiers or a mailbox entity.
 
 `GET /capabilities` returns `service`, limits and native features plus:
 
@@ -217,15 +218,15 @@ Business configuration consists of one Envoy URL, a Service Key, and optionally 
 {"kind":"domain_permissions","domains":[{"id":"sd_example","domain":"mail.example.com","authorization":"granted","revision":1,"permissions":{"send":true,"receive":true},"sending":{"state":"configured","reasonCodes":[]},"receiving":{"state":"configured","reasonCodes":[]},"notification":{"mode":"callback_and_polling","state":"configured","reasonCodes":[]},"evidence":{"lastAcceptedAt":null,"lastDeliveredAt":null,"lastReceivedAt":null}}],"callbacks":{"configuration":"configured","latest":null,"lastDeliveredAt":null,"businessProcessing":"unknown"}}
 ```
 
-The example is the `mail` object, not the entire response. Domain IDs are stable `sending_domains` IDs. Permission is independent of DNS and transport readiness. `configured` never guarantees external delivery or receiving; evidence is an actual retained fact or null. No mailbox list is invented. An exact domain grant does not include subdomains. Disabled exact-domain grants remain discoverable with `authorization:"revoked"` and false effective permissions.
+The example is the `mail` object, not the entire response. Domain IDs are stable `sending_domains` IDs. Binding settings are independent of DNS and transport readiness. `configured` never guarantees external delivery or receiving; evidence is an actual retained fact or null. No mailbox list is invented. A domain binding does not include subdomains. Removed bindings disappear from discovery; disabled domains remain unavailable.
 
 A Service has a globally unique name (case-insensitive). **Pause** disables all of its keys, mail content access, inbound routing and new outbound submissions; **Resume** makes the retained configuration available again. Status changes increment the configuration revision.
 
-Outbound routing policies match a sending domain, an optional category, and either **All services** (current and future) or explicitly **Selected services**. Targets and circuit state belong to the policy and are shared across its matching Services. Route membership does not grant domain permission.
+For outbound mail, Envoy checks the authenticated Service's binding to the From domain and uses that binding's single provider identity. The identity must belong to the same domain and its provider must be available. Message category does not select a different provider.
 
-Under **Services**, create or edit one configuration containing the Service name, sending permission, receiving permission, Event callback URL, and advanced permissions. Each mail direction independently uses one of three exclusive modes: **No permission**, **Selected domains**, or **All domains**. Both directions can be denied; the UI explicitly identifies Services with no mail permissions. Manually selecting all current domains remains a fixed selection. Choosing All domains grants permission to every current and future registered, enabled domain; subdomains must be registered separately. Saving the full configuration atomically replaces both directions, revoking redundant grants so that changing All domains to selected domains or no permission immediately narrows access. These changes apply to every active key without reissuance. Discovery returns each current domain once; disabled exact-domain grants remain as revoked entries. Revoked ALL grants no longer expose future registered domains. Disabled domains and suspended Services remain unusable. Domain verification and outbound/inbound routing are configured separately.
+Under **Services**, create or edit one configuration containing the Service name, domain bindings, Event callback URL, and advanced permissions. Each domain binding has a receiving switch and an optional outbound provider identity. Both directions may be disabled. Saving atomically replaces that Service's bindings and applies to every active key without reissuance. A domain can have several receiving Services, each with a separate private copy. The domain itself selects one inbound provider account; leaving it empty disables inbound mail. Disabled domains and suspended Services remain unusable. Subdomains must be registered and bound separately.
 
-**Manage credentials** only issues, rotates, or revokes keys of the same Service. The first key is issued on Service creation and plaintext is shown once. Changes to names, callbacks, domain permissions, or Service suppression management belong in **Edit configuration**. Service suppression management is disabled by default; enabling it allows the API to list, add, and remove Service recipient and list suppression rules, affecting that Service across its sending domains. Editors save against the configuration revision they loaded; stale saves are rejected so a previous form cannot restore revoked access. Configuration changes are audited and send `service.permissions_changed` through the current active callback subscription. An empty Event callback URL selects polling only; removing a URL disables delivery while retaining callback history.
+**Manage credentials** only issues, rotates, or revokes keys of the same Service. The first key is issued on Service creation and plaintext is shown once. Changes to names, callbacks, domain bindings, or Service suppression management belong in **Edit configuration**. Service suppression management is disabled by default; enabling it allows the API to list, add, and remove Service recipient and list suppression rules, affecting that Service across its sending domains. Editors save against the configuration revision they loaded; stale saves are rejected so a previous form cannot restore revoked access. Configuration changes are audited and send `service.permissions_changed` through the current active callback subscription. An empty Event callback URL selects polling only; removing a URL disables delivery while retaining callback history.
 
 Reason codes include `DOMAIN_SEND_NOT_AUTHORIZED`, `DOMAIN_RECEIVE_NOT_AUTHORIZED`, `SENDING_DOMAIN_DISABLED`, `INBOUND_DOMAIN_DISABLED`, `NO_ELIGIBLE_ROUTE`, `INBOUND_INGRESS_UNAVAILABLE`, `CALLBACK_DISABLED` and `CALLBACK_EVENT_NOT_SUBSCRIBED`. Handle unknown future codes generically. The send API retains `SENDER_NOT_AUTHORIZED` and `NO_ELIGIBLE_ROUTE` problem codes.
 
@@ -233,15 +234,15 @@ Every protected API rechecks Service ownership and current corresponding domain 
 
 `POST /files` requires `X-Sending-Domain: mail.example.com` in addition to `X-File-Name`. Files freeze this sending domain, and a message can only attach files from its own From domain. Credentials do not create a domain-independent file pool. Suppression list API calls require the independently enabled `suppression_management_allowed` Service permission, default false; ordinary domain credentials cannot manage another Service’s suppression policy.
 
-Key rotation keeps the same Service, domain grants, resource ownership, cursors and idempotency. An idempotent acceptance replay returns the original receipt and never resends the mail; background execution rechecks current permission.
+Key rotation keeps the same Service, domain bindings, resource ownership, cursors and idempotency. An idempotent acceptance replay returns the original receipt and never resends the mail; background execution rechecks the current binding.
 
 ## Inbound ownership, standard fields and callbacks
 
 Routing uses provider-authenticated SMTP recipients, never visible To/Cc/Bcc, `Delivered-To`, `X-Original-To`, arbitrary
-MIME headers, or a provider's outbound domain verification status. Sending permission does not confer receiving permission. Domain ingress routes require an explicitly authorized target Service; receiving permission is checked for each Service.
+MIME headers, or a provider's outbound domain verification status. An outbound identity does not confer receiving permission. The domain's inbound provider account must match the authenticated ingress, and each receiving Service needs an enabled binding.
 
-Every matching route participates. A domain may explicitly target different services. Routes for the same service merge into one copy with the union of matched envelope addresses; each distinct active
-callback endpoint selected by those routes receives one event. Other services receive separate IDs and private
+Every matching Service-domain binding participates. One domain may deliver to several Services. Matched domains for the same Service merge into one copy with the union of that Service's envelope addresses; the Service's active
+callback endpoint receives one event. Other services receive separate IDs and private
 attachment ownership. Repeated provider message receipts do not create new copies, attachments or callbacks within
 the same service. A retry after a partial fanout resumes unfinished copies and retains successful ones. Mailgun uses
 its authenticated transport receipt ID for deduplication rather than an untrusted RFC Message-ID.
@@ -271,7 +272,7 @@ mail through `/inbound-changes`; `/inbound-messages` is a stored-time browse/sna
 reply (`inReplyTo` and `references`); conversation matching and ticket state remain business rules. Outbound RFC IDs are available per attempt when confirmed; unconfirmed IDs remain null (see below).
 
 Missing/invalid trusted envelopes are quarantined as administrator-only rejected records with
-`ENVELOPE_RECIPIENT_UNAVAILABLE`; no matching active route yields `NO_INBOUND_ROUTE`. No service callback is emitted.
+`ENVELOPE_RECIPIENT_UNAVAILABLE`; no matching receiving Service yields `NO_RECEIVING_SERVICE`. No service callback is emitted.
 Terminal content rejection reasons are stable codes: `INBOUND_MESSAGE_TOO_LARGE`, `INBOUND_ATTACHMENT_TOO_LARGE`,
 `INBOUND_MALWARE_DETECTED`. Transient storage/scanner failures remain retryable, rather than becoming a false rejection.
 
@@ -283,7 +284,7 @@ not unambiguously identify SMTP recipients. Its outbound sending support is unch
 
 Use provider-neutral `mail` discovery for explicit permissions and states. Ownership comes from `envelopeRecipients`,
 never visible To. Multiple services receive private resources; null RFC fields/evidence remain unknown. Domain/DNS and
-provider configuration stay in Envoy. Send grants do not authorize receiving data.
+provider configuration stay in Envoy. An outbound identity does not authorize receiving data.
 
 A runnable minimal connection example is [examples/service-mail.mjs](../examples/service-mail.mjs):
 
@@ -358,9 +359,9 @@ The stored-time list uses `inbound.` browse cursors. Malformed cursors return 40
 
 ## Receiver notifications and key rotation
 
-`mail.domains[].receiving` describes domain ingress readiness. Each Service has at most one callback endpoint. Its `notification` reports `polling` or `callback_and_polling` and current subscription/configuration errors. No callback is valid polling-only configuration. Receiving uses that event callback automatically; ingress routes never select their own signing secrets or callback endpoints.
+`mail.domains[].receiving` describes domain ingress readiness. Each Service has at most one callback endpoint. Its `notification` reports `polling` or `callback_and_polling` and current subscription/configuration errors. No callback is valid polling-only configuration. Receiving uses that event callback automatically; domain bindings do not select their own signing secrets or callback endpoints.
 
-Subscribe to `service.permissions_changed` to invalidate cached authorization. This signed event has `{id,apiVersion:"v1",type:"service.permissions_changed",occurredAt,data:{serviceId}}`; it is committed atomically with grant updates/revocation and a durable outbox command. Refresh capabilities to observe the new truth. This notification is independent of now-revoked domain mail access. A bounded cache expiry is still needed if notification delivery fails.
+Subscribe to `service.permissions_changed` to invalidate cached authorization. This signed event has `{id,apiVersion:"v1",type:"service.permissions_changed",occurredAt,data:{serviceId}}`; it is committed atomically with binding changes and a durable outbox command. Refresh capabilities to observe the new truth. This notification is independent of removed domain mail access. A bounded cache expiry is still needed if notification delivery fails.
 
 Subscription removal dead-letters affected pending/retrying callbacks; already in-flight HTTP requests may finish. A 2xx acknowledges receipt, not completion of the caller's business processing. Callback attempts have a 10-second total execution deadline,
 including DNS, connection, TLS, final authorization and response. Expiry cancels the request; a delayed DNS or

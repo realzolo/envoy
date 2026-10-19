@@ -44,13 +44,10 @@ export default async function setup() {
   await database.query("INSERT INTO provider_accounts(id,type,name,status,public_config,health,quota) VALUES ('pa_mock','mock','Test Provider','active',$1,$2,$3)", [{ behavior: "deliver" }, { status: "healthy" }, { monthlyLimit: 100000 }]);
   await database.query("INSERT INTO provider_credentials(id,provider_account_id,credential_version,secret_ciphertext,encrypted_dek,key_version,created_by) VALUES ('pc_mock','pa_mock',1,$1,$2,$3,'test')", [providerSecret.secretCiphertext, providerSecret.encryptedDek, providerSecret.keyVersion]);
   await database.query("INSERT INTO provider_webhook_endpoints(id,provider_account_id,opaque_token,security_config_ciphertext,security_encrypted_dek,key_version,security_version,security_configured) VALUES ('pwe_mock','pa_mock','test-endpoint',$1,$2,$3,1,true)", [webhookSecret.secretCiphertext, webhookSecret.encryptedDek, webhookSecret.keyVersion]);
-  await database.query("INSERT INTO sending_domains(id,domain) VALUES ('sd_atlas','mail.atlas.test')");
+  await database.query("INSERT INTO sending_domains(id,domain,inbound_provider_account_id) VALUES ('sd_atlas','mail.atlas.test','pa_mock')");
   await database.query("INSERT INTO provider_identities(id,sending_domain_id,provider_account_id,external_identity_id,status) VALUES ('pi_atlas_mock','sd_atlas','pa_mock','test_identity','verified')");
-  await database.query("INSERT INTO service_domain_grants(id,service_id,sending_domain_id,send_allowed,receive_allowed) VALUES ('sg_atlas','svc_atlas_auth','sd_atlas',true,true)");
-  await database.query("INSERT INTO routing_policies(id,name,sending_domain_id,message_category,priority) VALUES ('rp_atlas_security','Test routing','sd_atlas','security',10)");
-  await database.query("INSERT INTO routing_targets(id,policy_id,provider_account_id,provider_identity_id,priority,weight) VALUES ('rt_atlas_security','rp_atlas_security','pa_mock','pi_atlas_mock',10,100)");
+  await database.query("INSERT INTO service_domain_bindings(id,service_id,sending_domain_id,receive_enabled,outbound_provider_identity_id) VALUES ('sdb_atlas','svc_atlas_auth','sd_atlas',true,'pi_atlas_mock')");
   await database.query("INSERT INTO callback_endpoints(id,service_id,name,url,secret_ciphertext,encrypted_dek,key_version,subscribed_events) VALUES ('cb_atlas_local','svc_atlas_auth','Test callback','https://callback.test/events',$1,$2,$3,$4)", [callbackSecret.secretCiphertext, callbackSecret.encryptedDek, callbackSecret.keyVersion, ["email.accepted", "email.delivered", "email.bounced", "email.failed", "email.suppressed", "inbound.received"]]);
-  await database.query("INSERT INTO inbound_routes(id,provider_webhook_endpoint_id,sending_domain_id,service_id) VALUES ('ir_atlas','pwe_mock','sd_atlas','svc_atlas_auth')");
   } catch (error) {
     database?.release();
     database = undefined;

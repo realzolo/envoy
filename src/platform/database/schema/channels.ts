@@ -73,11 +73,17 @@ export const providerWebhookEndpoints = pgTable("provider_webhook_endpoints", {
 export const sendingDomains = pgTable("sending_domains", {
 	id: text().primaryKey().notNull(),
 	domain: text().notNull(),
+	inboundProviderAccountId: text("inbound_provider_account_id"),
 	status: text().default('active').notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table): PgTableExtraConfigValue[] => [
 	unique("sending_domains_domain_key").on(table.domain),
+	foreignKey({
+			columns: [table.inboundProviderAccountId],
+			foreignColumns: [providerAccounts.id],
+			name: "sending_domains_inbound_provider_account_id_fkey"
+		}).onDelete("restrict"),
 	check("sending_domains_status_check", sql`status = ANY (ARRAY['active'::text, 'disabled'::text])`),
 ]);
 
@@ -104,6 +110,7 @@ export const providerIdentities = pgTable("provider_identities", {
 			name: "provider_identities_provider_account_id_fkey"
 		}).onDelete("cascade"),
 	unique("provider_identities_id_provider_account_id_key").on(table.id, table.providerAccountId),
+	unique("provider_identities_id_sending_domain_id_key").on(table.id, table.sendingDomainId),
 	unique("provider_identities_sending_domain_id_provider_account_id_key").on(table.sendingDomainId, table.providerAccountId),
 	check("provider_identities_status_check", sql`status = ANY (ARRAY['pending'::text, 'verified'::text, 'failed'::text, 'disabled'::text])`),
 ]);

@@ -62,8 +62,19 @@ describe("database migration foundation", () => {
     }
   });
 
-  it("preserves the applied V1 SQL bytes", async () => {
-    expect(createHash("sha256").update(await readFile("db/migrations/001_initial.sql")).digest("hex")).toBe("67b0bf001b78c6cf2f8bf169f305dd7d556319f3c6fba6c64366cd6e681b7e13");
+  it("records the reset V1 SQL checksum", async () => {
+    expect(createHash("sha256").update(await readFile("db/migrations/001_initial.sql")).digest("hex")).toBe("1b5746e8d7aeed5d6520d2487ee50cda0f8d9a7876a1b22dde204359243ebf2c");
+  });
+
+  it("allows multiple Services to receive the same domain through separate bindings", async () => {
+    const serviceId = `svc_second_${randomUUID()}`;
+    await expect(transaction(async client => {
+      await client.query("INSERT INTO services(id,name) VALUES($1,$1)", [serviceId]);
+      await client.query("INSERT INTO service_domain_bindings(id,service_id,sending_domain_id,receive_enabled) VALUES($1,$2,'sd_atlas',true)", [`binding_${randomUUID()}`, serviceId]);
+      const result = await client.query<{ count: number }>("SELECT count(*)::int AS count FROM service_domain_bindings WHERE sending_domain_id='sd_atlas' AND receive_enabled");
+      expect(result.rows[0].count).toBe(2);
+      throw new Error("discard test binding");
+    })).rejects.toThrow("discard test binding");
   });
 
   it("rejects incomplete exporter output before snapshot publication", async () => {

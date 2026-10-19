@@ -27,7 +27,7 @@ Use a direct or session-pooled connection and reserve the documented connection 
 |---|---|
 | Health endpoint fails | Check Web container logs, PostgreSQL reachability, business and BullMQ schema readiness, and required environment variables. |
 | API rejects a request before message creation | Save `requestId` and query `/api/v1/requests/{requestId}` with the same service credential. Check field errors and sender authorization. |
-| Messages remain queued or deferred | Check structured delivery errors and submission attempts, Worker heartbeat/logs, overdue work, domain grants, active routing targets, verified provider identities, quotas, and provider account health. |
+| Messages remain queued or deferred | Check structured delivery errors and submission attempts, Worker heartbeat/logs, overdue work, the Service-domain binding, its verified outbound provider identity, and provider account health. |
 | Provider webhook is rejected | Verify the provider event URL, provider-specific signature material, allowed source configuration, and server clock. For Postmark, use the credential-bearing URL generated when Basic Auth is saved. |
 | Outbound callback delivery fails | Inspect the event callback endpoint URL, signing secret, consumer response, and dead-letter/replay state in the operations console. |
 | Credentials cannot be read after deployment | Verify that `ENVOY_KEK_BASE64`, `ENVOY_KEK_VERSION`, and any `ENVOY_KEK_KEYRING_JSON` entries match the keys used to encrypt existing envelopes. |
@@ -39,7 +39,7 @@ recipient addresses, message content, and provider-native payloads before sharin
 
 Inspect the specific delivery before retrying it. Unknown results do not automatically fail over: automatic checks stop
 after 12 passes, and manual retry requires a duplicate-risk acknowledgement. Suppression and disabled configuration
-must be resolved separately. Route deferral stops after 60 cycles with a visible failure. Callbacks lists the event ID,
+must be resolved separately. Provider-readiness deferral stops after 60 cycles with a visible failure. Callbacks lists the event ID,
 HTTP result, next attempt and error; replay a single dead letter or one endpoint after fixing the consumer.
 
 Provider connection tests are bound to the credential version tested. After rotation, run a new test before enabling
@@ -64,27 +64,26 @@ Envoy; inspect the dry-run before applying.
 
 Configure these resources in Envoy, not in each business system:
 
-1. **Services**: create a Service per required isolation boundary. Configure mail permissions and the optional Event callback URL in the same form; creation issues the first key. Give the
+1. **Services**: create a Service per required isolation boundary. Configure domain bindings and the optional Event callback URL in the same form; creation issues the first key. Give the
    caller the Envoy URL and service key; do not share an administrator session or provider credentials.
 2. **Provider Accounts / Domains**: associate provider identities and retrieve/present available DNS records.
    The domain administrator publishes them on the actual DNS platform. Refresh the result in Envoy. Provider-specific
    workflows stay with Envoy operators; sending-domain verification is not proof that inbound MX/rules work.
-3. **Services → Edit configuration**: select no permission, selected domains, or All domains independently for sending and receiving. The All domains option includes future enabled registered domains. Saving replaces previous permissions and applies to all active keys.
-   Enter the From address and display name directly when sending. Revocation blocks new submissions and retries even
-   if a caller discovered the grant earlier.
-4. **Routing**: configure outbound policies and categories. Discovery reports domain readiness, not a reserved quota
-   or a guarantee for a particular content/recipient set.
-5. **Domains / Inbound**: register an inbound-only domain with no outbound providers selected, then route the entire authorized receiving domain to the Service. An active
-   registered domain and secured supported ingress suffice for an Envoy route; no outbound sending permission or verified
-   outbound provider identity is required. Configure receiving MX/provider rules here through the operator workflow.
-   Domain matching is case normalized and exact; every local part belongs to the authorized domain scope.
-   Every route requires a Service with explicit receiving permission. Multiple authorized Services on the same domain
-   intentionally receive private copies; review that choice as a receiving-data authorization.
+3. **Domains**: assign one inbound provider account per domain and configure its receiving MX/provider rules. An empty
+   inbound provider disables receiving for that domain. Domain matching is case normalized and exact; every local part
+   belongs to the domain scope. Provider verification for sending does not establish inbound readiness.
+4. **Services → Edit configuration**: bind each needed domain. Enable receiving to give that Service a private inbound
+   copy, and select one verified outbound provider identity to enable sending. Leave either direction unset to disable
+   it. Multiple Services can receive the same domain; each Service chooses its outbound identity independently.
+   Saving replaces that Service's bindings and applies to all active keys. Enter the From address and display name
+   directly when sending. Removing a binding blocks new submissions and retries even if a caller discovered it earlier.
+5. **Capabilities**: review provider readiness and observed evidence for each configured domain. Readiness does not
+   reserve provider capacity or guarantee a particular message will be delivered.
 6. **Services → Edit configuration**: set the Event callback URL; the signing secret is shown when first configured. **Callbacks** manages subscriptions, secret replacement and delivery recovery.
    Inbound and outbound events use that same endpoint automatically. Give the caller its callback connection
    secret. Callback retries/replay acknowledge transport receipt, never completed business work.
 
-Use `/api/v1/capabilities` with the caller's service key to review `mail`: sender configuration, inbound route
+Use `/api/v1/capabilities` with the caller's service key to review `mail`: sender configuration, inbound provider
 configuration, canonical send facts, actual inbound observation and callback delivery are separate. `null` evidence and
 `unknown` external/runtime states mean unverified; do not relabel them as success. Provider errors/DNS records are
 operator diagnostics; callers receive stable reason codes and Envoy request/resource IDs.
@@ -102,7 +101,7 @@ event with the current settings produces a valid-event timestamp. A working prov
 webhook verification is configured, but API acceptance alone does not establish recipient delivery.
 
 The Inbound detail drawer distinguishes the Envoy ID, RFC Message-ID, SMTP recipients, standard reply/thread fields,
-and the representative route for each merged service copy. Inspect the full verified raw provider event when diagnosing
+and the recipient domains matched for each private Service copy. Inspect the full verified raw provider event when diagnosing
 quarantined mail. `ENVELOPE_RECIPIENT_UNAVAILABLE` requires a trusted provider recipient source, not adding guessed
 headers or widening patterns. Resend inbound currently remains quarantined because the reviewed retrieval contract
 does not explicitly establish an envelope-recipient source. Configure a supported alternative ingress inside Envoy
@@ -110,16 +109,12 @@ before enabling business receipt; this does not change Resend outbound support.
 
 ## Authoritative schema
 
-Executed application SQL is immutable. `001_initial.sql` is preserved; subsequent changes append contiguous versions
-and checksums. `pnpm db:generate` writes the typed `db/schema.sql` snapshot, and `pnpm db:check` verifies it and all
-migration checksums. Setup serializes migrations, validates the recorded catalog, applies missing versions and records
-checksums in `envoy_meta.migrations` atomically. It upgrades an exact unjournaled V1 by adopting V1 then applying V2.
-Drift is rejected without repairing schema or deleting business records. BullMQ manages its independent schema.
-
-Before V2, back up the database and stop Web/Worker writers. V2 takes a 5-second-bounded event-table lock, backfills
-all retained delivery/submission event references, creates per-Service heads, and installs triggers in one transaction.
-Lock conflicts or SQL failures roll the application upgrade back; inspect and retry after draining writers. Run setup
-successfully before starting the matching Web/Worker build, whose readiness requires current migration checksums.
+The fresh-project `001_initial.sql` includes the full application schema and both change streams. Future changes append
+contiguous versions and checksums. `pnpm db:generate` writes the typed `db/schema.sql` snapshot, and `pnpm db:check`
+verifies it and all migration checksums. Setup serializes migrations, validates the recorded catalog, applies missing
+versions and records checksums in `envoy_meta.migrations` atomically. A nonempty unjournaled application schema and any
+catalog drift are rejected without repair or deletion. BullMQ manages its independent schema. Run setup successfully
+before starting the matching Web/Worker build, whose readiness requires current migration checksums.
 Observe both `/outbound-changes` and `/inbound-changes`; after a 410 or initial historyTruncated flag, reconcile known
 owned resources before adopting the returned reset cursor. A 2xx callback acknowledges durable receipt; downstream
 business processing remains the consumer's responsibility.
@@ -133,7 +128,7 @@ only the intended dead letters. HTTP delivery success never changes business con
 
 The first durable inbound dispatch plan is frozen at normalization. Each private copy has its own claim, attachments and
 callbacks; one failed copy does not prevent the others from progressing. An interrupted raw-event job retries only that
-plan. Adding routes does not redistribute history. There is no automatic or implicit historical redistribution operation;
+plan. Adding Service-domain bindings does not redistribute history. There is no automatic or implicit historical redistribution operation;
 any future operator redistribution feature must use a separate audited decision and preserve purge/permission boundaries.
 
 Run `pnpm data:cleanup --apply` regularly for object deletion intents and the 90-day inbound change-prefix cleanup even

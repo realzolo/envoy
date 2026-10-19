@@ -60,23 +60,14 @@ export type DeliveryStateEvent = Omit<CanonicalEvent, "type"> & {
     type: CanonicalEvent["type"] | "queued" | "submitting" | "unknown" | "canceled";
 };
 export type Candidate = {
-    target_id: string;
-    policy_id: string;
-    policy_name: string;
-    policy_priority: number;
     provider_account_id: string;
     provider_identity_id: string;
     provider_type: ProviderType;
     provider_name: string;
-    priority: number;
-    weight: number;
-    rate_limit_per_minute: number;
     domain: string;
     quota: Record<string, unknown>;
     monthly_usage: string;
     daily_usage: string;
-    status: string;
-    circuit_open_until: Date | null;
     account_status: string;
     health: Record<string, unknown>;
     identity_status: string;
@@ -129,28 +120,6 @@ export type Recipient = {
     compliance_status: string;
     current_attempt_id: string | null;
     current_submission_id: string | null;
-};
-export type SimulationRow = {
-    policy_id: string;
-    policy_name: string;
-    policy_priority: number;
-    target_id: string;
-    priority: number;
-    weight: number;
-    status: string;
-    circuit_open_until: Date | null;
-    account_id: string;
-    account: string;
-    type: string;
-    account_status: string;
-    health: Record<string, unknown>;
-    quota: Record<string, unknown>;
-    identity_id: string;
-    identity_status: string;
-    domain: string;
-    domain_status: string;
-    monthly_usage: string;
-    daily_usage: string;
 };
 export interface RawProviderReceipt {
     id: string;

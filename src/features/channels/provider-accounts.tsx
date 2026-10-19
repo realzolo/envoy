@@ -598,7 +598,7 @@ function CredentialForm({ account }: { account: Row }) {
       };
     }
     try {
-      await action.run({method:"POST",path:`/api/admin/provider-accounts/${encodeURIComponent(String(account.id))}/credentials`,payload:{id: account.id, secret}}, "Credential rotated. Test the new credential before routing resumes.");
+      await action.run({method:"POST",path:`/api/admin/provider-accounts/${encodeURIComponent(String(account.id))}/credentials`,payload:{id: account.id, secret}}, "Credential rotated. Test the new credential before sending resumes.");
     } catch {
       // The in-form Alert renders request failures.
     }
@@ -633,7 +633,7 @@ function QuotaForm({ account }: { account: Row }) {
       ...(monthly !== undefined ? { monthlyLimit: Number(monthly) } : {}),
     };
     try {
-      await action.run({method:"PUT",path:`/api/admin/provider-accounts/${encodeURIComponent(String(account.id))}/quota`,payload:{id: account.id, quota: quotaUpdate}}, "Routing limits saved");
+      await action.run({method:"PUT",path:`/api/admin/provider-accounts/${encodeURIComponent(String(account.id))}/quota`,payload:{id: account.id, quota: quotaUpdate}}, "Sending limits saved");
     } catch {
       // The in-form Alert renders request failures.
     }
@@ -730,7 +730,7 @@ function Account({ account }: { account: Row }) {
           <Collapse.Item name="credentials" header={<div className={styles.collapseHeading}><span><IconRefresh />Rotate credential</span><Typography.Text type="secondary">v{value(account, "credential_version")}</Typography.Text></div>}>
             <CredentialForm account={account} />
           </Collapse.Item>
-          <Collapse.Item name="quota" header={<Space size="small"><IconRotateLeft />Routing limits</Space>}>
+          <Collapse.Item name="quota" header={<Space size="small"><IconRotateLeft />Sending limits</Space>}>
             <QuotaForm account={account} />
           </Collapse.Item>
         </Collapse>
@@ -754,7 +754,7 @@ export function ProviderAccounts({ data }: { data: Data }) {
       </div>
       {showCreate && <CreateProvider onClose={() => setShowCreate(false)} alwaysOpen={providers.length === 0} />}
       {providers.length > 0 ? <div className={styles.accountList}>{providers.map(provider => <Account key={value(provider, "id")} account={provider} />)}</div> : (
-        <Empty description="No provider accounts yet. Connect one above to start configuring domains and routes." />
+        <Empty description="No provider accounts yet. Connect one above to configure domains and Services." />
       )}
     </Space>
   );

@@ -30,7 +30,6 @@ const tag=createId("recovery"), a=`svc_a_${tag}`,b=`svc_b_${tag}`,c=`svc_c_${tag
 const callback=`cb_${tag}`,credential=`cred_${tag}`,oldKey=`envoy_test_${tag}`;
 const identity={serviceId:a,serviceName:"A",rateLimitPerMinute:600};
 const rawIds:string[]=[];
-const routed=(recipient:string)=>`ir_${recipient}_${tag}`;
 const make=(extra:Partial<CanonicalInboundMessage>={}):CanonicalInboundMessage=>({externalMessageId:createId("external"),from:"author@example.net",to:[`help@${domain}`],cc:[],bcc:[],envelopeRecipients:[`help@${domain}`],subject:"Private subject",text:"private body",receivedAt:new Date("1900-01-01"),attachments:[],...extra});
 const persist=(message:CanonicalInboundMessage,rawEventId:string|null=null)=>persistInbound({providerAccountId:"pa_mock",webhookEndpointId:"pwe_mock",rawEventId:rawEventId!,message});
 const request=(key=oldKey,path="/api/v1/inbound-changes",method="GET")=>new Request(`https://envoy.test${path}`,{method,headers:{authorization:`Bearer ${key}`}});
@@ -43,17 +42,12 @@ async function ready(service=a) { const id=await scanning(service);await query("
 
 beforeAll(async()=>{
  for (const service of [a,b,c]) await query("INSERT INTO services(id,name) VALUES($1,$1)",[service]);
- await query("INSERT INTO sending_domains(id,domain) VALUES($1,$2)",[domainId,domain]);
+ await query("INSERT INTO sending_domains(id,domain,inbound_provider_account_id) VALUES($1,$2,'pa_mock')",[domainId,domain]);
  await query("INSERT INTO service_credentials(id,service_id,key_prefix,key_hash) VALUES($1,$2,'test',$3)",[credential,a,hashApiKey(oldKey)]);
  const sealed=sealSecret({secret:"test-recovery-callback"},callback,1);
  await query("INSERT INTO callback_endpoints(id,service_id,name,url,secret_ciphertext,encrypted_dek,key_version,subscribed_events) VALUES($1,$2,'recovery','https://callback.test/events',$3,$4,$5,ARRAY['inbound.received'])",[callback,a,sealed.secretCiphertext,sealed.encryptedDek,sealed.keyVersion]);
- for(const [name,service] of [["help",a],["other",b]]) {
- await query("INSERT INTO service_domain_grants(id,service_id,sending_domain_id,send_allowed,receive_allowed) VALUES($1,$2,$3,true,true)",[createId('dg'),service,domainId]);
- await query("INSERT INTO inbound_routes(id,provider_webhook_endpoint_id,sending_domain_id,service_id) VALUES($1,'pwe_mock',$2,$3)",[routed(name!),domainId,service]);}
- await query("INSERT INTO service_domain_grants(id,service_id,sending_domain_id,receive_allowed) VALUES($1,$2,$3,true)",[createId('dg'),c,domainId]);
  await query("INSERT INTO provider_identities(id,sending_domain_id,provider_account_id,status) VALUES($1,$2,'pa_mock','verified')",[`pi_${tag}`,domainId]);
- await query("INSERT INTO routing_policies(id,name,sending_domain_id) VALUES($1,$1,$2)",[`rp_${tag}`,domainId]);
- await query("INSERT INTO routing_targets(id,policy_id,provider_account_id,provider_identity_id) VALUES($1,$2,'pa_mock',$3)",[`rt_${tag}`,`rp_${tag}`,`pi_${tag}`]);
+ for(const service of [a,b,c]) await query("INSERT INTO service_domain_bindings(id,service_id,sending_domain_id,receive_enabled,outbound_provider_identity_id) VALUES($1,$2,$3,true,$4)",[createId('sdb'),service,domainId,service===a?`pi_${tag}`:null]);
 
 });
 afterAll(async()=>{
@@ -67,7 +61,6 @@ afterAll(async()=>{
  await query("DELETE FROM messages WHERE service_id=ANY($1)",[[a,b,c]]);
  await query("DELETE FROM outbound_files WHERE service_id=ANY($1)",[[a,b,c]]);
  await query("DELETE FROM raw_provider_events WHERE id=ANY($1)",[rawIds]);
- await query("DELETE FROM routing_policies WHERE id=$1",[`rp_${tag}`]);
  await query("DELETE FROM services WHERE id=ANY($1)",[[a,b,c]]);await query("DELETE FROM sending_domains WHERE id=$1",[domainId]);
  await db().end();
 });
@@ -156,18 +149,19 @@ describe("trusted inbound clocks and durable recovery",()=>{
 });
 
 describe("independent recovery, notification binding and lifecycle",()=>{
- it("continues other copies after a failure and freezes routes across retries",async()=>{
+ it("continues other copies after a failure and freezes receiving bindings across retries",async()=>{
+  await query("UPDATE service_domain_bindings SET receive_enabled=false WHERE service_id=$1 AND sending_domain_id=$2",[c,domainId]);
   const message=make({envelopeRecipients:[`help@${domain}`,`other@${domain}`],attachments:[{fileName:"private.txt",contentType:"text/plain",content:Buffer.from("bytes")}]});
   const store=objectStore(),put=vi.spyOn(store,"put");put.mockRejectedValueOnce(new Error("temporary storage outage"));
   try {
    await expect(persist(message)).rejects.toThrow("temporary storage outage");
    expect((await query("SELECT service_id,status FROM inbound_messages WHERE external_message_id=$1 AND status='ready'",[message.externalMessageId])).rows).toHaveLength(1);
-   await query("INSERT INTO inbound_routes(id,provider_webhook_endpoint_id,sending_domain_id,service_id) VALUES($1,'pwe_mock',$2,$3)",[routed("late"),domainId,c]);
+   await query("UPDATE service_domain_bindings SET receive_enabled=true WHERE service_id=$1 AND sending_domain_id=$2",[c,domainId]);
    await persist(message);await persist(message);
    const copies=(await query<{id:string;service_id:string}>("SELECT id,service_id FROM inbound_messages WHERE external_message_id=$1",[message.externalMessageId])).rows;
    expect(copies.map(r=>r.service_id).sort()).toEqual([a,b].sort());
    expect((await query("SELECT id FROM inbound_attachments WHERE inbound_message_id=ANY($1)",[copies.map(c=>c.id)])).rowCount).toBe(2);
-  } finally {put.mockRestore();await query("DELETE FROM inbound_routes WHERE id=$1",[routed("late")]);}
+  } finally {put.mockRestore();await query("UPDATE service_domain_bindings SET receive_enabled=true WHERE service_id=$1 AND sending_domain_id=$2",[c,domainId]);}
  });
  it("distinguishes polling, valid callbacks, disabled/misowned bindings and missing subscriptions",async()=>{
   expect((await discoverMail({...identity,serviceId:b})).domains[0].notification).toMatchObject({mode:"polling",state:"configured"});
@@ -224,6 +218,8 @@ describe("independent recovery, notification binding and lifecycle",()=>{
   await purgeContent("inbound",copies.find(row=>row.service_id===a)!.id,a);
   expect((await query("SELECT raw_body,content_purged_at FROM raw_provider_events WHERE id=$1",[rawId])).rows[0]).toMatchObject({content_purged_at:null,raw_body:Buffer.from("sensitive")});
   await purgeContent("inbound",copies.find(row=>row.service_id===b)!.id,b);
+  expect((await query("SELECT content_purged_at FROM raw_provider_events WHERE id=$1",[rawId])).rows[0].content_purged_at).toBeNull();
+  await purgeContent("inbound",copies.find(row=>row.service_id===c)!.id,c);
   expect((await query("SELECT raw_body,verification,content_purged_at FROM raw_provider_events WHERE id=$1",[rawId])).rows[0]).toMatchObject({raw_body:null,verification:{},content_purged_at:expect.any(Date)});
   await expect(replayRawEvent(rawId,"test")).rejects.toThrow("expired");await processRawProviderEvent(rawId);
   await persist(message,rawId);
@@ -276,7 +272,7 @@ describe("independent recovery, notification binding and lifecycle",()=>{
    const plan=(await query(`EXPLAIN (ANALYZE,BUFFERS,FORMAT JSON) ${sql}`,values as unknown[])).rows[0]["QUERY PLAN"][0];
    expect(plan["Execution Time"]).toBeGreaterThanOrEqual(0);timings.push(plan["Execution Time"]);
   }
-  expect(timings).toHaveLength(3);
+  expect(timings).toHaveLength(2);
   console.info("Isolated discovery query execution times (ms; not a production benchmark)",timings);
  });
  it("overlaps credential rotation with stable service history and idempotency, then revokes explicitly",async()=>{

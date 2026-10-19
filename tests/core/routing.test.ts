@@ -1,32 +1,30 @@
 import { describe, expect, it } from "vitest";
-import { choosePolicyTarget, chooseWeighted } from "@/modules/outbound/domain/routing";
+import { evaluateCandidate } from "@/modules/outbound/domain/routing";
 
-const candidate = (id: string, overrides: Partial<{
-  priority: number;
-  weight: number
-}> = {}) => ({
-  id,
-  priority: 100,
-  weight: 100,
-  ...overrides
-});
-describe("routing selection", () => {
-  it("always selects the lowest priority tier", () => {
-    expect(chooseWeighted("delivery", 1, [candidate("secondary", { priority: 200 }), candidate("primary", { priority: 10 })])?.id).toBe("primary")
+const candidate = {
+  account_status: "active",
+  health: { status: "healthy" },
+  identity_status: "verified",
+  domain_status: "active",
+  quota: { dailyLimit: 100, monthlyLimit: 1000 },
+  daily_usage: "10",
+  monthly_usage: "100",
+};
+
+describe("bound outbound identity eligibility", () => {
+  it("accepts an active verified identity within quota", () => {
+    expect(evaluateCandidate(candidate)).toEqual([]);
   });
-  it("uses deterministic weighted selection", () => {
-    const list = [candidate("a", { weight: 1 }), candidate("b", { weight: 9 })];
-    expect(chooseWeighted("same", 1, list)?.id).toBe(chooseWeighted("same", 1, list)?.id)
+
+  it("reports unavailable account, identity, and domain", () => {
+    expect(evaluateCandidate({ ...candidate, account_status: "disabled", identity_status: "pending", domain_status: "disabled" })).toEqual([
+      "account_unavailable", "identity_unverified", "domain_disabled",
+    ]);
   });
-});
-describe("policy precedence", () => {
-  it("evaluates policy priority before target priority", () => {
-    const target = choosePolicyTarget("delivery", 1, [{
-      id: "high-policy-low-target",
-      policyPriority: 200,
-      priority: 1,
-      weight: 100
-    }, { id: "low-policy-high-target", policyPriority: 10, priority: 500, weight: 100 }]);
-    expect(target?.id).toBe("low-policy-high-target")
-  })
+
+  it("reports exhausted quota", () => {
+    expect(evaluateCandidate({ ...candidate, daily_usage: "100", monthly_usage: "1000" })).toEqual([
+      "monthly_quota_exhausted", "daily_quota_exhausted",
+    ]);
+  });
 });

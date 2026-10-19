@@ -1,7 +1,7 @@
 vi.mock("@/server/admin-auth", () => ({ getAdminSession: vi.fn().mockResolvedValue({ email: "admin@example.test" }) }));
 import { describe, expect, it, vi } from "vitest";
 import { getAdminSession } from "@/server/admin-auth";
-import { adminData } from "@/server/admin-queries";
+import { adminData,dashboardData } from "@/server/admin-queries";
 
 describe("admin data queries", () => {
   it("returns callback ownership fields used by inbound routing", async () => {
@@ -44,14 +44,30 @@ describe("historical delivery search", () => {
   });
 });
 
-import { setDomainGrant, toggleDomainGrant } from "@/modules/identity/public";
 import { sendTestMessage } from "@/modules/outbound/public";
 import { createMessageSchema } from "@/lib/contracts";
 import { getDeliveryDetail, messageComposerData } from "@/server/admin-queries";
+import { setDomainInboundProvider } from "@/modules/channels/public";
+import { discoverMail } from "@/modules/identity/public";
 
 describe("native admin mail", () => {
+  it("reflects inbound provider changes in domain settings and Service discovery", async () => {
+    try {
+      await setDomainInboundProvider("sd_atlas",null,"test-admin");
+      const disabled=await adminData("domains");
+      expect(disabled.domains?.find(domain=>domain.id==="sd_atlas")?.inbound_provider_account_id).toBeNull();
+      const unavailable=await discoverMail({serviceId:"svc_atlas_auth",serviceName:"Atlas Auth",rateLimitPerMinute:60});
+      expect(unavailable.domains.find(domain=>domain.id==="sd_atlas")?.permissions.receive).toBe(false);
+    } finally {
+      await setDomainInboundProvider("sd_atlas","pa_mock","test-admin");
+    }
+    const enabled=await adminData("domains");
+    expect(enabled.domains?.find(domain=>domain.id==="sd_atlas")).toMatchObject({inbound_provider_account_id:"pa_mock",inbound_ready:true});
+    const available=await discoverMail({serviceId:"svc_atlas_auth",serviceName:"Atlas Auth",rateLimitPerMinute:60});
+    expect(available.domains.find(domain=>domain.id==="sd_atlas")?.receiving.state).toBe("configured");
+  });
+
   it("accepts manually entered mail parameters and retains recipient roles in queries", async () => {
-    const grant=await setDomainGrant({serviceId:"svc_atlas_auth",domainId:"sd_atlas",send:true,receive:true},"test-admin");
     const permission={from_local_part:`admin-${crypto.randomUUID()}`};
     let messageId: string | undefined;
     try {
@@ -68,19 +84,12 @@ describe("native admin mail", () => {
       expect(detail?.recipientRole).toBe("bcc");
       expect(detail?.content?.reply_to).toEqual([{email:"help@example.test"}]);
       expect(detail?.content?.cc_recipients).toEqual([{email:"admin-cc@example.test"}]);
-      await toggleDomainGrant(grant, false, "test-admin");
-      expect((await query<{ status: string }>("SELECT status FROM service_domain_grants WHERE id=$1", [grant])).rows[0].status).toBe("disabled");
     } finally {
       if (messageId) {
         await query("DELETE FROM outbox_events WHERE payload->>'messageId'=$1 OR payload->>'deliveryId' IN (SELECT id FROM deliveries WHERE message_id=$1) OR payload->>'submissionId' IN (SELECT id FROM submissions WHERE message_id=$1)", [messageId]);
         await query("DELETE FROM messages WHERE id=$1", [messageId]);
       }
-      await toggleDomainGrant(grant,true,"test-admin");
     }
-  });
-
-  it("rejects grants to unknown business services",async()=>{
-    await expect(setDomainGrant({serviceId:"missing",domainId:"sd_atlas",send:true,receive:false},"test-admin")).rejects.toThrow("active business service");
   });
 
   it("loads active services for composition and sending permissions for credential management", async () => {
@@ -91,9 +100,11 @@ describe("native admin mail", () => {
     const access = await adminData("api-keys");
     expect(access.services).toEqual(expect.arrayContaining([expect.objectContaining({ id: "svc_atlas_auth" })]));
     expect(access.domains).toEqual(expect.arrayContaining([expect.objectContaining({ id: "sd_atlas" })]));
-    expect(access.grants).toEqual(expect.arrayContaining([expect.objectContaining({
-      service_id: "svc_atlas_auth", domain: "mail.atlas.test",
+    expect(access.services).toEqual(expect.arrayContaining([expect.objectContaining({
+      id: "svc_atlas_auth", domain_bindings: expect.arrayContaining([expect.objectContaining({sending_domain_id:"sd_atlas"})]),
     })]));
+    const dashboard=await dashboardData();
+    expect(dashboard.setup.chains).toEqual(expect.arrayContaining([expect.objectContaining({id:"svc_atlas_auth:sd_atlas",grant:true,route:true})]));
   });
 });
 

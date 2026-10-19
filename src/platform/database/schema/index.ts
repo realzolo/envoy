@@ -1,5 +1,6 @@
 export * from "./identity";
 export * from "./channels";
+export * from "./domain-bindings";
 export * from "./outbound";
 export * from "./inbound";
 export * from "./attachments";

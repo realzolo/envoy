@@ -1,7 +1,6 @@
 import { resolveOutboundAttachments } from "@/modules/attachments/public";
 import { authorizedSendingDomain } from "@/modules/identity/public";
 import { createUnitOfWork, pool, transactionContext } from "@/platform/database";
-import { reserveRateLimits } from "@/platform/runtime-store";
 import type { Pool, PoolClient } from "pg";
 import type { OutboundRepositories } from "../application/ports";
 import { createEventsRepository } from "./events.repository";
@@ -25,9 +24,6 @@ export function createOutboundRepositories(executor: Pool | PoolClient, transact
         },
         resolveOutboundAttachments(serviceId, attachments, domainId) {
             return resolveOutboundAttachments(serviceId, attachments, transactionContext(requiredTransaction()), domainId);
-        },
-        reserveRateLimits(entries) {
-            return reserveRateLimits(requiredTransaction(), entries);
         },
     };
 }

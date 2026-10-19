@@ -1,13 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createInboundService } from "@/modules/inbound/application/service";
 import type { InboundDependencies, InboundRepository } from "@/modules/inbound/application/ports";
-import type { InboundRoute } from "@/modules/inbound/contracts";
+import type { InboundDispatch } from "@/modules/inbound/contracts";
 
-const route: InboundRoute = { id: "ir_test", service_id: "svc_test", recipients: ["support@example.test"] };
+const route: InboundDispatch = { service_id: "svc_test", recipients: ["support@example.test"] };
 const now = new Date("2026-09-24T00:00:00.000Z");
 const result = () => Promise.resolve({ rows: [], rowCount: 1 });
 const repository: InboundRepository = {
-  findRoutes: vi.fn(), freezeReceipt: vi.fn(result), readReceipt: vi.fn(), findTombstone: vi.fn(), insertRejected: vi.fn(),
+  findDispatches: vi.fn(), freezeReceipt: vi.fn(result), readReceipt: vi.fn(), findTombstone: vi.fn(), insertRejected: vi.fn(),
   allowedDomains: vi.fn(), findCopy: vi.fn(), insertCopy: vi.fn(result), findConcurrentCopy: vi.fn(), recordDates: vi.fn(result),
   claimCopy: vi.fn(), copyState: vi.fn(), renewClaim: vi.fn(result), authorizeCompletion: vi.fn(result), completeCopy: vi.fn(),
   insertAttachment: vi.fn(result), subscribedCallbacks: vi.fn(), insertCallback: vi.fn(result), enqueueCallback: vi.fn(result),
@@ -27,7 +27,7 @@ const input = () => ({ providerAccountId: "pa_test", webhookEndpointId: "pwe_tes
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(repository.findRoutes).mockResolvedValue({ rows: [route], rowCount: 1 });
+  vi.mocked(repository.findDispatches).mockResolvedValue({ rows: [route], rowCount: 1 });
   vi.mocked(repository.readReceipt).mockResolvedValue({ rows: [{ routes: [route], terminated_at: null, ingress_received_at: now }], rowCount: 1 });
   vi.mocked(repository.allowedDomains).mockResolvedValue({ rows: [{ domain: "example.test" }], rowCount: 1 });
   vi.mocked(repository.findCopy).mockResolvedValue({ rows: [], rowCount: 0 });
@@ -52,13 +52,13 @@ describe("inbound application without a database", () => {
     expect(repository.rejectCopy).toHaveBeenCalledWith(expect.objectContaining({ reason: "INBOUND_MESSAGE_TOO_LARGE" }));
     expect(uploads.put).not.toHaveBeenCalled();
   });
-  it("quarantines receipts with no eligible routes", async () => {
-    vi.mocked(repository.findRoutes).mockResolvedValue({ rows: [], rowCount: 0 });
+  it("quarantines receipts with no receiving Service", async () => {
+    vi.mocked(repository.findDispatches).mockResolvedValue({ rows: [], rowCount: 0 });
     vi.mocked(repository.readReceipt).mockResolvedValue({ rows: [{ routes: [], terminated_at: null, ingress_received_at: now }], rowCount: 1 });
     vi.mocked(repository.findTombstone).mockResolvedValue({ rows: [], rowCount: 0 });
     vi.mocked(repository.insertRejected).mockResolvedValue({ rows: [{ id: "inb_test" }], rowCount: 1 });
     await expect(persistInbound(input())).resolves.toBe("inb_test");
-    expect(repository.insertRejected).toHaveBeenCalledWith(expect.objectContaining({ reason: "NO_INBOUND_ROUTE" }));
+    expect(repository.insertRejected).toHaveBeenCalledWith(expect.objectContaining({ reason: "NO_RECEIVING_SERVICE" }));
     expect(uploads.put).not.toHaveBeenCalled();
   });
 });

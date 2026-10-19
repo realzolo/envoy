@@ -18,7 +18,7 @@ export function GET(request: Request) {
   // Cross-field and UTF-8 byte constraints cannot be inferred from Zod refinements.
   const create = schemas.CreateMessage;
   create.anyOf = [{ required: ["html"], properties: { html: { minLength: 1 } } }, { required: ["text"], properties: { text: { minLength: 1 } } }];
-  create.description = "sendBefore is an optional future UTC ISO timestamp; every new submission is blocked at or after that instant. Sensitive content requires sendBefore within 900 seconds, is encrypted at rest, never readable through APIs/admin, and is purged after the deadline. Same idempotency key and payload replay the original acceptance even after expiry. From is supplied directly and must be authorized by an active Service domain sending grant. To, Cc and Bcc together contain 1–50 unique recipients. Recipient roles and visible headers are preserved. Inline attachments require unique contentId. Header names are case-insensitive and may not repeat; system, routing and authentication headers are reserved. Attachments belong to this service, are retained and currently safety-approved, total at most 20 MB and each file is at most 10 MB. Only supported eligible routes are used; unsupported features fail explicitly.";
+  create.description = "sendBefore is an optional future UTC ISO timestamp; every new submission is blocked at or after that instant. Sensitive content requires sendBefore within 900 seconds, is encrypted at rest, never readable through APIs/admin, and is purged after the deadline. Same idempotency key and payload replay the original acceptance even after expiry. From is supplied directly and must have an active Service-domain binding with a verified sending provider. To, Cc and Bcc together contain 1–50 unique recipients. Recipient roles and visible headers are preserved. Inline attachments require unique contentId. Header names are case-insensitive and may not repeat; system and authentication headers are reserved. Attachments belong to this service, are retained and currently safety-approved, total at most 20 MB and each file is at most 10 MB. Provider capabilities are checked before sending; unsupported features fail explicitly.";
   create["x-totalRecipientMinimum"] = 1;
   create["x-totalRecipientMaximum"] = 50;
   if (create.properties) {
@@ -61,7 +61,7 @@ export function GET(request: Request) {
       "/files/{id}/reprocess": {post:operation("Request audited reprocessing; malicious, integrity-blocked or purged resources cannot be retried",{type:"object",properties:{id:{type:"string"},processing:{const:true}}},[id],"202")},
       "/inbound-messages/{id}/attachments/{attachmentId}/reprocess": {post:operation("Request audited reprocessing of this service attachment",{type:"object",properties:{id:{type:"string"},processing:{const:true}}},[id,{...id,name:"attachmentId"}],"202")},
       "/files/{id}": { get: operation("Read attachment metadata owned by this service; storage keys are private", ref("File"), [id]) },
-      "/capabilities": { get: operation("Discover business identity, domain permissions, configuration readiness and transport evidence", { type: "object", required: ["apiVersion", "service", "limits", "content", "features", "mail", "messagePolicies", "attachmentSafety", "routing", "resources"], properties: {
+      "/capabilities": { get: operation("Discover business identity, domain permissions, configuration readiness and transport evidence", { type: "object", required: ["apiVersion", "service", "limits", "content", "features", "mail", "messagePolicies", "attachmentSafety", "resources"], properties: {
         apiVersion: { const: "v1" },
         service: { type: "object", required: ["id", "name"], properties: { id: { type: "string" }, name: { type: "string" } } },
         limits: { type: "object", properties: { recipientsPerMessage: { const: 50 }, contentBytesPerPart: { const: 2_000_000 }, requestBytes: { const: 4_200_000 }, fileBytes: { const: 10_000_000 }, attachmentsPerMessage: { const: 20 }, attachmentBytesPerMessage: { const: 20_000_000 }, metadataEntries: { const: 20 }, requestsPerMinute: { type: "integer" } } },
@@ -70,7 +70,7 @@ export function GET(request: Request) {
         features: { type: "object", additionalProperties: { type: ["boolean", "string"] } },
         mail: { ...ref("MailDiscovery"), description: "Service-scoped domain sending/receiving permissions; no APP or mailbox entities. Configuration and historical evidence do not guarantee current delivery." },
         attachmentSafety: {type:"object",required:["processing","mode","policyVersion","runtimeAvailability"],properties:{processing:{const:"asynchronous"},mode:{const:"require_clean"},policyVersion:{type:"string"},runtimeAvailability:{const:"unknown"}}},
-        routing: { type: "string" }, resources: { type: "array", items: { type: "string" } },
+        resources: { type: "array", items: { type: "string" } },
       } }) },
     },
     webhooks: {

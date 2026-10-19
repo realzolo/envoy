@@ -113,49 +113,20 @@ export function createRoutingRepository(client: Pick<PoolClient, "query">): Rout
         }) {
             return client.query<Record<string, unknown>>("UPDATE submissions SET status='canceled',updated_at=now() WHERE id=$1", [input.submissionId]);
         },
-        listRoutingCandidates(input: {
+        findBoundProvider(input: {
             sendingDomainId: string;
             serviceId: string;
-            messageCategory: string;
         }) {
-            return client.query<Candidate>(`SELECT rt.id AS target_id,rp.id AS policy_id,rp.name AS policy_name,rp.priority AS policy_priority,rt.provider_account_id,rt.provider_identity_id,
-      pa.type AS provider_type,pa.name AS provider_name,rt.priority,rt.weight,rt.rate_limit_per_minute,sd.domain,pa.quota,rt.status,rt.circuit_open_until,pa.status AS account_status,pa.health,pi.status AS identity_status,sd.status AS domain_status,
+            return client.query<Candidate>(`SELECT pi.provider_account_id,pi.id AS provider_identity_id,
+      pa.type AS provider_type,pa.name AS provider_name,sd.domain,pa.quota,pa.status AS account_status,pa.health,pi.status AS identity_status,sd.status AS domain_status,
       usage.monthly_usage::text,usage.daily_usage::text
-      FROM routing_policies rp JOIN routing_targets rt ON rt.policy_id=rp.id
-      JOIN provider_accounts pa ON pa.id=rt.provider_account_id JOIN provider_identities pi ON pi.id=rt.provider_identity_id
-      JOIN sending_domains sd ON sd.id=pi.sending_domain_id
+      FROM service_domain_bindings b JOIN provider_identities pi ON pi.id=b.outbound_provider_identity_id
+      JOIN provider_accounts pa ON pa.id=pi.provider_account_id JOIN sending_domains sd ON sd.id=b.sending_domain_id
       CROSS JOIN LATERAL (SELECT count(*) FILTER (WHERE a.started_at>=date_trunc('month',now())) AS monthly_usage,
         count(*) FILTER (WHERE a.started_at>=date_trunc('day',now())) AS daily_usage
         FROM submission_attempts a JOIN submission_deliveries sm ON sm.submission_id=a.submission_id
         WHERE a.provider_account_id=pa.id AND a.status IN ('submitting','accepted','reconciled','unknown','reconciling')) usage
-      WHERE rp.status='active' AND rp.sending_domain_id=$1 AND pi.sending_domain_id=$1 AND pi.provider_account_id=pa.id
-        AND (rp.service_scope='all' OR EXISTS(SELECT 1 FROM routing_policy_services rs WHERE rs.policy_id=rp.id AND rs.service_id=$2))
-        AND (rp.message_category IS NULL OR rp.message_category=$3)
-      ORDER BY rp.priority,rt.priority,rt.id`, [input.sendingDomainId, input.serviceId, input.messageCategory]);
-        },
-        listFailedAccounts(input: {
-            submissionId: string;
-        }) {
-            return client.query<{
-                provider_account_id: string;
-            }>("SELECT DISTINCT provider_account_id FROM submission_attempts WHERE submission_id=$1 AND status='failed'", [input.submissionId]);
-        },
-        beginCapacityReservation() {
-            return client.query<Record<string, unknown>>("SAVEPOINT routing_capacity", []);
-        },
-        commitCapacityReservation() {
-            return client.query<Record<string, unknown>>("RELEASE SAVEPOINT routing_capacity", []);
-        },
-        rollbackCapacityReservation() {
-            return client.query<Record<string, unknown>>("ROLLBACK TO SAVEPOINT routing_capacity", []);
-        },
-        releaseCapacityReservation() {
-            return client.query<Record<string, unknown>>("RELEASE SAVEPOINT routing_capacity", []);
-        },
-        closeExpiredCircuit(input: {
-            targetId: string;
-        }) {
-            return client.query<Record<string, unknown>>("UPDATE routing_targets SET status='active',circuit_open_until=NULL,updated_at=now() WHERE id=$1 AND status='circuit_open'", [input.targetId]);
+      WHERE b.sending_domain_id=$1 AND b.service_id=$2 AND pi.sending_domain_id=$1`, [input.sendingDomainId, input.serviceId]);
         },
         insertAttempt(input: {
             attemptId: string;
@@ -163,33 +134,7 @@ export function createRoutingRepository(client: Pick<PoolClient, "query">): Rout
             attemptNumber: number;
             providerAccountId: string;
             providerIdentityId: string;
-            snapshot: {
-                policy: {
-                    id: string;
-                    name: string;
-                    priority: number;
-                };
-                chosen: {
-                    targetId: string;
-                    accountId: string;
-                    identityId: string;
-                    providerType: "resend" | "ses" | "sendgrid" | "mailgun" | "postmark" | "mock";
-                    nativeIdempotency: boolean;
-                };
-                candidates: {
-                    targetId: string;
-                    policyId: string;
-                    policyPriority: number;
-                    accountId: string;
-                    identityId: string;
-                    priority: number;
-                    weight: number;
-                    reasons: string[];
-                    capabilityIssue: string | null;
-                }[];
-                selectedAt: string;
-                recipientCount: number;
-            };
+            snapshot: Record<string, unknown>;
             fingerprint: string;
             providerIdempotencyKey: string | null;
         }) {
@@ -245,11 +190,6 @@ export function createRoutingRepository(client: Pick<PoolClient, "query">): Rout
         }) {
             return client.query<Record<string, unknown>>("UPDATE submissions SET status='accepted',updated_at=now() WHERE id=$1", [input.submissionId]);
         },
-        resetCircuit(input: {
-            targetId: string;
-        }) {
-            return client.query<Record<string, unknown>>("UPDATE routing_targets SET status='active',circuit_open_until=NULL,updated_at=now() WHERE id=$1", [input.targetId]);
-        },
         markAttemptUnknown(input: {
             attemptId: string;
             code: string;
@@ -277,22 +217,6 @@ export function createRoutingRepository(client: Pick<PoolClient, "query">): Rout
             status: "failed" | "deferred";
         }) {
             return client.query<Record<string, unknown>>("UPDATE submissions SET status=$2,updated_at=now() WHERE id=$1", [input.submissionId, input.status]);
-        },
-        readCircuitFailureWindow(input: {
-            targetId: string;
-            categories: string[];
-            threshold: number;
-        }) {
-            return client.query<{
-                sample_count: string;
-                all_failed: boolean;
-            }>("SELECT count(*)::text AS sample_count,COALESCE(bool_and(status='failed' AND error_category=ANY($2::text[])),false) AS all_failed FROM (SELECT status,error_category FROM submission_attempts WHERE routing_snapshot#>>'{chosen,targetId}'=$1 ORDER BY started_at DESC LIMIT $3) samples", [input.targetId, input.categories, input.threshold]);
-        },
-        openCircuit(input: {
-            targetId: string;
-            seconds: number;
-        }) {
-            return client.query<Record<string, unknown>>("UPDATE routing_targets SET status='circuit_open',circuit_open_until=now()+$2*interval '1 second',updated_at=now() WHERE id=$1", [input.targetId, input.seconds]);
         },
         claimReconciliation(input: {
             attemptId: string;

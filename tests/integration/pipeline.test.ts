@@ -8,8 +8,7 @@ import { listDeliveries } from "@/modules/outbound/public";
 import { ingestProviderWebhook } from "@/modules/inbound/public";
 import { addSuppression } from "@/modules/suppressions/public";
 import { createDomain, rotateProviderCredential } from "@/modules/channels/public";
-import { createInboundRoute } from "@/modules/inbound/public";
-import { createRoutingPolicy, manualRetryDelivery, simulateRouting } from "@/modules/outbound/public";
+import { manualRetryDelivery } from "@/modules/outbound/public";
 import { replayDeadLetters } from "@/modules/callbacks/public";
 import { CanonicalProviderError } from "@/integrations/providers/contracts";
 import { objectStore } from "@/platform/storage/object-store";
@@ -54,7 +53,6 @@ const suppressionEmails: string[] = [];
 const inboundIds: string[] = [];
 afterAll(async () => {
   await query("UPDATE provider_accounts SET status='active',quota=$2 WHERE id=$1", ["pa_mock", { monthlyLimit: 100000 }]);
-  await query("UPDATE routing_targets SET status='active',circuit_open_until=NULL WHERE provider_account_id='pa_mock'");
   for (const id of messageIds) {
     await query("DELETE FROM outbox_events WHERE payload->>'attemptId' IN (SELECT sa.id FROM submission_attempts sa JOIN submissions s ON s.id=sa.submission_id WHERE s.message_id=$1)", [id]);
     await query("DELETE FROM outbox_events WHERE payload->>'callbackDeliveryId' IN (SELECT id FROM callback_deliveries WHERE payload#>>'{data,messageId}'=$1)", [id]);
@@ -339,48 +337,16 @@ describe("durable message pipeline", () => {
     }).success).toBe(false);
   });
 
-  it("applies routing defaults and rejects invalid admin resource relationships before configuration is stored", async () => {
+  it("rejects invalid provider and domain binding relationships", async () => {
     const suffix = crypto.randomUUID().replaceAll("-", "").slice(0, 12);
     const foreignServiceId = `svc_integrity_${suffix}`;
     const manualAccountId = `pa_manual_${suffix}`;
     const mailgunAccountId = `pa_mailgun_${suffix}`;
     let manualDomainId: string | undefined;
-    const policyId = await createRoutingPolicy({
-      name: `Integrity policy ${suffix}`,
-      services: { mode: "selected", serviceIds: ["svc_atlas_auth"] },
-      domainId: "sd_atlas",
-      category: `integrity-${suffix}`,
-      targets: [{ accountId: "pa_mock", identityId: "pi_atlas_mock" }]
-    }, "test-suite");
-    let inboundRouteId: string | undefined;
     try {
-      expect((await query<{
-        service_scope: string;
-        sending_domain_id: string;
-        policy_priority: number;
-        target_priority: number;
-        weight: number;
-        rate_limit_per_minute: number
-      }>(`SELECT rp.service_scope,rp.sending_domain_id,rp.priority AS policy_priority,
-        rt.priority AS target_priority,rt.weight,rt.rate_limit_per_minute
-        FROM routing_policies rp JOIN routing_targets rt ON rt.policy_id=rp.id WHERE rp.id=$1`, [policyId])).rows[0]).toEqual({
-        service_scope: "selected",
-        sending_domain_id: "sd_atlas",
-        policy_priority: 100,
-        target_priority: 100,
-        weight: 100,
-        rate_limit_per_minute: 1000
-      });
-      await expect(createRoutingPolicy({
-        name: `No targets ${suffix}`,
-        domainId: "sd_atlas",
-        targets: []
-      }, "test-suite")).rejects.toThrow(/At least one routing target/);
-      await expect(createRoutingPolicy({
-        name: `Wrong account ${suffix}`,
-        domainId: "sd_atlas",
-        targets: [{ accountId: "pa_other", identityId: "pi_atlas_mock" }]
-      }, "test-suite")).rejects.toThrow(/identity owned by its provider account/);
+      expect((await query<{ outbound_provider_identity_id: string }>(
+        "SELECT outbound_provider_identity_id FROM service_domain_bindings WHERE service_id='svc_atlas_auth' AND sending_domain_id='sd_atlas'"
+      )).rows[0].outbound_provider_identity_id).toBe("pi_atlas_mock");
       await expect(createDomain({
         domain: `duplicate-account-${suffix}.example.test`,
         accountIds: ["pa_mock", "pa_mock"]
@@ -400,12 +366,10 @@ describe("durable message pipeline", () => {
         status: "verified",
         external_identity_id: null
       });
-      await expect(createRoutingPolicy({
-        name: `Cross-domain target ${suffix}`,
-        domainId: "sd_atlas",
-        targets: [{ accountId: manualAccountId, identityId: manualIdentity.id }]
-      }, "test-suite")).rejects.toThrow(/selected sending domain/);
-      expect((await simulateRouting({ domainId: manualDomainId, serviceId: "svc_atlas_auth", category: "security" })).candidates).toEqual([]);
+      await expect(query(
+        "UPDATE service_domain_bindings SET outbound_provider_identity_id=$1 WHERE service_id='svc_atlas_auth' AND sending_domain_id='sd_atlas'",
+        [manualIdentity.id]
+      )).rejects.toThrow();
       const mailgunCredential = sealSecret({ type: "mailgun", apiKey: "key-mailgun-test" }, mailgunAccountId, 1);
       await query("INSERT INTO provider_accounts(id,type,name,status,public_config) VALUES ($1,'mailgun',$2,'active',$3)", [mailgunAccountId, `Mailgun provider ${suffix}`, {
         region: "us",
@@ -431,22 +395,15 @@ describe("durable message pipeline", () => {
       }, "test-suite")).rejects.toThrow(/Global suppressions cannot target/);
 
       await query("INSERT INTO services(id,name) VALUES ($1,$2)", [foreignServiceId, "Integrity service"]);
-      await expect(createInboundRoute({
-        webhookEndpointId: "pwe_mock",
-        domainId: "sd_atlas",
-        serviceId: foreignServiceId,
-      }, "test-suite")).rejects.toThrow(/receiving permission/);
-      await expect(createInboundRoute({webhookEndpointId:"pwe_mock",domainId:"sd_atlas",serviceId:"svc_atlas_auth"},"test-suite")).rejects.toThrow(/duplicate/);
-      await expect(query("INSERT INTO routing_policy_services(policy_id,service_id) VALUES ($1,$2)", [policyId, `svc_missing_${suffix}`])).rejects.toThrow();
+      await expect(query("INSERT INTO service_domain_bindings(id,service_id,sending_domain_id,receive_enabled,outbound_provider_identity_id) VALUES ($1,$2,'sd_atlas',false,'pi_atlas_mock')", [`sdb_missing_${suffix}`, `svc_missing_${suffix}`])).rejects.toThrow();
+      await expect(query("INSERT INTO service_domain_bindings(id,service_id,sending_domain_id,receive_enabled,outbound_provider_identity_id) VALUES ($1,'svc_atlas_auth','sd_atlas',false,'pi_atlas_mock')", [`sdb_duplicate_${suffix}`])).rejects.toThrow();
       await expect(query("INSERT INTO suppressions(id,scope_type,service_id,email_normalized,reason,source) VALUES ($1,'global',$2,$3,'manual','test')", [
         `sup_cross_${suffix}`, "svc_atlas_auth", `scope-${suffix}@example.test`
       ])).rejects.toThrow();
     } finally {
-      if (inboundRouteId) await query("DELETE FROM inbound_routes WHERE id=$1", [inboundRouteId]);
       if (manualDomainId) await query("DELETE FROM sending_domains WHERE id=$1", [manualDomainId]);
       await query("DELETE FROM provider_accounts WHERE id=$1", [mailgunAccountId]);
       await query("DELETE FROM provider_accounts WHERE id=$1", [manualAccountId]);
-      await query("DELETE FROM routing_policies WHERE id=$1", [policyId]);
       await query("DELETE FROM services WHERE id=$1", [foreignServiceId]);
     }
   });
@@ -724,36 +681,24 @@ describe("durable message pipeline", () => {
       count: string
     }>("SELECT count(*) FROM submission_attempts WHERE submission_id IN (SELECT submission_id FROM submission_deliveries WHERE delivery_id=$1)", [delivery.id])).rows[0].count)).toBe(1)
   });
-  it("opens the target circuit after consecutive retryable failures", async () => {
-    const created: string[] = [];
-    try {
-      for (let index = 0; index < 5; index += 1) {
-        const accepted = await acceptMessage({
-          identity,
-          idempotencyKey: `circuit-${crypto.randomUUID()}`,
-          input: { ...request, to: [{ email: `circuit-${index}-${crypto.randomUUID()}@example.net` }] }
-        });
-        messageIds.push(accepted.message.id);
-        created.push(accepted.message.id);
-        const delivery = (await query<{
-          id: string
-        }>("SELECT id FROM deliveries WHERE message_id=$1", [accepted.message.id])).rows[0];
-        const submission = await prepareRecipientSubmission(delivery.id);
-        if (!submission || "reconcileAttemptId" in submission) throw new Error("Expected a routable submission");
-        await markDeterminateFailure(submission.attemptId, {
-          category: "provider",
-          code: "fixture_unavailable",
-          message: "Fixture outage"
-        }, true)
-      }
-      expect((await query<{
-        status: string
-      }>(`SELECT rt.status FROM routing_targets rt JOIN routing_policies rp ON rp.id=rt.policy_id
-          WHERE rp.id='rp_atlas_security' ORDER BY rp.priority,rt.priority LIMIT 1`)).rows[0].status).toBe("circuit_open")
-    } finally {
-      await query(`UPDATE routing_targets SET status='active',circuit_open_until=NULL
-        WHERE policy_id IN (SELECT id FROM routing_policies WHERE id='rp_atlas_security')`)
-    }
+  it("retries a determinate provider failure through the same bound identity", async () => {
+    const accepted = await acceptMessage({
+      identity,
+      idempotencyKey: `retry-provider-${crypto.randomUUID()}`,
+      input: { ...request, to: [{ email: `retry-provider-${crypto.randomUUID()}@example.net` }] }
+    });
+    messageIds.push(accepted.message.id);
+    const delivery = (await query<{ id: string }>("SELECT id FROM deliveries WHERE message_id=$1", [accepted.message.id])).rows[0];
+    const first = await prepareRecipientSubmission(delivery.id);
+    if (!first || "reconcileAttemptId" in first) throw new Error("Expected first attempt");
+    await markDeterminateFailure(first.attemptId, { category: "provider", code: "fixture_unavailable", message: "Fixture outage" }, true);
+    expect((await query<{ status: string }>("SELECT status FROM submissions WHERE id=$1", [first.submissionId])).rows[0].status).toBe("deferred");
+    const second = await prepareRecipientSubmission(delivery.id);
+    if (!second || "reconcileAttemptId" in second) throw new Error("Expected retry attempt");
+    expect(second.attemptNumber).toBe(2);
+    expect(second.providerAccountId).toBe(first.providerAccountId);
+    expect(second.providerIdentityId).toBe(first.providerIdentityId);
+    await markAccepted(second.attemptId, `retry-accepted-${crypto.randomUUID()}`);
   });
   it("accepts, sanitizes, deduplicates, and routes inbound mail while outbound is disabled", async () => {
     const eventId = `fixture-inbound-${crypto.randomUUID()}`;
@@ -769,7 +714,7 @@ describe("durable message pipeline", () => {
       text: "Safe"
     };
     const raw = new TextEncoder().encode(JSON.stringify(payload));
-    await query("UPDATE provider_accounts SET status='disabled' WHERE id='pa_mock'");
+    await query("UPDATE service_domain_bindings SET outbound_provider_identity_id=NULL WHERE service_id='svc_atlas_auth' AND sending_domain_id='sd_atlas'");
     try {
       const accepted = await ingestProviderWebhook("mock", "test-endpoint", {
         rawBody: raw,
@@ -796,7 +741,7 @@ describe("durable message pipeline", () => {
       if (duplicate.status !== 202) throw new Error("Expected accepted duplicate");
       expect(duplicate.duplicate).toBe(true)
     } finally {
-      await query("UPDATE provider_accounts SET status='active' WHERE id='pa_mock'")
+      await query("UPDATE service_domain_bindings SET outbound_provider_identity_id='pi_atlas_mock' WHERE service_id='svc_atlas_auth' AND sending_domain_id='sd_atlas'")
     }
   });
 });

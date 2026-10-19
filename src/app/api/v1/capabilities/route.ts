@@ -13,7 +13,6 @@ export const GET = serviceRoute(async (_request, identity) => {
     mail: await discoverMail(identity),
     messagePolicies,
     attachmentSafety: { processing:"asynchronous",mode:"require_clean",policyVersion:scanPolicy().version,runtimeAvailability:"unknown" },
-    routing: "Submission-time routing checks authorization, configured routing rules, provider identity and requested capabilities; configuration does not guarantee current routing availability.",
     resources: ["messages", "deliveries", "events", "requests", "files", "inbound-messages", "inbound-changes", "outbound-changes", "suppressions", "capabilities"],
   });
 });

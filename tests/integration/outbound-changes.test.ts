@@ -24,7 +24,8 @@ async function append(id = createId("evt"), options: { client?: PoolClient; occu
 beforeAll(async () => {
   for (const id of [service, other]) await query("INSERT INTO services(id,name) VALUES($1,$1)", [id]);
   await query("INSERT INTO sending_domains(id,domain) VALUES($1,$2)", [domain, `${tag}.test`]);
-  await query("INSERT INTO service_domain_grants(id,service_id,sending_domain_id,send_allowed) VALUES($1,$2,$3,true)", [`grant_${tag}`, service, domain]);
+  await query("INSERT INTO provider_identities(id,sending_domain_id,provider_account_id,status) VALUES($1,$2,'pa_mock','verified')", [`pi_${tag}`, domain]);
+  await query("INSERT INTO service_domain_bindings(id,service_id,sending_domain_id,receive_enabled,outbound_provider_identity_id) VALUES($1,$2,$3,false,$4)", [`sdb_${tag}`, service, domain, `pi_${tag}`]);
   await query("INSERT INTO service_credentials(id,service_id,key_prefix,key_hash) VALUES($1,$2,'stream',$3)", [`cred_${tag}`, service, hashApiKey(key)]);
   for (const id of [message, second]) {
     await query(`INSERT INTO messages(id,service_id,sending_domain_id,sender_snapshot,idempotency_key,payload_hash,recipient_count,subject,text_body,message_category)
@@ -98,16 +99,16 @@ describe("outbound committed change stream", () => {
   });
   it("advances an authorization-filtered empty tail and keeps Service cursors isolated", async () => {
     const before = await listOutboundChanges(service, 100); await append();
-    await query("UPDATE service_domain_grants SET status='disabled' WHERE service_id=$1", [service]);
+    await query("UPDATE service_domain_bindings SET outbound_provider_identity_id=NULL WHERE service_id=$1", [service]);
     try {
       const page = await listOutboundChanges(service, 100, before.nextCursor);
       expect(page.data).toEqual([]); expect(page.nextCursor).toBe(page.watermark); expect(page.nextCursor).not.toBe(before.nextCursor);
       expect((await listOutboundChanges(other, 100)).data).toEqual([]);
       await expect(listOutboundChanges(other, 100, page.nextCursor)).rejects.toMatchObject({ code: "INVALID_OUTBOUND_CURSOR", resetCursor: expect.any(String) });
-      await query("UPDATE service_domain_grants SET status='active' WHERE service_id=$1", [service]);
+      await query("UPDATE service_domain_bindings SET outbound_provider_identity_id=$2 WHERE service_id=$1", [service, `pi_${tag}`]);
       const id = await append();
       expect((await listOutboundChanges(service, 100, page.nextCursor)).data.map(row => row.id)).toEqual([id]);
-    } finally { await query("UPDATE service_domain_grants SET status='active' WHERE service_id=$1", [service]); }
+    } finally { await query("UPDATE service_domain_bindings SET outbound_provider_identity_id=$2 WHERE service_id=$1", [service, `pi_${tag}`]); }
   });
   it("returns usable reset cursors for malformed and future cursors over HTTP", async () => {
     const page = await listOutboundChanges(service, 100);

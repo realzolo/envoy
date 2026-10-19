@@ -1,10 +1,7 @@
 import type { PoolClient } from "pg";
-import { eq } from "drizzle-orm";
 import { database } from "@/platform/database";
-import { auditLogs, inboundRoutes } from "@/platform/database/schema";
-import { domainPermission } from "@/modules/identity/infrastructure/authorization";
+import { auditLogs } from "@/platform/database/schema";
 import { PROVIDER_EVENT_RECEIVED } from "@/platform/outbox/events";
-import type { ProviderType } from "@/integrations/providers/contracts";
 import type { InboundManagementRepository } from "../application/management";
 
 export function inboundManagementRepository(client: PoolClient): InboundManagementRepository {
@@ -22,21 +19,6 @@ export function inboundManagementRepository(client: PoolClient): InboundManageme
     async terminateReceipt(id, accountId) { await client.query("UPDATE inbound_receipts SET terminated_at=clock_timestamp() WHERE provider_account_id=$2 AND external_message_id IN (SELECT external_message_id FROM inbound_messages WHERE raw_provider_event_id=$1)", [id, accountId]); },
     async rejectPendingCopies(id) { await client.query("UPDATE inbound_messages SET status='rejected',rejection_reason='INBOUND_PROCESSING_TERMINATED',processing_token=NULL,processing_deadline_at=NULL WHERE raw_provider_event_id=$1 AND status='scanning'", [id]); },
     async terminateRaw(id) { await client.query("UPDATE raw_provider_events SET terminated_at=clock_timestamp() WHERE id=$1", [id]); },
-    async routeEndpoint(id) {
-      const row = (await client.query<{ type: ProviderType; status: string; security_configured: boolean }>("SELECT a.type,e.status,e.security_configured FROM provider_webhook_endpoints e JOIN provider_accounts a ON a.id=e.provider_account_id WHERE e.id=$1", [id])).rows[0];
-      return row ? { type: row.type, status: row.status, securityConfigured: row.security_configured } : null;
-    },
-    async receivingPermission(input) { return !!(await client.query(`SELECT s.id FROM services s WHERE s.id=$1 AND ${domainPermission("s.id", "$2", "receive")}`, [input.serviceId, input.domainId])).rowCount; },
-    async insertRoute(id, input) {
-      try {
-        await orm.insert(inboundRoutes).values({ id, providerWebhookEndpointId: input.webhookEndpointId, sendingDomainId: input.domainId, serviceId: input.serviceId });
-      } catch (error) {
-        const cause = error instanceof Error ? error.cause : undefined;
-        if (cause && typeof cause === "object" && "code" in cause && cause.code === "23505") throw new Error("A duplicate inbound route already exists", { cause: error });
-        throw error;
-      }
-    },
-    async toggleRoute(id, enabled) { await orm.update(inboundRoutes).set({ status: enabled ? "active" : "disabled" }).where(eq(inboundRoutes.id, id)); },
     async audit(actor, action, type, id, details = {}) { await orm.insert(auditLogs).values({ actor, action, resourceType: type, resourceId: id, details }); },
   };
 }

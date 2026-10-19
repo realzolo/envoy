@@ -3,15 +3,12 @@ import type { scanPolicy } from '@/modules/attachments/public';
 type ScanPolicy=ReturnType<typeof scanPolicy>;
 
 export type Timestamp = string | Date;
-export type AdminSection = 'attachments'|'providers'|'domains'|'routing'|'api-keys'|'webhooks'|'events'|'suppressions'|'inbound'|'logs';
-export type ServiceDomainGrantDto={id:string;service_id:string;sending_domain_id:string|null;send_allowed:boolean;receive_allowed:boolean;status:string;revision:number};
-export type DomainGrantDto=ServiceDomainGrantDto & {service:string;domain:string};
-export type ServiceDto = {id:string;name:string;suppression_management_allowed:boolean;configuration_revision:number;domain_grants:ServiceDomainGrantDto[];status:string;callback_id:string|null;callback_url:string|null;callback_status:string|null};
+export type AdminSection = 'attachments'|'providers'|'domains'|'api-keys'|'webhooks'|'events'|'suppressions'|'inbound'|'logs';
+export type ServiceDomainBindingDto={id:string;service_id:string;sending_domain_id:string;receive_enabled:boolean;outbound_provider_identity_id:string|null};
+export type ServiceDto = {id:string;name:string;suppression_management_allowed:boolean;configuration_revision:number;domain_bindings:ServiceDomainBindingDto[];status:string;callback_id:string|null;callback_url:string|null;callback_status:string|null};
 export type ProviderAccountDto = {id:string;type:ProviderType;name:string;status:string;public_config:object;health:string;health_details:object;quota:object;created_at:Timestamp;credential_version:number;webhook_endpoint_id:string;opaque_token:string;webhook_status:string;security_configured:boolean;expected_topic_arn:string|null;ip_allowlist:string[];last_event_at:Timestamp|null};
 export type DomainIdentityDto = {id:string;accountId:string;account:string;type:ProviderType;accountStatus:string;status:string;externalId:string|null;dnsRecords:object[];lastCheckedAt:Timestamp|null};
-export type DomainDto = {id:string;domain:string;status:string;identities:DomainIdentityDto[]|null};
-export type RoutingTargetDto = {id:string;accountId:string;account:string;type:ProviderType;identityId:string;domain:string;priority:number;weight:number;rateLimit:number;status:string;circuitOpenUntil:Timestamp|null};
-export type RoutingPolicyDto = {id:string;name:string;priority:number;status:string;service_scope:"all"|"selected";services:{id:string;name:string}[];sending_domain_id:string;sending_domain:string;message_category:string|null;targets:RoutingTargetDto[]|null};
+export type DomainDto = {id:string;domain:string;status:string;inbound_provider_account_id:string|null;inbound_provider_account:string|null;inbound_ready:boolean;identities:DomainIdentityDto[]|null};
 export type ServiceCredentialDto = {id:string;key_prefix:string;status:string;created_at:Timestamp;valid_from:Timestamp;valid_to:Timestamp|null;last_used_at:Timestamp|null;service:string;service_id:string};
 export type ProviderWebhookDto = {id:string;opaque_token:string;status:string;security_configured:boolean;expected_topic_arn:string|null;ip_allowlist:string[];created_at:Timestamp;provider_account_id:string;account:string;type:ProviderType};
 export type CallbackEndpointDto = {id:string;name:string;url:string;status:string;subscribed_events:string[];service_id:string;service:string;dead_letters:string;in_flight:string};
@@ -20,13 +17,12 @@ export type RawEventDto = {id:string;native_type:string;provider_event_id:string
 export type CanonicalEventDto = {id:string;event_type:string;occurred_at:Timestamp;canonical_payload:object;recipient_email:string|null;scope:string};
 export type SuppressionDto = {id:string;service:string|null;scope_type:string;list_id:string|null;email_normalized:string;reason:string;source:string;bounce_count:number;expires_at:Timestamp|null;created_at:Timestamp|null};
 export type InboundMessageDto = {id:string;service_id:string|null;service:string|null;content_purged_at:Timestamp|null;from_email:string;to_emails:string[];subject:string;status:string;received_at:Timestamp;author_date:Timestamp|null;ingress_received_at:Timestamp;ready_at:Timestamp|null;attachment_count:string};
-export type InboundRouteDto = {id:string;status:string;domain:string;service:string;opaque_token:string;provider_type:ProviderType;callback:string|null;notification_state:string};
 export type FailedWorkDto = {id:string;aggregate_type:string;aggregate_id:string;event_type:string;status:string;attempt_count:number;available_at:Timestamp;created_at:Timestamp};
 export type AuditEntryDto = {id:string;actor:string;action:string;resource_type:string;resource_id:string|null;details:object;created_at:Timestamp};
 export type AttachmentTaskDto = {resource_id:string;kind:string;service_id:string;status:string;reason:string|null;attempt_count:number;policy_version:string;checked_at:Timestamp|null;lease_expires_at:Timestamp|null;next_attempt_at:Timestamp|null};
 export type AttachmentObservationDto = {status:string;count:number;last_observed_at:Timestamp|null};
 /** Explicit read contracts; generic table/form helpers do not define persistence contracts. */
-export type AdminData = {configuration?:ScanPolicy;tasks?:AttachmentTaskDto[];observations?:AttachmentObservationDto[];grants?:DomainGrantDto[];failedWork?:FailedWorkDto[];audit?:AuditEntryDto[];callbacks?:CallbackEndpointDto[];callbackDeliveries?:CallbackDeliveryDto[];canonicalEvents?:CanonicalEventDto[];credentials?:ServiceCredentialDto[];descriptors?:ProviderDescriptor[];domains?:DomainDto[];inbound?:InboundMessageDto[];inboundRoutes?:InboundRouteDto[];policies?:RoutingPolicyDto[];providers?:ProviderAccountDto[];rawEvents?:RawEventDto[];services?:ServiceDto[];suppressions?:SuppressionDto[];webhooks?:ProviderWebhookDto[]};
+export type AdminData = {configuration?:ScanPolicy;tasks?:AttachmentTaskDto[];observations?:AttachmentObservationDto[];failedWork?:FailedWorkDto[];audit?:AuditEntryDto[];callbacks?:CallbackEndpointDto[];callbackDeliveries?:CallbackDeliveryDto[];canonicalEvents?:CanonicalEventDto[];credentials?:ServiceCredentialDto[];descriptors?:ProviderDescriptor[];domains?:DomainDto[];inbound?:InboundMessageDto[];providers?:ProviderAccountDto[];rawEvents?:RawEventDto[];services?:ServiceDto[];suppressions?:SuppressionDto[];webhooks?:ProviderWebhookDto[]};
 
 import type { DeliveryStatus } from "@/lib/types";
 

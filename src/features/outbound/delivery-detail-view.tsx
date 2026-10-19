@@ -126,7 +126,7 @@ export function DeliveryDetailView({ detail, back = "/emails" }: { detail: Deliv
               </Tabs> : <Empty description="No saved message content." />}
             </div>}
           </Tabs.TabPane>
-          <Tabs.TabPane key="attempts" title={`Routing attempts (${detail.attempts.length})`}>
+          <Tabs.TabPane key="attempts" title={`Provider attempts (${detail.attempts.length})`}>
             {detail.attempts.length ? <Collapse defaultActiveKey={[String(detail.attempts[0].id)]}>
               {detail.attempts.map((attempt) => {
                 const status = String(attempt.status);
@@ -149,12 +149,12 @@ export function DeliveryDetailView({ detail, back = "/emails" }: { detail: Deliv
                       ...(attempt.retry_authorized_at ? [{ label: "Duplicate risk accepted", span: 3, value: <Space wrap>{displayValue(attempt.retry_authorized_by)}<LocalTime value={timestamp(attempt.retry_authorized_at)} /></Space> }] : []),
                     ]} />
                     <Collapse bordered={false}>
-                      <Collapse.Item name="routing" header="Routing snapshot"><JsonDetails value={attempt.routing_snapshot} /></Collapse.Item>
+                      <Collapse.Item name="routing" header="Provider selection"><JsonDetails value={attempt.routing_snapshot} /></Collapse.Item>
                     </Collapse>
                   </div>
                 </Collapse.Item>;
               })}
-            </Collapse> : <Empty description="No routing attempts yet. The message is waiting for processing." />}
+            </Collapse> : <Empty description="No provider attempts yet. The message is waiting for processing." />}
           </Tabs.TabPane>
         </Tabs>
       </Card>

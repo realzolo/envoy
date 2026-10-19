@@ -88,11 +88,9 @@ export async function initializeApplicationSchema(client: PoolClient, migrations
     const hasJournal = (await client.query("SELECT to_regclass('envoy_meta.migrations') AS journal")).rows[0].journal;
     const applied: { file: string; sha256: string }[] = hasJournal ? (await client.query<{ file: string; sha256: string }>("SELECT file,sha256 FROM envoy_meta.migrations ORDER BY file")).rows : [];
     if (applied.length > migrations.length || applied.some((row, index) => row.file !== migrations[index].file || row.sha256 !== migrations[index].sha256)) throw new Error("Applied migration checksum or order differs from the repository");
+    if (!empty && !applied.length) throw new Error("Non-empty application schema has no migration journal");
     let count = applied.length;
-    if (!empty && !count) {
-      equalCatalog(actual, await expectedCatalog(client, migrations[0].sql));
-      count = 1;
-    } else if (count) equalCatalog(actual, await expectedCatalog(client, migrations.slice(0, count).map(row => row.sql).join("\n")));
+    if (count) equalCatalog(actual, await expectedCatalog(client, migrations.slice(0, count).map(row => row.sql).join("\n")));
     if (empty && count) throw new Error("Application schema is missing despite recorded migrations");
     if (!hasJournal) await client.query(`CREATE SCHEMA IF NOT EXISTS envoy_meta;
       CREATE TABLE IF NOT EXISTS envoy_meta.migrations(file text PRIMARY KEY,sha256 text NOT NULL,applied_at timestamptz NOT NULL DEFAULT clock_timestamp());
@@ -100,7 +98,6 @@ export async function initializeApplicationSchema(client: PoolClient, migrations
       COMMENT ON COLUMN envoy_meta.migrations.file IS 'Applied ordered SQL migration filename';
       COMMENT ON COLUMN envoy_meta.migrations.sha256 IS 'SHA-256 digest of the exact executed SQL';
       COMMENT ON COLUMN envoy_meta.migrations.applied_at IS 'Database time when the version was recorded';`);
-    if (!applied.length && count) await client.query("INSERT INTO envoy_meta.migrations(file,sha256) VALUES($1,$2)", [migrations[0].file, migrations[0].sha256]);
     const start = count;
     for (const migration of migrations.slice(count)) {
       await client.query(migration.sql);

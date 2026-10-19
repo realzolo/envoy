@@ -1,4 +1,4 @@
-import type { InboundInput, InboundRoute } from "../contracts";
+import type { InboundInput, InboundDispatch } from "../contracts";
 import type { CanonicalInboundMessage, WebhookVerification } from "@/integrations/providers/contracts";
 import { MAX_FILE_BYTES } from "@/lib/contracts";
 import { InboundTerminalError, address, authorDate, MAX_MESSAGE_BYTES } from "../domain/message";
@@ -10,9 +10,9 @@ async function persistInbound(input: InboundInput) {
   const supplied = input.message.envelopeRecipients;
   const recipients = supplied?.length && supplied.every(item => /^[^\s<>@,]+@[^\s<>@,]+$/.test(item))
     ? [...new Set(supplied.map(address))] : [];
-  const proposed = recipients.length ? await dependencies.unitOfWork.run(async client => (await client.findRoutes({ endpointId: input.webhookEndpointId, recipients: recipients, accountId: input.providerAccountId })).rows) : [];
+  const proposed = recipients.length ? await dependencies.unitOfWork.run(async client => (await client.findDispatches({ endpointId: input.webhookEndpointId, recipients, accountId: input.providerAccountId })).rows) : [];
   // Freeze the complete dispatch plan at the first durable processing decision.
-  // Concurrent retries read the winner; later route changes never expand historical access.
+  // Concurrent retries read the winner; later binding changes never expand historical access.
   const receipt = await dependencies.unitOfWork.run(async client => {
     await client.freezeReceipt({ accountId: input.providerAccountId, externalId: input.message.externalMessageId, routesJson: JSON.stringify(proposed), rawEventId: input.rawEventId });
     return (await client.readReceipt({ accountId: input.providerAccountId, externalId: input.message.externalMessageId })).rows[0];
@@ -23,12 +23,12 @@ async function persistInbound(input: InboundInput) {
   if (!routes.length) {
     const tombstone = (await dependencies.repository.findTombstone({ accountId: input.providerAccountId, externalId: input.message.externalMessageId })).rows[0];
     if (tombstone) return tombstone.id;
-    const reason = recipients.length ? "NO_INBOUND_ROUTE" : "ENVELOPE_RECIPIENT_UNAVAILABLE";
+    const reason = recipients.length ? "NO_RECEIVING_SERVICE" : "ENVELOPE_RECIPIENT_UNAVAILABLE";
     const stored = await dependencies.repository.insertRejected({ id: dependencies.id("inb"), accountId: input.providerAccountId, rawEventId: input.rawEventId, externalId: input.message.externalMessageId, messageId: input.message.messageId??null, from: address(input.message.from), to: input.message.to, cc: input.message.cc, bcc: input.message.bcc, subject: input.message.subject, html: input.message.html?dependencies.sanitizeHtml(input.message.html):null, text: input.message.text??null, reason: reason, receivedAt: input.ingressReceivedAt, envelope: recipients, replyTo: input.message.replyTo??[], inReplyTo: input.message.inReplyTo??null, references: input.message.references??[], authorDate: authorDate(input.message.authorDate) });
     return stored.rows[0].id;
   }
-  // One private projection per Service, even for overlapping domain routes.
-  const groups = new Map<string, InboundRoute[]>();
+  // One private projection per Service, even when several Services share a domain.
+  const groups = new Map<string, InboundDispatch[]>();
   for (const route of routes) {
     const scope = route.service_id;
     groups.set(scope, [...(groups.get(scope) ?? []), route]);
@@ -49,9 +49,9 @@ async function persistInbound(input: InboundInput) {
   return firstId;
 }
 
-async function persistRoutedInbound(input: InboundInput, scope: string, routes: InboundRoute[]) {
+async function persistRoutedInbound(input: InboundInput, scope: string, routes: InboundDispatch[]) {
   const route = routes[0];
-  const allowed=(await dependencies.repository.allowedDomains({ serviceId: route.service_id })).rows.map(row=>row.domain);
+  const allowed=(await dependencies.repository.allowedDomains({ serviceId: route.service_id, accountId: input.providerAccountId })).rows.map(row=>row.domain);
   const envelopeRecipients=input.message.envelopeRecipients?.filter(recipient=>allowed.includes(recipient.split('@')[1]))??[];
   if(!envelopeRecipients.length) throw new InboundTerminalError("Domain receiving permission was revoked","DOMAIN_RECEIVE_NOT_AUTHORIZED");
   const message = {...input.message,envelopeRecipients,bcc:input.message.bcc.filter(item=>envelopeRecipients.includes(address(item)))};
@@ -60,7 +60,7 @@ async function persistRoutedInbound(input: InboundInput, scope: string, routes: 
   if (duplicate && duplicate.status !== "scanning") return duplicate.id;
   let id = duplicate?.id ?? dependencies.id("inb");
   const recipients = message.to.map(address);
-  const inserted = duplicate ? null : await dependencies.repository.insertCopy({ id: id, routeId: route.id, serviceId: route.service_id, accountId: input.providerAccountId, rawEventId: input.rawEventId, externalId: message.externalMessageId, messageId: message.messageId ?? null, from: address(message.from), to: recipients, cc: message.cc.map(address), bcc: message.bcc.map(address), subject: message.subject, html: message.html ? dependencies.sanitizeHtml(message.html) : null, text: message.text ?? null, receivedAt: input.ingressReceivedAt, scope: scope, envelope: message.envelopeRecipients, replyTo: message.replyTo??[], inReplyTo: message.inReplyTo??null, references: message.references??[] });
+  const inserted = duplicate ? null : await dependencies.repository.insertCopy({ id: id, serviceId: route.service_id, accountId: input.providerAccountId, rawEventId: input.rawEventId, externalId: message.externalMessageId, messageId: message.messageId ?? null, from: address(message.from), to: recipients, cc: message.cc.map(address), bcc: message.bcc.map(address), subject: message.subject, html: message.html ? dependencies.sanitizeHtml(message.html) : null, text: message.text ?? null, receivedAt: input.ingressReceivedAt, scope: scope, envelope: message.envelopeRecipients, replyTo: message.replyTo??[], inReplyTo: message.inReplyTo??null, references: message.references??[] });
   if (inserted && !inserted.rowCount) {
     const existing = (await dependencies.repository.findConcurrentCopy({ accountId: input.providerAccountId, externalId: message.externalMessageId, scope: scope })).rows[0];
     if (!existing) throw new Error("Inbound message was not persisted");

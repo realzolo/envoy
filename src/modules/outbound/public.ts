@@ -1,12 +1,12 @@
 import { outbound } from "@/bootstrap/outbound";
-export const { deliverSubmission, reconcileAttempt, createRoutingPolicy, toggleRoutingPolicy, simulateRouting, manualRetryDelivery, sendTestMessage, acceptMessage, listMessages, getMessage, cancelMessage, getDeliveryRetryEligibility, retryMessage, retryDelivery, prepareSubmission, markAccepted, markUnknown, markDeterminateFailure, getAttemptForReconciliation, markReconciled, recordWorkflowFailure, applyCanonicalEvent, processRawProviderEvent } = outbound;
+export const { deliverSubmission, reconcileAttempt, manualRetryDelivery, sendTestMessage, acceptMessage, listMessages, getMessage, cancelMessage, getDeliveryRetryEligibility, retryMessage, retryDelivery, prepareSubmission, markAccepted, markUnknown, markDeterminateFailure, getAttemptForReconciliation, markReconciled, recordWorkflowFailure, applyCanonicalEvent, processRawProviderEvent } = outbound;
 export { projectDeliveryEvent as applyDeliveryEvent } from "@/bootstrap/outbound";
 export { decodeCursor, encodeCursor } from "@/lib/pagination";
 export type { DeliveryStateEvent, DeliverySubmission, MessageContent, MessageRow, RetryOptions, StoredAttachment } from "./contracts";
 export { assertSendDeadline, DEADLINE_CODE, DEADLINE_MESSAGE, messagePolicies, SendDeadlineError } from "./domain/deadline";
 export { DuplicateRiskError, IdempotencyConflictError, MessageValidationError } from "./domain/errors";
 export { canonicalMessage, capabilityIssue, subsetEnvelope } from "./domain/message";
-export { choosePolicyTarget, chooseWeighted, evaluateCandidate } from "./domain/routing";
+export { evaluateCandidate } from "./domain/routing";
 export { outboundAdminReads } from "./infrastructure/admin.read-repository";
 export { sendingContent } from "./infrastructure/content-protection";
 export { getDelivery, getMessageAttempts, getMessageEvents, getRequestDiagnostic, listDeliveries, listEvents, publicEvent } from "./infrastructure/delivery.read-repository";

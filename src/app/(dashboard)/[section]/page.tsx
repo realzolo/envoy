@@ -9,7 +9,6 @@ const sections = {
   attachments: ["Attachment Safety", "Inspect private attachment processing, bounded retries and observed scanner results."],
   providers: ["Provider Accounts", "Connect sending providers, verify credentials, and secure delivery event webhooks."],
   domains: ["Domains", "Register domains, connect sending providers, and review DNS verification."],
-  routing: ["Routing Policies", "Match sending domains and verified provider identities to delivery scope."],
   "api-keys": ["Services", "Configure service permissions and event callbacks, and manage API keys."],
   webhooks: ["Callbacks", "Manage event callbacks, delivery retries, and dead letters."],
   events: ["Provider Events", "Inspect immutable raw ingress and normalized canonical events."],

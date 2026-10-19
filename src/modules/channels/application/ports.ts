@@ -25,6 +25,7 @@ export interface ManagementRepository {
   recordWebhookSecurityUpdate(input:{actor:string;resourceId:string;details:unknown}):Promise<RepositoryResult<RecordWebhookSecurityUpdateRow>>;
   setWebhookStatus(input:{id:string;status:string}):Promise<RepositoryResult<SetWebhookStatusRow>>;
   upsertDomain(input:{id:string;domain:string}):Promise<RepositoryResult<UpsertDomainRow>>;
+  setInboundProvider(input:{id:string;providerAccountId:string|null}):Promise<RepositoryResult<SetInboundProviderRow>>;
   findDomainIdentity(input:{sendingDomainId:string;providerAccountId:string}):Promise<RepositoryResult<FindDomainIdentityRow>>;
   insertDashboardIdentity(input:{id:string;sendingDomainId:string;providerAccountId:string}):Promise<RepositoryResult<InsertDashboardIdentityRow>>;
   insertManagedIdentity(input:{id:string;sendingDomainId:string;providerAccountId:string;externalIdentityId:string;status:string;dnsRecords:string}):Promise<RepositoryResult<InsertManagedIdentityRow>>;
@@ -70,6 +71,7 @@ export type SaveWebhookSecurityRow=never;
 export type RecordWebhookSecurityUpdateRow=never;
 export type SetWebhookStatusRow=never;
 export type UpsertDomainRow={ id: string };
+export type SetInboundProviderRow={ id: string };
 export type FindDomainIdentityRow={ id: string; status: string };
 export type InsertDashboardIdentityRow=never;
 export type InsertManagedIdentityRow=never;

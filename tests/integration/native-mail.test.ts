@@ -20,7 +20,7 @@ import { hashApiKey } from "@/platform/crypto/hash";
 
 const suffix = crypto.randomUUID().replaceAll("-", "");
 const serviceId = `svc_native_${suffix}`;
-const grantId = `sg_native_${suffix}`;
+const bindingId = `sdb_native_${suffix}`;
 const apiKey = `envoy_native_${suffix}`;
 const identity = { serviceId, serviceName: "Native integration", rateLimitPerMinute: 600 };
 const base = createMessageSchema.parse({
@@ -48,7 +48,7 @@ const job = (submissionId: string) => ({ data: { submissionId } }) as Job<{ subm
 beforeAll(async () => {
   await query("INSERT INTO services(id,name) VALUES ($1,'Native integration')", [serviceId]);
   await query("INSERT INTO service_credentials(id,service_id,key_prefix,key_hash) VALUES ($1,$2,'envoy_native',$3)", [`cred_${suffix}`, serviceId, hashApiKey(apiKey)]);
-  await query("INSERT INTO service_domain_grants(id,service_id,sending_domain_id,send_allowed,receive_allowed) VALUES ($1,$2,'sd_atlas',true,true)", [grantId, serviceId]);
+  await query("INSERT INTO service_domain_bindings(id,service_id,sending_domain_id,receive_enabled,outbound_provider_identity_id) VALUES ($1,$2,'sd_atlas',true,'pi_atlas_mock')", [bindingId, serviceId]);
   const secret = sealSecret({ secret: "native-callback-secret" }, `cb_${suffix}`, 1);
   await query("INSERT INTO callback_endpoints(id,service_id,name,url,secret_ciphertext,encrypted_dek,key_version,subscribed_events) VALUES ($1,$2,'Native callback','https://callback.test/native',$3,$4,$5,$6)", [`cb_${suffix}`, serviceId, secret.secretCiphertext, secret.encryptedDek, secret.keyVersion, ["email.accepted", "email.failed", "email.deferred", "email.delivered", "email.clicked"]]);
 });
@@ -273,15 +273,15 @@ describe("native API integration", () => {
     } finally { send.mockRestore(); await query("DELETE FROM suppressions WHERE id=$1", [suppression.id]); }
   });
 
-  it("enforces domain sending grants and rejects unauthorized domains before creating messages", async () => {
-    await query("UPDATE service_domain_grants SET send_allowed=false WHERE id=$1", [grantId]);
+  it("enforces domain sending bindings and rejects unauthorized domains before creating messages", async () => {
+    await query("UPDATE service_domain_bindings SET outbound_provider_identity_id=NULL WHERE id=$1", [bindingId]);
     try {
       await expect(acceptMessage({ identity, input: base, idempotencyKey: crypto.randomUUID() })).rejects.toMatchObject({ code: "SENDER_NOT_AUTHORIZED" });
       await expect(acceptMessage({ identity, input: { ...base, from: { email: "only-this-address@unauthorized.example" } }, idempotencyKey: crypto.randomUUID() })).rejects.toBeInstanceOf(MessageValidationError);
-      await query("UPDATE service_domain_grants SET send_allowed=true WHERE id=$1",[grantId]);
+      await query("UPDATE service_domain_bindings SET outbound_provider_identity_id='pi_atlas_mock' WHERE id=$1",[bindingId]);
       const row = await fixture({ ...base, from: { email: "only-this-address@mail.atlas.test", name: "任意合法显示名称" } });
       expect((await getMessage(row.id, serviceId))?.sender_snapshot.fromEmail).toBe("only-this-address@mail.atlas.test");
-    } finally { await query("UPDATE service_domain_grants SET send_allowed=true WHERE id=$1", [grantId]); }
+    } finally { await query("UPDATE service_domain_bindings SET outbound_provider_identity_id='pi_atlas_mock' WHERE id=$1", [bindingId]); }
   });
 
   it("records a service-scoped request problem for an email rejected before a message ID exists", async () => {
@@ -312,17 +312,17 @@ describe("native API integration", () => {
 
   it("provides a failure reason when sender authorization is revoked before any provider attempt", async () => {
     const row = await fixture();
-    await query("UPDATE service_domain_grants SET status='disabled' WHERE id=$1", [grantId]);
+    await query("UPDATE service_domain_bindings SET outbound_provider_identity_id=NULL WHERE id=$1", [bindingId]);
     try {
       expect(await prepareSubmission(row.submissionId)).toBeNull();
       expect(await getDelivery(row.deliveries[0].id, serviceId)).toBeNull();
-      await query("UPDATE service_domain_grants SET status='active' WHERE id=$1",[grantId]);
+      await query("UPDATE service_domain_bindings SET outbound_provider_identity_id='pi_atlas_mock' WHERE id=$1",[bindingId]);
       const detail = await getDelivery(row.deliveries[0].id, serviceId);
       expect(detail?.attempts).toHaveLength(0);
       expect(detail?.lifecycle).toBe("failed");
       expect(detail?.lastError).toMatchObject({ stage: "authorization", acceptance: "not_accepted", retryable: false });
       expect(detail?.lastError?.message.length).toBeGreaterThan(10);
       expect(detail?.events.some(item => item.data.diagnostic?.code === detail.lastError?.code)).toBe(true);
-    } finally { await query("UPDATE service_domain_grants SET status='active' WHERE id=$1", [grantId]); }
+    } finally { await query("UPDATE service_domain_bindings SET outbound_provider_identity_id='pi_atlas_mock' WHERE id=$1", [bindingId]); }
   });
 });

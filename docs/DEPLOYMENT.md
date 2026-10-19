@@ -125,10 +125,9 @@ initializes BullMQ through its official API. Each applied file has a SHA-256 rec
 One transaction-scoped advisory lock serializes upgrades; full catalog comparison detects schema/comment drift before
 and after SQL execution. Failed SQL rolls the application upgrade back without clearing business data.
 
-Executed `001_initial.sql` remains unchanged. V2 adds the outbound stream, takes an event-table write lock, backfills
-retained facts and installs triggers atomically. Stop and drain writers during this maintenance step. Lock acquisition
-is limited to 5 seconds; a conflict fails safely and can be retried. Existing unjournaled V1 deployments are adopted
-only when their complete catalog matches V1. Unknown structures or changed applied checksums are rejected.
+This fresh-project `001_initial.sql` includes the complete application schema and outbound change stream. Initialize a
+new database for this version; a nonempty application schema without a migration journal is rejected. Future upgrades
+append ordered SQL versions and preserve matching journaled data. Unknown structures or changed applied checksums are rejected.
 
 Maintain typed schema and English comments, add the next migration and checksum, then run `pnpm db:generate` to
 update `db/schema.sql` and `pnpm db:check`. Generation checks every table/column and never rewrites migration files.
@@ -163,7 +162,7 @@ that Worker is running, storage is accessible, attachments can be scanned, or a 
 logs and its heartbeat in the operations console separately.
 
 Sign in using `ENVOY_ADMIN_EMAIL` and `ENVOY_ADMIN_PASSWORD`. A new database has no business configuration: create
-service credentials, configure provider accounts and domains, and set up routing before sending a test message.
+service credentials, configure provider accounts and domains, then bind a domain to the Service with an outbound identity before sending a test message.
 Provider API keys and webhook secrets belong in the operations console, where they are encrypted in the database.
 
 ## 5. Update an Existing Deployment
@@ -171,7 +170,7 @@ Provider API keys and webhook secrets belong in the operations console, where th
 Before updating, back up PostgreSQL, including its `bullmq` schema, and preserve the production environment, KEKs,
 and required object storage data. Review configuration changes, ordered migrations and their checksums. Stop and drain
 writers before a migration requiring table locks. Apply the migration task successfully before starting the matching
-Web and Worker processes; no empty replacement database is required for a supported V1-to-V2 upgrade.
+Web and Worker processes. This reset V1 requires a newly initialized database; future ordered upgrades operate on journaled databases.
 
 Pull the source without overwriting the server's configuration files:
 

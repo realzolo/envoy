@@ -1,6 +1,6 @@
 export const MAX_MESSAGE_BYTES = 25 * 1024 * 1024;
 
-/** Errors caused by the message or routing policy should not consume worker retries. */
+/** Permanent message or domain binding failures should not consume worker retries. */
 export class InboundTerminalError extends Error {
   constructor(message: string, public code = "INBOUND_REJECTED") {
     super(message);

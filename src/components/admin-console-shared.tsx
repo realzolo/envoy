@@ -393,45 +393,6 @@ export function DnsRecords({ records }: { records: unknown }) {
   );
 }
 
-export function routingReason(reason: string) {
-  const labels: Record<string, string> = {
-    circuit_open: "Temporarily paused after recent failures",
-    account_unavailable: "Provider account is unavailable",
-    account_unhealthy: "Provider connection is unhealthy",
-    identity_unverified: "Provider identity is not verified",
-    domain_disabled: "Sending domain is disabled",
-    monthly_quota_exhausted: "Monthly provider limit reached",
-    daily_quota_exhausted: "Daily provider limit reached",
-  };
-  return labels[reason] ?? reason.replaceAll("_", " ");
-}
-
-export function RoutingSimulation({ result }: { result: Row | null }) {
-  if (!result) return null;
-  const chosen = record(result.chosen);
-  const rejected = rows(result.candidates).filter(candidate => candidate.eligible !== true);
-  const selectedAccount = value(chosen, "account") || value(chosen, "provider_name");
-  const selectedDomain = value(chosen, "domain");
-  return (
-    <Alert
-      type={selectedAccount ? "success" : "warning"}
-      title={selectedAccount ? "Routing target selected" : "No eligible routing target"}
-      content={(
-        <Space direction="vertical" size="small">
-          <Typography.Text>
-            {selectedAccount ? <>Selected <Typography.Text bold>{selectedAccount}</Typography.Text>{selectedDomain ? <> for <Typography.Text code>{selectedDomain}</Typography.Text>.</> : "."}</> : "No eligible routing target was found."}
-          </Typography.Text>
-          {rejected.map(candidate => {
-            const reasons = rows(record(candidate).reasons).map(String).map(routingReason);
-            return <Typography.Text type="secondary" key={value(candidate, "target_id")}>{value(candidate, "account") || "Provider target"}{reasons.length ? `: ${reasons.join(", ")}` : ": Not eligible"}</Typography.Text>;
-          })}
-        </Space>
-      )}
-      showIcon
-    />
-  );
-}
-
 export function Secret({ value: secret, label = "Copy this value now. It cannot be shown again." }: { value: string; label?: string }) {
   return (
     <Alert

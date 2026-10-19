@@ -1,6 +1,6 @@
 import { inbound, inboundManagement } from "@/bootstrap/inbound";
 export const { persistInbound, processInboundEvent } = inbound;
-export const { replayRawEvent, terminateRawEvent, createInboundRoute, toggleInboundRoute } = inboundManagement;
+export const { replayRawEvent, terminateRawEvent } = inboundManagement;
 export { listInboundChanges } from "@/bootstrap/inbound";
 export { InboundCursorError } from "./application/changes";
 export { InboundTerminalError } from "./domain/message";

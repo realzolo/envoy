@@ -1,6 +1,5 @@
 import { type PgTableExtraConfigValue, pgTable, unique, check, text, integer, timestamp, uniqueIndex, foreignKey, boolean } from "drizzle-orm/pg-core"
 import { sql } from "drizzle-orm";
-import { sendingDomains } from "./channels";
 
 export const services = pgTable("services", {
 	id: text().primaryKey().notNull(),
@@ -36,32 +35,3 @@ export const serviceCredentials = pgTable("service_credentials", {
 	unique("service_credentials_key_hash_key").on(table.keyHash),
 	check("service_credentials_status_check", sql`status = ANY (ARRAY['active'::text, 'revoked'::text])`),
 ]);
-
-
-export const serviceDomainGrants = pgTable("service_domain_grants", {
-	id: text().primaryKey().notNull(),
-	serviceId: text("service_id").notNull(),
-	sendingDomainId: text("sending_domain_id"),
-	sendAllowed: boolean("send_allowed").default(false).notNull(),
-	receiveAllowed: boolean("receive_allowed").default(false).notNull(),
-	status: text().default('active').notNull(),
-	revision: integer().default(1).notNull(),
-	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
-	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
-}, (table): PgTableExtraConfigValue[] => [
-	uniqueIndex("service_domain_grants_one_all_per_service").using("btree", table.serviceId.asc().nullsLast()).where(sql`(sending_domain_id IS NULL)`),
-	foreignKey({
-			columns: [table.serviceId],
-			foreignColumns: [services.id],
-			name: "service_domain_grants_service_id_fkey"
-		}).onDelete("cascade"),
-	foreignKey({
-			columns: [table.sendingDomainId],
-			foreignColumns: [sendingDomains.id],
-			name: "service_domain_grants_sending_domain_id_fkey"
-		}).onDelete("cascade"),
-	unique("service_domain_grants_service_id_sending_domain_id_key").on(table.serviceId, table.sendingDomainId),
-	check("service_domain_grants_status_check", sql`status = ANY (ARRAY['active'::text, 'disabled'::text])`),
-	check("service_domain_grants_check", sql`send_allowed OR receive_allowed`),
-]);
-

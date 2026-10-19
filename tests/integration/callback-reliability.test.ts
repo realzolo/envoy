@@ -77,14 +77,14 @@ describe("database-driven callback retry", () => {
     const delivery=(await query<{id:string}>("SELECT id FROM deliveries WHERE message_id=$1",[message])).rows[0].id,event=createId("dev"),callback=await createCallback();
     await query("INSERT INTO delivery_events(id,delivery_id,event_type,occurred_at,canonical_payload,source_key) VALUES($1,$2,'failed',now(),'{}',$1)",[event,delivery]);
     await query("UPDATE callback_deliveries SET delivery_event_id=$2 WHERE id=$1",[callback,event]);
-    network.resolve.mockImplementation(async()=>{await query("UPDATE service_domain_grants SET status='disabled' WHERE id='sg_atlas'");return {};});
+    network.resolve.mockImplementation(async()=>{await query("UPDATE service_domain_bindings SET outbound_provider_identity_id=NULL WHERE id='sdb_atlas'");return {};});
     network.post.mockResolvedValue({status:200,statusText:"OK",body:""});
     try{
       await deliverCallback(callback);
       expect(network.post).not.toHaveBeenCalled();
       expect((await query("SELECT status FROM callback_deliveries WHERE id=$1",[callback])).rows[0].status).toBe("dead_letter");
     }finally{
-      await query("UPDATE service_domain_grants SET status='active' WHERE id='sg_atlas'");
+      await query("UPDATE service_domain_bindings SET outbound_provider_identity_id='pi_atlas_mock' WHERE id='sdb_atlas'");
       await query("DELETE FROM callback_deliveries WHERE id=$1",[callback]);
       await query("DELETE FROM messages WHERE id=$1",[message]);
     }

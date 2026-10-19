@@ -78,13 +78,13 @@ docker compose run --rm migrate
 docker compose up -d web worker
 ```
 
-已执行的 `db/migrations/001_initial.sql` 保持原文，结构变更追加连续版本 SQL，并在 `db/migrations/checksums.json` 登记 SHA-256。
+此全新项目的 `db/migrations/001_initial.sql` 已包含完整应用结构和出站变更流。后续结构变更追加连续版本 SQL，并在 `db/migrations/checksums.json` 登记 SHA-256。
 修改类型化定义、数据库行为或英文业务备注后，执行 `pnpm db:generate` 更新 `db/schema.sql`，执行 `pnpm db:check` 验证；生成器不改写迁移文件，并拒绝缺表、缺字段或空备注的输出。
 
 迁移在同一个事务与 advisory lock 下验证已执行版本的完整 catalog、校验 checksum、应用缺少版本并核对目标快照。执行记录写入 `envoy_meta.migrations`，BullMQ 单独维护其内部结构。
-已有完整 V1 数据库会先校验并登记 V1，再执行 V2；业务数据保留。SQL 失败、结构漂移或 checksum 不符会拒绝执行并回滚，不会自动修复或清库。
+此重置后的 V1 需要新数据库；非空但没有迁移记录的应用数据库会被拒绝。后续有记录的升级保留业务数据。SQL 失败、结构漂移或 checksum 不符会拒绝执行并回滚，不会自动修复或清库。
 
-执行 V2 前备份并停止、排空 Web/Worker 写入。V2 在事件表写锁内回填已保留的两类规范事件，建立 Service 连续位置，再创建触发器；加锁等待最多 5 秒，冲突时排空写入后重试。
+未来执行需要表锁的迁移前，先备份并停止、排空 Web/Worker 写入；遇到锁冲突时排空写入后重试。
 迁移成功后再启动对应 Web/Worker，健康检查与 Worker 启动要求迁移记录达到当前版本。
 
 Compose 默认只将服务绑定到本机 `127.0.0.1:6178`。请在同一主机上配置 HTTPS 反向代理，不要直接将 Compose 端口暴露到公网。

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { mockClient } from "aws-sdk-client-mock";
 import { GetObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { providerRegistry } from "@/integrations/providers/registry";
@@ -9,13 +9,11 @@ const contexts = {
   mailgun: { accountId: "pa",config: { type: "mailgun",schemaVersion: 1,region: "us",sendingDomain: "example.test" },secret: { type: "mailgun",apiKey: "test-key" } },
   postmark: { accountId: "pa",config: { type: "postmark",schemaVersion: 1,messageStream: "outbound" },secret: { type: "postmark",serverToken: "test-key" } },
   ses: { accountId: "pa",config: { type: "ses",schemaVersion: 1,region: "us-east-1" },secret: { type: "ses" } },
-  resend: { accountId: "pa",config: { type: "resend",schemaVersion: 1 },secret: { type: "resend",apiKey: "re_test_key" } },
 } satisfies Partial<Record<ProviderType,ProviderSendContext>>;
 const headers = { "Message-ID": "<original@example.net>","Reply-To": '"Doe, Jane" <reply@example.net>, other@example.net',"In-Reply-To": "<parent@example.net>",References: "<root@example.net> <parent@example.net>" };
 const expected = { messageId: "<original@example.net>",replyTo: ["reply@example.net","other@example.net"],inReplyTo: "<parent@example.net>",references: ["<root@example.net>","<parent@example.net>"] };
 const rawHeaders = Object.entries(headers).map(([key,value]) => `${key}: ${value}`).join("\r\n");
 const receipt = (parsed: unknown,nativeType = "inbound") => ({ valid: true,replaySafe: true,nativeType,providerEventId: "receipt-id",parsed });
-afterEach(() => vi.unstubAllGlobals());
 
 describe("inbound provider ownership and RFC fields", () => {
   it("uses SendGrid envelope.to, preserves header lists, and supports raw MIME mode", async () => {
@@ -65,10 +63,9 @@ describe("inbound provider ownership and RFC fields", () => {
       else expect(mail.authorDate).toBeNull();
     } finally{s3.restore();}
   });
-  it("retains Resend standard fields but does not infer SMTP ownership from its To/Bcc/headers", async () => {
-    vi.stubGlobal("fetch",vi.fn().mockResolvedValue(Response.json({ id: "received-id",message_id: headers["Message-ID"],from: "sender@example.net",to: ["visible@example.test"],cc: [],bcc: ["hidden@example.test"],headers: { ...headers,"Delivered-To": "forged@example.test" },subject: "Hello",created_at: new Date().toISOString(),attachments: [] })));
-    const mail = await providerRegistry("resend").inbound!.receive(receipt({ data: { email_id: "received-id" } }),contexts.resend);
-    expect(mail).toMatchObject(expected);
-    expect(mail!.envelopeRecipients).toBeUndefined();
+  it("does not offer Resend as an inbound channel without authenticated SMTP recipients", () => {
+    const adapter = providerRegistry("resend");
+    expect(adapter.descriptor.capabilities.inboundMode).toBe("none");
+    expect(adapter.inbound).toBeUndefined();
   });
 });

@@ -1,41 +1,42 @@
 import type { PoolClient } from "pg";
 import type { InboundRepository } from "../application/ports";
-import type { InboundRoute } from "../contracts";
+import type { InboundDispatch } from "../contracts";
 import { pool, transactionContext } from "@/platform/database";
-import { domainPermission, inboundDomainAccess } from "@/modules/identity/infrastructure/authorization";
+import { inboundDomainAccess } from "@/modules/identity/infrastructure/authorization";
 import { registerAttachment } from "@/modules/attachments/public";
 import { completeObjectUploads } from "@/platform/storage/object-cleanup/public";
 
 export function inboundRepository(client: Pick<PoolClient, "query"> = pool()): InboundRepository {
 return {
-    findRoutes(input: { endpointId: string; recipients: string[]; accountId: string }) { return client.query<InboundRoute>(`
-    SELECT r.id,r.service_id,array_agg(DISTINCT recipient) AS recipients
-    FROM inbound_routes r JOIN sending_domains d ON d.id=r.sending_domain_id
-    JOIN services s ON s.id=r.service_id AND s.status='active'
-    JOIN provider_webhook_endpoints e ON e.id=r.provider_webhook_endpoint_id
+    findDispatches(input: { endpointId: string; recipients: string[]; accountId: string }) { return client.query<InboundDispatch>(`
+    SELECT b.service_id,array_agg(DISTINCT recipient ORDER BY recipient) AS recipients
+    FROM provider_webhook_endpoints e
+    JOIN provider_accounts a ON a.id=e.provider_account_id AND a.status='active'
+    JOIN sending_domains d ON d.inbound_provider_account_id=a.id AND d.status='active'
+    JOIN service_domain_bindings b ON b.sending_domain_id=d.id AND b.receive_enabled
+    JOIN services s ON s.id=b.service_id AND s.status='active'
     CROSS JOIN unnest($2::text[]) recipient
     WHERE e.id=$1 AND e.provider_account_id=$3 AND e.status='active' AND e.security_configured
-      AND r.status='active' AND d.status='active' AND ${domainPermission("r.service_id", "d.id", "receive")}
       AND split_part(recipient,'@',2)=d.domain
-    GROUP BY r.id ORDER BY r.id`, [input.endpointId, input.recipients, input.accountId]); },
+    GROUP BY b.service_id ORDER BY b.service_id`, [input.endpointId, input.recipients, input.accountId]); },
     freezeReceipt(input: { accountId: string; externalId: string; routesJson: string; rawEventId: string }) { return client.query<Record<string, unknown>>(`INSERT INTO inbound_receipts(provider_account_id,external_message_id,routes,ingress_received_at)
       VALUES($1,$2,$3,COALESCE((SELECT received_at FROM raw_provider_events WHERE id=$4),clock_timestamp()))
       ON CONFLICT DO NOTHING`, [input.accountId, input.externalId, input.routesJson, input.rawEventId]); },
-    readReceipt(input: { accountId: string; externalId: string }) { return client.query<{ routes: InboundRoute[]; terminated_at:Date | null; ingress_received_at: Date }>("SELECT routes,terminated_at,ingress_received_at FROM inbound_receipts WHERE provider_account_id=$1 AND external_message_id=$2", [input.accountId, input.externalId]); },
+    readReceipt(input: { accountId: string; externalId: string }) { return client.query<{ routes: InboundDispatch[]; terminated_at:Date | null; ingress_received_at: Date }>("SELECT routes,terminated_at,ingress_received_at FROM inbound_receipts WHERE provider_account_id=$1 AND external_message_id=$2", [input.accountId, input.externalId]); },
     findTombstone(input: { accountId: string; externalId: string }) { return client.query<{id:string}>("SELECT id FROM inbound_messages WHERE provider_account_id=$1 AND external_message_id=$2 ORDER BY created_at,id LIMIT 1", [input.accountId, input.externalId]); },
-    insertRejected(input: { id: string; accountId: string; rawEventId: string; externalId: string; messageId: string | null; from: string; to: string[]; cc: string[]; bcc: string[]; subject: string; html: string | null; text: string | null; reason: "NO_INBOUND_ROUTE" | "ENVELOPE_RECIPIENT_UNAVAILABLE"; receivedAt: Date | undefined; envelope: string[]; replyTo: string[]; inReplyTo: string | null; references: string[]; authorDate: string | null }) { return client.query<{ id: string }>(`INSERT INTO inbound_messages
+    insertRejected(input: { id: string; accountId: string; rawEventId: string; externalId: string; messageId: string | null; from: string; to: string[]; cc: string[]; bcc: string[]; subject: string; html: string | null; text: string | null; reason: "NO_RECEIVING_SERVICE" | "ENVELOPE_RECIPIENT_UNAVAILABLE"; receivedAt: Date | undefined; envelope: string[]; replyTo: string[]; inReplyTo: string | null; references: string[]; authorDate: string | null }) { return client.query<{ id: string }>(`INSERT INTO inbound_messages
       (id,provider_account_id,raw_provider_event_id,external_message_id,message_id,from_email,to_emails,cc_emails,bcc_emails,subject,sanitized_html,text_body,status,rejection_reason,received_at,envelope_recipients,reply_to,in_reply_to,references_ids,ingress_received_at,author_date)
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'rejected',$13,$14,$15,$16,$17,$18,$14,$19)
       ON CONFLICT(provider_account_id,external_message_id,delivery_scope) DO UPDATE SET external_message_id=EXCLUDED.external_message_id RETURNING id`, [input.id, input.accountId, input.rawEventId, input.externalId, input.messageId, input.from, input.to, input.cc, input.bcc, input.subject, input.html, input.text, input.reason, input.receivedAt, input.envelope, input.replyTo, input.inReplyTo, input.references, input.authorDate]); },
-    allowedDomains(input: { serviceId: string }) { return client.query<{domain:string}>(`SELECT d.domain FROM sending_domains d WHERE ${domainPermission("$1", "d.id", "receive")}`, [input.serviceId]); },
+    allowedDomains(input: { serviceId: string; accountId: string }) { return client.query<{domain:string}>(`SELECT d.domain FROM sending_domains d JOIN service_domain_bindings b ON b.sending_domain_id=d.id AND b.service_id=$1 AND b.receive_enabled JOIN services s ON s.id=b.service_id AND s.status='active' WHERE d.status='active' AND d.inbound_provider_account_id=$2`, [input.serviceId, input.accountId]); },
     findCopy(input: { accountId: string; externalId: string; scope: string }) { return client.query<{ id: string; status: string; content_purged_at: Date | null }>("SELECT id,status,content_purged_at FROM inbound_messages WHERE provider_account_id=$1 AND external_message_id=$2 AND delivery_scope=$3", [input.accountId, input.externalId, input.scope]); },
-    insertCopy(input: { id: string; routeId: string; serviceId: string; accountId: string; rawEventId: string; externalId: string; messageId: string | null; from: string; to: string[]; cc: string[]; bcc: string[]; subject: string; html: string | null; text: string | null; receivedAt: Date | undefined; scope: string; envelope: string[]; replyTo: string[]; inReplyTo: string | null; references: string[] }) { return client.query<Record<string, unknown>>(`INSERT INTO inbound_messages(id, inbound_route_id, service_id,
+    insertCopy(input: { id: string; serviceId: string; accountId: string; rawEventId: string; externalId: string; messageId: string | null; from: string; to: string[]; cc: string[]; bcc: string[]; subject: string; html: string | null; text: string | null; receivedAt: Date | undefined; scope: string; envelope: string[]; replyTo: string[]; inReplyTo: string | null; references: string[] }) { return client.query<Record<string, unknown>>(`INSERT INTO inbound_messages(id, service_id,
                                                              provider_account_id, raw_provider_event_id,
                                                              external_message_id, message_id, from_email, to_emails,
                                                              cc_emails, bcc_emails, subject, sanitized_html, text_body,
                                                              status, received_at, delivery_scope, envelope_recipients, reply_to, in_reply_to, references_ids)
-                                VALUES ($1, (SELECT id FROM inbound_routes WHERE id=$2), $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'scanning',
-                                        $15,$16,$17,$18,$19,$20) ON CONFLICT(provider_account_id,external_message_id,delivery_scope) DO NOTHING RETURNING id`, [input.id, input.routeId, input.serviceId, input.accountId, input.rawEventId, input.externalId, input.messageId, input.from, input.to, input.cc, input.bcc, input.subject, input.html, input.text, input.receivedAt, input.scope, input.envelope, input.replyTo, input.inReplyTo, input.references]); },
+                                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'scanning',
+                                        $14,$15,$16,$17,$18,$19) ON CONFLICT(provider_account_id,external_message_id,delivery_scope) DO NOTHING RETURNING id`, [input.id, input.serviceId, input.accountId, input.rawEventId, input.externalId, input.messageId, input.from, input.to, input.cc, input.bcc, input.subject, input.html, input.text, input.receivedAt, input.scope, input.envelope, input.replyTo, input.inReplyTo, input.references]); },
     findConcurrentCopy(input: { accountId: string; externalId: string; scope: string }) { return client.query<{
       id: string;
       status: string

@@ -1,7 +1,6 @@
 import { Resend } from "resend";
 import { Webhook } from "svix";
 import { type CanonicalEventType, type ManagedIdentityStatus, type ProviderModule } from "../contracts";
-import { inboundHeaders } from "../inbound-fields";
 import { accepted, assertMessageCapabilities, checkedJson, event, eventDate, formatAddress, header, messageHeaders, nativeMailCapabilities, safeDiagnostic, stableEventId, submitRequest } from "../shared";
 function client(secret: {
     type: string;
@@ -15,7 +14,6 @@ const eventMap: Record<string, CanonicalEventType> = {
     "email.sent": "accepted", "email.delivered": "delivered", "email.delivery_delayed": "deferred",
     "email.bounced": "bounced", "email.failed": "failed", "email.opened": "opened",
     "email.clicked": "clicked", "email.complained": "complained", "email.suppressed": "suppressed",
-    "email.received": "inbound.received",
 };
 // Resend exposes richer domain states than Envoy's routing model. A partially
 // verified domain must remain ineligible for sending until all required DNS is ready.
@@ -32,7 +30,7 @@ export const resendModule: ProviderModule = {
         displayName: "Resend",
         capabilities: {
             nativeIdempotency: true,
-            inboundMode: "webhook-fetch",
+            inboundMode: "none",
             domainManagement: true,
             webhookSecurity: "Svix HMAC",
             eventTypes: Object.keys(eventMap),
@@ -164,66 +162,6 @@ export const resendModule: ProviderModule = {
                 throw new Error(result.error?.message ?? "Identity lookup failed");
             return { status: resendIdentityStatus(result.data.status), dnsRecords: result.data.records ?? [] };
         },
-    },
-    inbound: {
-        async receive(verified, context) {
-            const payload = verified.parsed as {
-                data?: {
-                    email_id?: string;
-                };
-            };
-            const id = payload.data?.email_id;
-            if (!id)
-                return null;
-            const result = await client(context.secret).emails.receiving.get(id, { html_format: "cid" });
-            if (result.error || !result.data)
-                throw new Error(result.error?.message ?? "Inbound retrieval failed");
-            const attachments = [];
-            for (const attachment of result.data.attachments ?? []) {
-                const detail = await client(context.secret).emails.receiving.attachments.get({ emailId: id, id: attachment.id });
-                if (detail.error || !detail.data)
-                    throw new Error(detail.error?.message ?? "Inbound attachment retrieval failed");
-                const response = await fetch(detail.data.download_url, { signal: AbortSignal.timeout(30000), redirect: "error" });
-                if (!response.ok || Number(response.headers.get("content-length") ?? 0) > 25000000)
-                    throw new Error("Inbound attachment download failed or exceeds limit");
-                const reader = response.body?.getReader();
-                if (!reader)
-                    throw new Error("Inbound attachment is empty");
-                const chunks: Uint8Array[] = [];
-                let size = 0;
-                try {
-                    for (;;) {
-                        const { done, value } = await reader.read();
-                        if (done)
-                            break;
-                        size += value.byteLength;
-                        if (size > 25000000)
-                            throw new Error("Inbound attachment exceeds limit");
-                        chunks.push(value);
-                    }
-                }
-                finally {
-                    await reader.cancel();
-                }
-                attachments.push({ fileName: attachment.filename ?? "attachment", contentType: attachment.content_type, content: new Uint8Array(Buffer.concat(chunks)), contentId: attachment.content_id ?? undefined });
-            }
-            return {
-                externalMessageId: id,
-                ...await inboundHeaders(result.data.headers),
-                messageId: result.data.message_id,
-                // The current contract does not identify SMTP envelope recipients. Fail closed.
-                envelopeRecipients: undefined,
-                from: result.data.from,
-                to: result.data.to,
-                cc: result.data.cc ?? [],
-                bcc: result.data.bcc ?? [],
-                subject: result.data.subject,
-                html: result.data.html ?? undefined,
-                text: result.data.text ?? undefined,
-                attachments,
-                receivedAt: eventDate(result.data.created_at)
-            };
-        }
     },
     reconciliation: {
         async reconcile(externalMessageId, _fingerprint, context) {

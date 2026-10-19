@@ -40,9 +40,8 @@ const submission=async(messageId:string)=>(await query<{id:string}>("SELECT id F
 beforeAll(async()=>{
  await query("INSERT INTO services(id,name) VALUES($1,$1),($2,$2)",[a,b]);
  await query("INSERT INTO service_credentials(id,service_id,key_prefix,key_hash) VALUES($1,$2,'fixture',$3)",[`cred_${tag}`,a,hashApiKey(key)]);
- await query("INSERT INTO service_domain_grants(id,service_id,sending_domain_id,send_allowed,receive_allowed) VALUES($1,$2,'sd_atlas',true,true)",[`grant_${tag}`,a]);
- await query("INSERT INTO service_domain_grants(id,service_id,sending_domain_id,send_allowed) VALUES($1,$2,'sd_atlas',true)",[`grant_${tag}_b`,b]);
- await query("INSERT INTO inbound_routes(id,provider_webhook_endpoint_id,sending_domain_id,service_id) VALUES($1,'pwe_mock','sd_atlas',$2)",[`route_${tag}`,a]);
+ await query("INSERT INTO service_domain_bindings(id,service_id,sending_domain_id,receive_enabled,outbound_provider_identity_id) VALUES($1,$2,'sd_atlas',true,'pi_atlas_mock')",[`binding_${tag}`,a]);
+ await query("INSERT INTO service_domain_bindings(id,service_id,sending_domain_id,receive_enabled,outbound_provider_identity_id) VALUES($1,$2,'sd_atlas',false,'pi_atlas_mock')",[`binding_${tag}_b`,b]);
 });
 afterAll(async()=>{
  const objects=(await query<{object_key:string}>(`SELECT object_key FROM outbound_files WHERE service_id=ANY($1)

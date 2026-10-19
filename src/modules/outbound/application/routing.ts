@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import type { Attempt, Candidate, DeliveryStateEvent, DeliverySubmission, Recipient, Submission } from "../contracts";
 import { assertSendDeadline, DEADLINE_CODE, DEADLINE_MESSAGE } from "../domain/deadline";
 import { canonicalMessage, capabilityIssue, subsetEnvelope } from "../domain/message";
-import { choosePolicyTarget, configuredLimit, evaluateCandidate, positiveInteger } from "../domain/routing";
+import { configuredLimit, evaluateCandidate } from "../domain/routing";
 import type { OutboundDependencies, OutboundRepositories } from "./ports";
 export function createRoutingService(dependencies: OutboundDependencies) {
     const { applyDeliveryEvent, applySubmissionEvent } = dependencies.events;
@@ -111,37 +111,20 @@ export function createRoutingService(dependencies: OutboundDependencies) {
                 return null;
             }
             const envelope = subsetEnvelope(message, allowed.map(row => ({ email: row.recipient_email, name: row.recipient_name ?? undefined })));
-            const candidates = (await client.routing.listRoutingCandidates({ sendingDomainId: message.sending_domain_id, serviceId: message.service_id, messageCategory: message.message_category })).rows;
-            const compatible = candidates.filter(row => !capabilityIssue(message, dependencies.providerCapabilities(row.provider_type), envelope));
-            if (!compatible.length) {
-                await routingFailure(client, submission, "UNSUPPORTED_MESSAGE_CAPABILITY", "No configured provider can preserve the message fields and recipient envelope.", false);
+            const selected = (await client.routing.findBoundProvider({ sendingDomainId: message.sending_domain_id, serviceId: message.service_id })).rows[0];
+            if (!selected) {
+                await routingFailure(client, submission, "NO_ELIGIBLE_ROUTE", "No sending provider is bound to this service and domain.", false);
+                return null;
+            }
+            if (capabilityIssue(message, dependencies.providerCapabilities(selected.provider_type), envelope)) {
+                await routingFailure(client, submission, "UNSUPPORTED_MESSAGE_CAPABILITY", "The configured provider cannot preserve the message fields and recipient envelope.", false);
+                return null;
+            }
+            if (evaluateCandidate(selected).length || !await reserveProviderCapacity(client, selected, allowed.length)) {
+                await routingFailure(client, submission, "ROUTE_TEMPORARILY_UNAVAILABLE", "The configured provider is unavailable or has insufficient quota.", true);
                 return null;
             }
             const attemptNumber = (latest?.attempt_number ?? 0) + 1;
-            // Determinate rejections may fail over; uncertainty never reaches this branch.
-            const failedAccounts = (await client.routing.listFailedAccounts({ submissionId: submissionId })).rows.map(row => row.provider_account_id);
-            const healthy = compatible.filter(row => !evaluateCandidate(row).length);
-            let pool = healthy.some(row => !failedAccounts.includes(row.provider_account_id)) ? healthy.filter(row => !failedAccounts.includes(row.provider_account_id)) : healthy;
-            let selected: Candidate | undefined;
-            while (pool.length) {
-                const pick = choosePolicyTarget(submissionId, attemptNumber, pool.map(row => ({ ...row, policyPriority: row.policy_priority })))!;
-                await client.routing.beginCapacityReservation();
-                if (await reserveProviderCapacity(client, pick, allowed.length) && await client.reserveRateLimits([
-                    { scope: "provider", key: pick.provider_account_id, limit: pick.rate_limit_per_minute, units: allowed.length },
-                    { scope: "identity", key: pick.provider_identity_id, limit: pick.rate_limit_per_minute, units: allowed.length },
-                ])) {
-                    await client.routing.commitCapacityReservation();
-                    selected = pick;
-                    break;
-                }
-                await client.routing.rollbackCapacityReservation();
-                await client.routing.releaseCapacityReservation();
-                pool = pool.filter(row => row.target_id !== pick.target_id);
-            }
-            if (!selected) {
-                await routingFailure(client, submission, "ROUTE_TEMPORARILY_UNAVAILABLE", "No healthy routing target has sufficient quota or rate capacity.", true);
-                return null;
-            }
             try {
                 assertSendDeadline(message.send_before);
             }
@@ -156,12 +139,9 @@ export function createRoutingService(dependencies: OutboundDependencies) {
             const fingerprintInput = JSON.stringify({ ...canonical, attachments: message.attachment_snapshot });
             const fingerprint = message.content_policy === "sensitive" ? dependencies.payloadDigest(fingerprintInput, `provider-request:${message.id}`, message.payload_hash_key_version ?? undefined).digest : createHash("sha256").update(fingerprintInput).digest("hex");
             const snapshot = {
-                policy: { id: selected.policy_id, name: selected.policy_name, priority: selected.policy_priority },
-                chosen: { targetId: selected.target_id, accountId: selected.provider_account_id, identityId: selected.provider_identity_id, providerType: selected.provider_type, nativeIdempotency },
-                candidates: candidates.map(row => ({ targetId: row.target_id, policyId: row.policy_id, policyPriority: row.policy_priority, accountId: row.provider_account_id, identityId: row.provider_identity_id, priority: row.priority, weight: row.weight, reasons: evaluateCandidate(row), capabilityIssue: capabilityIssue(message, dependencies.providerCapabilities(row.provider_type), envelope) })),
+                chosen: { accountId: selected.provider_account_id, identityId: selected.provider_identity_id, providerType: selected.provider_type, nativeIdempotency },
                 selectedAt: new Date().toISOString(), recipientCount: allowed.length,
             };
-            await client.routing.closeExpiredCircuit({ targetId: selected.target_id });
             await client.routing.insertAttempt({ attemptId: attemptId, submissionId: submissionId, attemptNumber: attemptNumber, providerAccountId: selected.provider_account_id, providerIdentityId: selected.provider_identity_id, snapshot: snapshot, fingerprint: fingerprint, providerIdempotencyKey: providerIdempotencyKey });
             await client.routing.startSubmissionAttempt({ submissionId: submissionId, attemptId: attemptId });
             for (const row of allowed) {
@@ -189,9 +169,6 @@ export function createRoutingService(dependencies: OutboundDependencies) {
             if (row.is_current)
                 await client.routing.acceptSubmission({ submissionId: row.submission_id });
             await emit(client, row.submission_id, "accepted", `attempt:${attemptId}:accepted`, undefined, row, row.started_at);
-            const targetId = ((row.routing_snapshot.chosen ?? {}) as Record<string, unknown>).targetId;
-            if (typeof targetId === "string")
-                await client.routing.resetCircuit({ targetId: targetId });
         });
     }
     async function markUnknown(attemptId: string, message: string, details: {
@@ -235,13 +212,6 @@ export function createRoutingService(dependencies: OutboundDependencies) {
             await client.routing.failAttempt({ attemptId: attemptId, category: failure.category, code: error.code, message: error.message, error: error });
             if (row.is_current)
                 await client.routing.setFailureResult({ submissionId: row.submission_id, status: retry ? "deferred" : "failed" });
-            const targetId = ((row.routing_snapshot.chosen ?? {}) as Record<string, unknown>).targetId;
-            const threshold = positiveInteger(process.env.ENVOY_CIRCUIT_FAILURE_THRESHOLD, 5);
-            if (retryable && typeof targetId === "string" && ["network", "provider", "rate_limit"].includes(failure.category)) {
-                const sample = (await client.routing.readCircuitFailureWindow({ targetId: targetId, categories: ["network", "provider", "rate_limit"], threshold: threshold })).rows[0];
-                if (Number(sample.sample_count) === threshold && sample.all_failed)
-                    await client.routing.openCircuit({ targetId: targetId, seconds: positiveInteger(process.env.ENVOY_CIRCUIT_OPEN_SECONDS, 300) });
-            }
             await emit(client, row.submission_id, retry ? "deferred" : "failed", `attempt:${attemptId}:failure`, error, row);
             if (retry)
                 await enqueue(client, row.submission_id, delay);
