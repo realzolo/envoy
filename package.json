@@ -30,7 +30,7 @@
     "@aws-sdk/client-sts": "^3.1152.0",
     "@aws-sdk/credential-providers": "^3.1152.0",
     "@next/env": "16.4.2",
-    "bullmq": "^6.3.8",
+    "bullmq": "^6.3.15",
     "drizzle-orm": "^0.45.4",
     "jose": "^6.2.12",
     "mailparser": "^3.9.28",
