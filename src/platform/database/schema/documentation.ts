@@ -61,6 +61,10 @@ export const schemaDocumentation = {
     id: "Unique email domain identifier", domain: "Globally unique normalized email domain",
     status: "Domain status: active (available) or disabled", createdAt: created, updatedAt: updated,
   } },
+  domainInboundSources: { table: "Provider accounts authorized to deliver inbound mail for each domain", columns: {
+    sendingDomainId: "Domain receiving mail through this provider account",
+    providerAccountId: "Authenticated provider account allowed to deliver mail for the domain",
+  } },
   providerIdentities: { table: "Domain sending identities within provider accounts and their DNS verification status", columns: {
     id: "Unique provider sending identity identifier", sendingDomainId: "Managed email domain represented by this identity", providerAccountId: "Provider account that owns this identity",
     externalIdentityId: "Provider-side identity identifier; may be null before a remote identity is created", status: "Identity status: pending (awaiting verification), verified, failed or disabled",

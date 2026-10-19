@@ -108,7 +108,7 @@ The service API is self-describing at `GET /api/v1` and `GET /api/v1/openapi.jso
 
 Create a Service under **Services**, then bind its domains under **Edit configuration**. Creation issues the first API key; **Manage credentials** handles key issuance, replacement, and revocation. A Service can use several domains, and a domain can deliver private inbound copies to several Services. Keys rotate without changing the Service's domain bindings. Envoy does not configure business APPs or their mailbox purposes. The caller selects its complete From/Reply-To addresses within configured domains.
 
-For each Service-domain binding, enable receiving and choose an outbound provider identity independently. Leaving the outbound identity empty disables sending from that domain for the Service. Set the domain's inbound provider account to receive mail; leaving it empty disables inbound delivery for that domain. Saving Service configuration replaces its domain bindings atomically.
+For each Service-domain binding, enable Receive and Send independently. Send automatically uses the only ready, verified identity for the domain; choose an identity when several are available. Leaving Send off disables sending from that domain for the Service. Configure authorized inbound source accounts once under **Domains**; signed mail from those accounts routes by recipient domain to every Service with Receive enabled. A domain with no authorized source cannot deliver inbound mail to Services. Saving Service configuration replaces its domain bindings atomically.
 
 See [the final service API contract](docs/API.md) for full request fields, file upload, result semantics, and failure diagnosis.
 

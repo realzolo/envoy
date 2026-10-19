@@ -43,6 +43,7 @@ async function bindService(index: number) {
 
 beforeAll(async () => {
   await query("INSERT INTO sending_domains(id,domain) VALUES($1,$2)", [domainId, domain]);
+  await query("INSERT INTO domain_inbound_sources(sending_domain_id,provider_account_id) VALUES($1,'pa_mock')", [domainId]);
   for (const service of services) await query("INSERT INTO services(id,name) VALUES($1,$1)", [service]);
 });
 

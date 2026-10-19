@@ -53,6 +53,7 @@ describe("native admin mail", () => {
     const data=await adminData("domains");
     const domain=data.domains?.find(item=>item.id==="sd_atlas");
     expect(domain?.receiving_service_count).toBeGreaterThan(0);
+    expect(domain?.inbound_source_account_ids).toEqual(["pa_mock"]);
     expect(domain).not.toHaveProperty("inbound_provider_account_id");
     expect(domain).not.toHaveProperty("inbound_ready");
   });

@@ -57,7 +57,7 @@ async function persistInbound(input: InboundInput) {
 async function persistInboundCopy(input: InboundInput, scope: string, serviceId: string | null) {
   const envelopeRecipients=input.message.envelopeRecipients??[];
   if (serviceId) {
-    const allowed=(await dependencies.repository.allowedDomains({ serviceId })).rows.map(row=>row.domain);
+    const allowed=(await dependencies.repository.allowedDomains({ serviceId, accountId: input.providerAccountId })).rows.map(row=>row.domain);
     if(!envelopeRecipients.length || envelopeRecipients.some(recipient=>!allowed.includes(recipient.split('@')[1])))
       throw new InboundTerminalError("Domain receiving permission was revoked","DOMAIN_RECEIVE_NOT_AUTHORIZED");
   }

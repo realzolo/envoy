@@ -10,10 +10,14 @@ export const channelsAdminReads={providers: () => query<ProviderAccountDto>(`SEL
     JOIN provider_webhook_endpoints e ON e.provider_account_id=a.id
     ORDER BY a.name`),
 domains: () => query<DomainDto>(`SELECT sd.id,sd.domain,sd.status,
+	    ARRAY(SELECT source.provider_account_id FROM domain_inbound_sources source WHERE source.sending_domain_id=sd.id ORDER BY source.provider_account_id) AS inbound_source_account_ids,
     (SELECT count(*)::int FROM service_domain_bindings b
       JOIN services s ON s.id=b.service_id AND s.status='active'
       WHERE b.sending_domain_id=sd.id AND b.receive_enabled) AS receiving_service_count,
-    json_agg(json_build_object('id',pi.id,'accountId',pa.id,'account',pa.name,'type',pa.type,'accountStatus',pa.status,'status',pi.status,'externalId',pi.external_identity_id,'dnsRecords',pi.dns_records,'lastCheckedAt',pi.last_checked_at) ORDER BY pa.name)
+	    json_agg(json_build_object('id',pi.id,'accountId',pa.id,'account',pa.name,'type',pa.type,'accountStatus',pa.status,'status',pi.status,
+	      'sendReady',pi.status='verified' AND pa.status='active' AND COALESCE(pa.health->>'status','unknown') NOT IN ('unhealthy','offline')
+	        AND EXISTS(SELECT 1 FROM provider_credentials pc WHERE pc.provider_account_id=pa.id AND pc.status='active' AND pc.valid_from<=now() AND (pc.valid_to IS NULL OR pc.valid_to>now())),
+	      'externalId',pi.external_identity_id,'dnsRecords',pi.dns_records,'lastCheckedAt',pi.last_checked_at) ORDER BY pa.name)
       FILTER(WHERE pi.id IS NOT NULL) AS identities
     FROM sending_domains sd
     LEFT JOIN provider_identities pi ON pi.sending_domain_id=sd.id

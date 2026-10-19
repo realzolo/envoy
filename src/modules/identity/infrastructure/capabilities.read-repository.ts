@@ -19,9 +19,10 @@ export const discoveryRepository: DiscoveryRepository = {
           AND COALESCE(a.health->>'status','unknown') NOT IN ('unhealthy','offline')
           AND EXISTS(SELECT 1 FROM provider_credentials c WHERE c.provider_account_id=a.id
             AND c.status='active' AND c.valid_from<=now() AND (c.valid_to IS NULL OR c.valid_to>now()))) AS sending_configured,
-      EXISTS(SELECT 1 FROM provider_accounts ia
+      EXISTS(SELECT 1 FROM domain_inbound_sources source
+        JOIN provider_accounts ia ON ia.id=source.provider_account_id
         JOIN provider_webhook_endpoints ie ON ie.provider_account_id=ia.id
-        WHERE ia.status='active' AND ie.status='active' AND ie.security_configured) AS ingress_ready,
+        WHERE source.sending_domain_id=d.id AND ia.status='active' AND ie.status='active' AND ie.security_configured) AS ingress_ready,
       (SELECT max(f.occurred_at) FROM (
         SELECT e.occurred_at FROM delivery_events e JOIN deliveries dl ON dl.id=e.delivery_id JOIN messages m ON m.id=dl.message_id WHERE m.service_id=$1 AND m.sending_domain_id=d.id AND e.event_type='accepted'
         UNION ALL SELECT e.occurred_at FROM submission_events e JOIN submissions sub ON sub.id=e.submission_id JOIN messages m ON m.id=sub.message_id WHERE m.service_id=$1 AND m.sending_domain_id=d.id AND e.event_type='accepted'

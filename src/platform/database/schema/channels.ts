@@ -1,4 +1,4 @@
-import { type PgTableExtraConfigValue, pgTable, unique, check, text, jsonb, integer, timestamp, uniqueIndex, foreignKey, boolean } from "drizzle-orm/pg-core"
+import { type PgTableExtraConfigValue, pgTable, unique, check, text, jsonb, integer, timestamp, uniqueIndex, foreignKey, boolean, primaryKey, index } from "drizzle-orm/pg-core"
 import { sql } from "drizzle-orm";
 
 export const providerAccounts = pgTable("provider_accounts", {
@@ -79,6 +79,16 @@ export const sendingDomains = pgTable("sending_domains", {
 }, (table): PgTableExtraConfigValue[] => [
 	unique("sending_domains_domain_key").on(table.domain),
 	check("sending_domains_status_check", sql`status = ANY (ARRAY['active'::text, 'disabled'::text])`),
+]);
+
+export const domainInboundSources = pgTable("domain_inbound_sources", {
+	sendingDomainId: text("sending_domain_id").notNull(),
+	providerAccountId: text("provider_account_id").notNull(),
+}, table => [
+	primaryKey({ columns: [table.sendingDomainId, table.providerAccountId], name: "domain_inbound_sources_pkey" }),
+	foreignKey({ columns: [table.sendingDomainId], foreignColumns: [sendingDomains.id], name: "domain_inbound_sources_sending_domain_id_fkey" }).onDelete("cascade"),
+	foreignKey({ columns: [table.providerAccountId], foreignColumns: [providerAccounts.id], name: "domain_inbound_sources_provider_account_id_fkey" }).onDelete("cascade"),
+	index("domain_inbound_sources_provider_account_id_idx").on(table.providerAccountId),
 ]);
 
 

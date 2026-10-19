@@ -6,5 +6,9 @@
   {
     "file": "002_remove_inbound_provider_account.sql",
     "sha256": "cde6d2445f584d067d47329d16b49846de547249892fd4c585e23edfb65b2b10"
+  },
+  {
+    "file": "003_domain_inbound_sources.sql",
+    "sha256": "6bc9ad91f86cb8037b888340b26c8f90e43842123a81b150920c365a738bd79f"
   }
 ]

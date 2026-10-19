@@ -6,36 +6,48 @@ import { serviceConfigurationSchema,type ServiceConfiguration,type ServiceDomain
 import { Alert,Button,Checkbox,Collapse,Drawer,Form,Empty,Input,Modal,Select,Space,Typography } from "@arco-design/web-react";
 import { useState } from "react";
 
+type EditorBinding = ServiceDomainBinding & { send: boolean };
+type EditorConfiguration = Omit<ServiceConfiguration, "domains"> & { domains: EditorBinding[] };
+
 function DomainBindingsEditor({ domains, value: bindings = [], onChange }: {
-  domains: Row[]; value?: ServiceDomainBinding[]; onChange?: (bindings: ServiceDomainBinding[]) => void;
+  domains: Row[]; value?: EditorBinding[]; onChange?: (bindings: EditorBinding[]) => void;
 }) {
   const selected = bindings.map(binding => binding.domainId);
-  const update = (domainId: string, change: Partial<ServiceDomainBinding>) => onChange?.(bindings.map(binding => binding.domainId === domainId ? { ...binding, ...change } : binding));
+  const update = (domainId: string, change: Partial<EditorBinding>) => onChange?.(bindings.map(binding => binding.domainId === domainId ? { ...binding, ...change } : binding));
   return <Space direction="vertical" size="medium" className={styles.stack}>
     <Select mode="multiple" showSearch allowClear maxTagCount={2} placeholder="Select domains" value={selected}
       options={domains.filter(domain => domain.status === "active" || selected.includes(value(domain, "id"))).map(domain => ({ value: value(domain, "id"), label: `${value(domain, "domain")}${domain.status === "active" ? "" : " (disabled)"}` }))}
-      onChange={(domainIds: string[]) => onChange?.(domainIds.map(domainId => bindings.find(binding => binding.domainId === domainId) ?? { domainId, receive: true, outboundIdentityId: null }))} />
+      onChange={(domainIds: string[]) => onChange?.(domainIds.map(domainId => bindings.find(binding => binding.domainId === domainId) ?? { domainId, receive: true, send: false, outboundIdentityId: null }))} />
     {bindings.map(binding => {
       const domain = domains.find(item => item.id === binding.domainId);
       const identities = rows(domain?.identities);
+      const ready = identities.filter(identity => identity.sendReady === true);
+      const choices = identities.filter(identity => identity.sendReady === true || identity.id === binding.outboundIdentityId);
+      const selectedIdentity = identities.find(identity => identity.id === binding.outboundIdentityId);
       return <Space key={binding.domainId} direction="vertical" size="mini" align="start">
         <Space wrap align="center">
           <Typography.Text code>{value(domain ?? {}, "domain")}</Typography.Text>
-          <Checkbox checked={binding.receive} onChange={receive => update(binding.domainId, { receive })}>Receive</Checkbox>
-          <Select style={{ minWidth: 190 }} placeholder="No sending provider" allowClear value={binding.outboundIdentityId ?? undefined}
-            options={identities.map(identity => ({ value: value(identity, "id"), label: `${value(identity, "account")} (${value(identity, "status")})` }))}
-            onChange={identityId => update(binding.domainId, { outboundIdentityId: identityId ? String(identityId) : null })} />
+          <Checkbox checked={binding.receive} onChange={receive => update(binding.domainId, { receive })}>Receive for this Service</Checkbox>
+          <Checkbox checked={binding.send} disabled={!binding.send && !ready.length} onChange={send => update(binding.domainId, {
+            send, outboundIdentityId: send ? ready.length === 1 ? value(ready[0], "id") : null : null,
+          })}>Send</Checkbox>
+          {binding.send && (choices.length > 1 || !binding.outboundIdentityId) && <Select style={{ minWidth: 190 }} placeholder="Choose sending provider" value={binding.outboundIdentityId ?? undefined}
+            options={choices.map(identity => ({ value: value(identity, "id"), label: `${value(identity, "account")} (${value(identity, "status")})` }))}
+            onChange={identityId => update(binding.domainId, { outboundIdentityId: identityId ? String(identityId) : null })} />}
+          {binding.send && binding.outboundIdentityId && choices.length === 1 && <Typography.Text type="secondary">Send via {value(selectedIdentity ?? {}, "account")}</Typography.Text>}
         </Space>
-        {!binding.receive && !binding.outboundIdentityId && <Typography.Text type="error">Select a sending provider or remove this domain.</Typography.Text>}
+        {binding.send && selectedIdentity && selectedIdentity.sendReady !== true && <Typography.Text type="warning">This provider is unavailable. Select another provider or turn off Send.</Typography.Text>}
+        {binding.send && !binding.outboundIdentityId && <Typography.Text type="error">Choose a sending provider.</Typography.Text>}
+        {!binding.receive && !binding.send && <Typography.Text type="error">Enable Receive or Send, or remove this domain.</Typography.Text>}
       </Space>;
     })}
   </Space>;
 }
 
-function initialConfiguration(service: Row | undefined): ServiceConfiguration {
+function initialConfiguration(service: Row | undefined): EditorConfiguration {
   return {
     serviceName: service ? value(service, "name") : "",
-    domains: service ? rows(service.domain_bindings).map(binding => ({ domainId: value(binding, "sending_domain_id"), receive: binding.receive_enabled === true, outboundIdentityId: binding.outbound_provider_identity_id ? value(binding, "outbound_provider_identity_id") : null })) : [],
+    domains: service ? rows(service.domain_bindings).map(binding => ({ domainId: value(binding, "sending_domain_id"), receive: binding.receive_enabled === true, send: Boolean(binding.outbound_provider_identity_id), outboundIdentityId: binding.outbound_provider_identity_id ? value(binding, "outbound_provider_identity_id") : null })) : [],
     callbackUrl: service ? value(service, "callback_url") : "",
     suppressionManagement: service?.suppression_management_allowed === true,
   };
@@ -50,8 +62,14 @@ function ServiceEditor({ service, data, onClose, onSaved }: { service?: Row; dat
   const [draft, setDraft] = useState(initial);
   const noMail = draft.domains.length === 0;
 
-  function review(input: ServiceConfiguration) {
-    const parsed = serviceConfigurationSchema.safeParse(input);
+  function review(input: EditorConfiguration) {
+    if (input.domains.some(binding => binding.send && !binding.outboundIdentityId)) {
+      setValidationErrors({domains: "Choose a sending provider for every domain with Send enabled."});
+      return;
+    }
+    const parsed = serviceConfigurationSchema.safeParse({ ...input, domains: input.domains.map(binding => ({
+      domainId: binding.domainId, receive: binding.receive, outboundIdentityId: binding.outboundIdentityId,
+    })) });
     setValidationErrors({});
     if (!parsed.success) {
       setValidationErrors(Object.fromEntries(parsed.error.issues.map(issue => [issue.path.join("."), issue.message])));
@@ -81,7 +99,7 @@ function ServiceEditor({ service, data, onClose, onSaved }: { service?: Row; dat
   return <Drawer className={styles.readable} title={service ? `Edit configuration · ${value(service, "name")}` : "Create service"} visible width="min(760px, 100vw)" onCancel={onClose} autoFocus focusLock
     footer={<Space wrap><Button onClick={onClose}>Cancel</Button><Button type="primary" loading={action.pending} onClick={() => form.submit()}>Review configuration</Button></Space>}>
     <Space direction="vertical" size="large" className={styles.stack}>
-      <ActionForm fieldErrors={{ ...action.fields, ...validationErrors }} form={form} initialValues={initial} layout="vertical" onValuesChange={(_, input) => { const values = input as Partial<ServiceConfiguration>; setValidationErrors({}); setDraft({ ...initial, ...values, domains: values.domains ?? initial.domains }); }} onSubmit={values => review(values as ServiceConfiguration)}>
+      <ActionForm fieldErrors={{ ...action.fields, ...validationErrors }} form={form} initialValues={initial} layout="vertical" onValuesChange={(_, input) => { const values = input as Partial<EditorConfiguration>; setValidationErrors({}); setDraft({ ...initial, ...values, domains: values.domains ?? initial.domains }); }} onSubmit={values => review(values as EditorConfiguration)}>
         <Field field="serviceName" label="Service name" hint="Use a unique name to identify the application or workload." required rules={requiredRule}><Input placeholder="e.g. Order notifications" /></Field>
         <Field field="domains" label="Domains" hint="Each selected domain can receive mail for this Service and use one sending provider."><DomainBindingsEditor domains={rows(data.domains)} /></Field>
         <Field field="callbackUrl" label="Event callback URL" hint="Leave empty to poll for events. A new signing secret is shown once when the callback is first configured."><Input placeholder="https://api.example.com/mail/events" allowClear /></Field>

@@ -49,7 +49,7 @@ describe("application database migrations", () => {
         expect(changes.every(row => row.message_id === "msg_upgrade" && row.recorded_at.getTime() > Date.now() - 10_000)).toBe(true);
         expect((await client.query("SELECT position::text,floor::text FROM outbound_streams WHERE service_id='svc_upgrade'")).rows[0]).toEqual({ position: "2", floor: "0" });
         const journal = (await client.query("SELECT * FROM envoy_meta.migrations ORDER BY file")).rows;
-        expect(journal).toHaveLength(2); expect(await initializeDatabase(client)).toBe("validated");
+        expect(journal).toHaveLength(3); expect(await initializeDatabase(client)).toBe("validated");
         expect((await client.query("SELECT * FROM envoy_meta.migrations ORDER BY file")).rows).toEqual(journal);
         await client.query("INSERT INTO delivery_events(id,delivery_id,event_type,source_key,occurred_at,canonical_payload) VALUES('next_event','delivery_upgrade','opened','next-source','1800-01-01','{}')");
         expect((await client.query("SELECT position::text FROM outbound_changes WHERE id='next_event'")).rows[0].position).toBe("3");
@@ -62,7 +62,7 @@ describe("application database migrations", () => {
       try {
         expect((await Promise.all([initializeDatabase(first), initializeDatabase(second)])).sort()).toEqual(["initialized", "validated"]);
         await seed(first);
-        expect((await first.query("SELECT count(*)::int AS count FROM envoy_meta.migrations")).rows[0].count).toBe(2);
+        expect((await first.query("SELECT count(*)::int AS count FROM envoy_meta.migrations")).rows[0].count).toBe(3);
         expect((await first.query("SELECT count(*)::int AS count FROM outbound_changes")).rows[0].count).toBe(2);
       } finally { first.release(); second.release(); }
     });
@@ -108,6 +108,41 @@ describe("application database migrations", () => {
       } finally { client.release(); }
     });
   });
+  it("upgrades populated V2 databases and preserves existing inbound routes", async () => {
+    await isolated(async pool => {
+      const client = await pool.connect();
+      try {
+        const migrations = await loadApplicationMigrations();
+        await initializeApplicationSchema(client, migrations.slice(0, 2), migrations.slice(0, 2).map(row => row.sql).join("\n"));
+        await seed(client);
+        await client.query("INSERT INTO provider_accounts(id,type,name,status,public_config) VALUES('provider_upgrade','mock','Upgrade Provider','active','{}')");
+        const before = await preserved(client);
+        expect(await initializeDatabase(client)).toBe("upgraded");
+        expect(await preserved(client)).toEqual(before);
+        expect((await client.query("SELECT sending_domain_id,provider_account_id FROM domain_inbound_sources")).rows)
+          .toEqual([{sending_domain_id:"domain_upgrade",provider_account_id:"provider_upgrade"}]);
+        expect(await initializeDatabase(client)).toBe("validated");
+      } finally { client.release(); }
+    });
+  });
+  it("rolls back a failed V3 upgrade and can retry", async () => {
+    await isolated(async pool => {
+      const client = await pool.connect();
+      try {
+        const migrations = await loadApplicationMigrations();
+        await initializeApplicationSchema(client, migrations.slice(0, 2), migrations.slice(0, 2).map(row => row.sql).join("\n"));
+        await seed(client);
+        const before = await preserved(client);
+        const failing = [...migrations.slice(0, 2), {...migrations[2],sql:`${migrations[2].sql}\nSELECT missing_migration_function();`}];
+        await expect(initializeApplicationSchema(client, failing, await readFile("db/schema.sql", "utf8"))).rejects.toThrow("missing_migration_function");
+        expect(await preserved(client)).toEqual(before);
+        expect((await client.query("SELECT to_regclass('public.domain_inbound_sources') AS sources")).rows[0].sources).toBeNull();
+        expect((await client.query("SELECT file FROM envoy_meta.migrations ORDER BY file")).rows.map(row => row.file))
+          .toEqual(migrations.slice(0, 2).map(row => row.file));
+        expect(await initializeDatabase(client)).toBe("upgraded");
+      } finally { client.release(); }
+    });
+  });
   it("rolls back a failed empty-database initialization and can retry", async () => {
     await isolated(async pool => {
       const client = await pool.connect();
@@ -131,6 +166,18 @@ describe("application database migrations", () => {
         await client.query("UPDATE envoy_meta.migrations SET sha256=$2 WHERE file=$1", [migrations[0].file, migrations[0].sha256]);
         await client.query("INSERT INTO envoy_meta.migrations(file,sha256) VALUES('999_unknown.sql','unknown')");
         await expect(initializeDatabase(client)).rejects.toThrow("checksum"); expect(await preserved(client)).toEqual(before);
+      } finally { client.release(); }
+    });
+  });
+  it("rejects V3 catalog drift before modifying data", async () => {
+    await isolated(async pool => {
+      const client = await pool.connect();
+      try {
+        await initializeDatabase(client); await seed(client);
+        const before = await preserved(client);
+        await client.query("DROP INDEX domain_inbound_sources_provider_account_id_idx");
+        await expect(initializeDatabase(client)).rejects.toThrow("Database does not match");
+        expect(await preserved(client)).toEqual(before);
       } finally { client.release(); }
     });
   });

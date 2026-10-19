@@ -3,6 +3,7 @@ import { db, query } from "@/platform/database";
 import { persistInbound, ingestProviderWebhook, getInboundMessage, listInboundMessages } from "@/modules/inbound/public";
 import { processRawProviderEvent } from "@/modules/outbound/public";
 import { providerRegistry } from "@/integrations/providers/registry";
+import { setDomainInboundSources } from "@/modules/channels/public";
 
 const tag = crypto.randomUUID().replaceAll("-", "");
 const domain = `access-${tag}.test`;
@@ -39,6 +40,7 @@ async function deliver(envelopeRecipients?: string[], webhookEndpointId = "pwe_m
 beforeAll(async () => {
   for (const serviceId of services) await query("INSERT INTO services(id,name) VALUES($1,$1)", [serviceId]);
   await query("INSERT INTO sending_domains(id,domain) VALUES($1,$2),($3,$4)", [domainId, domain, otherDomainId, otherDomain]);
+  await query("INSERT INTO domain_inbound_sources(sending_domain_id,provider_account_id) VALUES($1,'pa_mock'),($2,'pa_mock')", [domainId, otherDomainId]);
   for (const [index, serviceId] of services.entries()) {
     await query("INSERT INTO service_domain_bindings(id,service_id,sending_domain_id,receive_enabled) VALUES($1,$2,$3,true)", [`sdb_${index}_${tag}`, serviceId, index === 2 ? otherDomainId : domainId]);
   }
@@ -55,6 +57,22 @@ afterAll(async () => {
 });
 
 describe("domain-bound inbound delivery", () => {
+  it("accepts inbound mail only from accounts authorized for the recipient domain", async () => {
+    await expect(setDomainInboundSources(domainId, ["missing-account"], "test")).rejects.toThrow("must exist");
+    expect((await query<{provider_account_id:string}>("SELECT provider_account_id FROM domain_inbound_sources WHERE sending_domain_id=$1", [domainId])).rows)
+      .toEqual([{provider_account_id:"pa_mock"}]);
+    await setDomainInboundSources(domainId, [], "test");
+    try {
+      const externalId = await deliver([`help@${domain}`]);
+      const copies = (await query<{service_id:string|null}>("SELECT service_id FROM inbound_messages WHERE external_message_id=$1", [externalId])).rows;
+      expect(copies).toEqual([{service_id:null}]);
+    } finally {
+      await setDomainInboundSources(domainId, ["pa_mock"], "test");
+    }
+    const externalId = await deliver([`help@${domain}`]);
+    const copies = (await query<{service_id:string|null}>("SELECT service_id FROM inbound_messages WHERE external_message_id=$1 ORDER BY service_id", [externalId])).rows;
+    expect(copies).toEqual([{service_id:services[0]},{service_id:services[1]}]);
+  });
   it("fans out one domain to every bound Service and isolates a second domain", async () => {
     const externalId = await deliver([`help@${domain}`, `alias@${domain}`, `private@${otherDomain}`]);
     const copies = (await query<{ id: string; service_id: string }>("SELECT id,service_id FROM inbound_messages WHERE external_message_id=$1 ORDER BY service_id", [externalId])).rows;

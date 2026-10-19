@@ -54,6 +54,7 @@ beforeAll(async () => {
     endpointId, accountId, token, security.secretCiphertext, security.encryptedDek, security.keyVersion
   ]);
   await query("INSERT INTO sending_domains(id,domain) VALUES($1,$2)", [domainId, domain]);
+  await query("INSERT INTO domain_inbound_sources(sending_domain_id,provider_account_id) VALUES($1,$2)", [domainId, accountId]);
   for (const [index, serviceId] of serviceIds.entries()) {
     await query("INSERT INTO services(id,name) VALUES($1,$1)", [serviceId]);
     await query("INSERT INTO service_domain_bindings(id,service_id,sending_domain_id,receive_enabled) VALUES($1,$2,$3,true)", [

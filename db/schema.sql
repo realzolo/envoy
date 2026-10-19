@@ -29,6 +29,12 @@ CREATE TABLE "services" (
 	CONSTRAINT "services_configuration_revision_check" CHECK (configuration_revision > 0)
 );
 
+CREATE TABLE "domain_inbound_sources" (
+	"sending_domain_id" text NOT NULL,
+	"provider_account_id" text NOT NULL,
+	CONSTRAINT "domain_inbound_sources_pkey" PRIMARY KEY("sending_domain_id","provider_account_id")
+);
+
 CREATE TABLE "provider_accounts" (
 	"id" text PRIMARY KEY NOT NULL,
 	"type" text NOT NULL,
@@ -547,6 +553,8 @@ CREATE TABLE "worker_heartbeats" (
 );
 
 ALTER TABLE "service_credentials" ADD CONSTRAINT "service_credentials_service_id_fkey" FOREIGN KEY ("service_id") REFERENCES "public"."services"("id") ON DELETE cascade ON UPDATE no action;
+ALTER TABLE "domain_inbound_sources" ADD CONSTRAINT "domain_inbound_sources_sending_domain_id_fkey" FOREIGN KEY ("sending_domain_id") REFERENCES "public"."sending_domains"("id") ON DELETE cascade ON UPDATE no action;
+ALTER TABLE "domain_inbound_sources" ADD CONSTRAINT "domain_inbound_sources_provider_account_id_fkey" FOREIGN KEY ("provider_account_id") REFERENCES "public"."provider_accounts"("id") ON DELETE cascade ON UPDATE no action;
 ALTER TABLE "provider_credentials" ADD CONSTRAINT "provider_credentials_provider_account_id_fkey" FOREIGN KEY ("provider_account_id") REFERENCES "public"."provider_accounts"("id") ON DELETE cascade ON UPDATE no action;
 ALTER TABLE "provider_identities" ADD CONSTRAINT "provider_identities_sending_domain_id_fkey" FOREIGN KEY ("sending_domain_id") REFERENCES "public"."sending_domains"("id") ON DELETE cascade ON UPDATE no action;
 ALTER TABLE "provider_identities" ADD CONSTRAINT "provider_identities_provider_account_id_fkey" FOREIGN KEY ("provider_account_id") REFERENCES "public"."provider_accounts"("id") ON DELETE cascade ON UPDATE no action;
@@ -598,6 +606,7 @@ ALTER TABLE "suppressions" ADD CONSTRAINT "suppressions_service_id_fkey" FOREIGN
 ALTER TABLE "request_logs" ADD CONSTRAINT "request_logs_service_id_fkey" FOREIGN KEY ("service_id") REFERENCES "public"."services"("id") ON DELETE set null ON UPDATE no action;
 ALTER TABLE "request_logs" ADD CONSTRAINT "request_logs_message_id_fkey" FOREIGN KEY ("message_id") REFERENCES "public"."messages"("id") ON DELETE set null ON UPDATE no action;
 CREATE UNIQUE INDEX "services_name_key" ON "services" USING btree (lower("name"));
+CREATE INDEX "domain_inbound_sources_provider_account_id_idx" ON "domain_inbound_sources" USING btree ("provider_account_id");
 CREATE UNIQUE INDEX "provider_credentials_one_active" ON "provider_credentials" USING btree ("provider_account_id") WHERE (status = 'active'::text);
 CREATE INDEX "service_domain_bindings_inbound_fanout" ON "service_domain_bindings" USING btree ("sending_domain_id") WHERE "service_domain_bindings"."receive_enabled";
 CREATE INDEX "deliveries_lifecycle_idx" ON "deliveries" USING btree ("lifecycle_status","queued_at" DESC NULLS FIRST);
@@ -772,6 +781,9 @@ COMMENT ON COLUMN "delivery_events"."source_key" IS 'Globally unique event sourc
 COMMENT ON COLUMN "delivery_events"."occurred_at" IS 'Actual event time from the provider or internal action (timestamptz)';
 COMMENT ON COLUMN "delivery_events"."canonical_payload" IS 'Canonical event JSON containing type, time, reason and associated metadata';
 COMMENT ON COLUMN "delivery_events"."created_at" IS 'Record creation time (timestamptz); defaults to the database transaction start time, now()';
+COMMENT ON TABLE "domain_inbound_sources" IS 'Provider accounts authorized to deliver inbound mail for each domain';
+COMMENT ON COLUMN "domain_inbound_sources"."sending_domain_id" IS 'Domain receiving mail through this provider account';
+COMMENT ON COLUMN "domain_inbound_sources"."provider_account_id" IS 'Authenticated provider account allowed to deliver mail for the domain';
 COMMENT ON TABLE "inbound_attachments" IS 'Inbound attachment metadata inheriting the owning message service isolation and retention policy';
 COMMENT ON COLUMN "inbound_attachments"."content_purged_at" IS 'Irreversible content purge time (timestamptz); a non-null value prevents content reads while retaining business metadata';
 COMMENT ON COLUMN "inbound_attachments"."id" IS 'Unique inbound attachment identifier';

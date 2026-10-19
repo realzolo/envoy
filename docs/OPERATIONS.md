@@ -110,12 +110,17 @@ quarantined mail. For Resend, enable receiving on each Service binding that shou
 `email.received` webhook supplies recipients; Envoy retrieves the
 message body and attachments through the Resend API. Resend's `received_for` comes from a `Received` header; if missing,
 Envoy uses the webhook's `to/cc/bcc` fields. Its recipient metadata may differ from the SMTP envelope.
+Under **Domains → Inbound sources**, authorize the provider accounts that can deliver each domain. A newly registered
+domain uses the sole ready webhook account automatically; when several are ready, select the intended source accounts.
+Receive on a Service controls which Services get copies, while the domain source list controls which signed provider
+webhooks may supply them. Removing a source stops new Service copies, including unfinished receipt processing.
 
 ## Authoritative schema
 
-`001_initial.sql` is the original baseline; `002_remove_inbound_provider_account.sql` removes the domain-level inbound
-provider selection without deleting domain, Service binding or mail data. Run the ordered V2 upgrade before deploying
-the matching Web and Worker build. Future changes append contiguous versions and checksums. `pnpm db:generate` writes
+`001_initial.sql` is the original baseline; `002_remove_inbound_provider_account.sql` removes the old single-provider
+column. `003_domain_inbound_sources.sql` adds per-domain authorized inbound sources and backfills every existing
+domain/account pair to preserve current mail routing until an operator narrows it. Run the ordered V3 upgrade before
+deploying the matching Web and Worker build. Future changes append contiguous versions and checksums. `pnpm db:generate` writes
 the typed `db/schema.sql` snapshot, and `pnpm db:check`
 verifies it and all migration checksums. Setup serializes migrations, validates the recorded catalog, applies missing
 versions and records checksums in `envoy_meta.migrations` atomically. A nonempty unjournaled application schema and any
