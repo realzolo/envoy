@@ -37,7 +37,7 @@ export interface AccessRepository {
   lockSafety(input: { fileId: string }): Promise<RepositoryResult<SafetyRow>>;
   readSafety(input: { fileId: string }): Promise<RepositoryResult<SafetyRow>>;
   lockLiveAttempt(input: { attemptId: string; messageId: string }): Promise<RepositoryResult<Record<string,unknown>>>;
-  verifySendingPermission(input: { messageId: string }): Promise<RepositoryResult<Record<string,unknown>>>;
+  verifySendingPermission(input: { messageId: string; attemptId: string }): Promise<RepositoryResult<Record<string,unknown>>>;
   findDownloadableFile(input: { id: string; serviceId: string | undefined }): Promise<RepositoryResult<{file_name:string;sha256:string;content_purged_at:Date|null}>>;
   findInboundDownload(input: { id: string; parentId: string | undefined; serviceId: string | null }): Promise<RepositoryResult<{file_name:string;sha256:string;content_purged_at:Date|null}>>;
   lockDownloadSafety(input: { id: string }): Promise<RepositoryResult<SafetyRow>>;

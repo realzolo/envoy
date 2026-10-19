@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createMessageSchema } from "@/lib/contracts";
-import { createDomain } from "@/modules/channels/public";
+import { createDomain, setDomainInboundProvider, toggleDomain } from "@/modules/channels/public";
 import { createService, discoverMail, issueServiceCredential, rotateServiceCredential, toggleService, updateService, type ServiceIdentity } from "@/modules/identity/public";
 import { acceptMessage, getMessage, prepareSubmission } from "@/modules/outbound/public";
 import { addSuppression, createSuppression, listSuppressions, removeSuppression } from "@/modules/suppressions/public";
@@ -64,6 +64,112 @@ describe("Service domain bindings", () => {
     await expect(createService({ ...config, serviceName: name.toUpperCase() }, "test")).rejects.toThrow();
     expect((await query("SELECT id FROM services WHERE lower(name)=lower($1)", [name])).rowCount).toBe(1);
     expect((await query("SELECT id FROM service_credentials WHERE service_id=$1", [created.serviceId])).rowCount).toBe(1);
+  });
+
+  it("keeps receiving permission editable while the inbound provider is unconfigured", async () => {
+    const d = await domain();
+    const owner = await service();
+    const updatedName = `Renamed ${crypto.randomUUID()}`;
+    const receiveBinding = [{ domainId: d.domainId, receive: true, outboundIdentityId: null }];
+    let revision = (await query<{ configuration_revision: number }>("SELECT configuration_revision FROM services WHERE id=$1", [owner.serviceId])).rows[0].configuration_revision;
+
+    await updateService(owner.serviceId, configuration(owner.identity.serviceName, receiveBinding), revision, "test");
+    let capability = (await discoverMail(owner.identity)).domains.find(item => item.id === d.domainId);
+    expect(capability?.permissions.receive).toBe(true);
+    expect(capability?.receiving).toMatchObject({ state: "unavailable", reasonCodes: ["INBOUND_INGRESS_UNAVAILABLE"] });
+
+    revision++;
+    await updateService(owner.serviceId, configuration(updatedName, receiveBinding), revision, "test");
+    expect((await query<{ name: string }>("SELECT name FROM services WHERE id=$1", [owner.serviceId])).rows[0].name).toBe(updatedName);
+
+    revision++;
+    await updateService(owner.serviceId, configuration(updatedName), revision, "test");
+    capability = (await discoverMail(owner.identity)).domains.find(item => item.id === d.domainId);
+    expect(capability).toBeUndefined();
+  });
+
+  it("keeps send bindings editable while domain or identity is unavailable", async () => {
+    const d = await domain();
+    const owner = await service();
+    await query("UPDATE sending_domains SET status='disabled' WHERE id=$1", [d.domainId]);
+    await query("UPDATE provider_identities SET status='pending' WHERE id=$1", [d.identityId]);
+    let revision = (await query<{ configuration_revision: number }>("SELECT configuration_revision FROM services WHERE id=$1", [owner.serviceId])).rows[0].configuration_revision;
+    const sendBinding = [{ domainId: d.domainId, receive: false, outboundIdentityId: d.identityId }];
+
+    await updateService(owner.serviceId, configuration(owner.identity.serviceName, sendBinding), revision, "test");
+    const capability = (await discoverMail(owner.identity)).domains.find(item => item.id === d.domainId);
+    expect(capability?.permissions.send).toBe(true);
+    expect(capability?.sending).toMatchObject({ state: "unavailable" });
+    expect(capability?.sending.reasonCodes).toContain("SENDING_DOMAIN_DISABLED");
+    expect(capability?.sending.reasonCodes).toContain("PROVIDER_UNAVAILABLE");
+
+    revision++;
+    await updateService(owner.serviceId, configuration(`Pending ${crypto.randomUUID()}`, sendBinding), revision, "test");
+    expect((await query("SELECT outbound_provider_identity_id FROM service_domain_bindings WHERE service_id=$1 AND sending_domain_id=$2", [owner.serviceId, d.domainId])).rows[0].outbound_provider_identity_id).toBe(d.identityId);
+  });
+
+  it("does not change an existing domain ingress through repeated registration", async () => {
+    const name = `registration-${crypto.randomUUID()}.test`;
+    const created = await createDomain({ domain: name, accountIds: [], inboundProviderAccountId: "pa_mock" }, "test");
+    domainIds.push(created.domainId);
+    await expect(createDomain({ domain: name, accountIds: [], inboundProviderAccountId: null }, "test"))
+      .rejects.toThrow(/already registered/);
+    expect((await query<{ inbound_provider_account_id: string | null }>("SELECT inbound_provider_account_id FROM sending_domains WHERE id=$1", [created.domainId])).rows[0].inbound_provider_account_id).toBe("pa_mock");
+    const addProvider = await createDomain({ domain: name, accountIds: ["pa_mock"] }, "test");
+    expect(addProvider.domainId).toBe(created.domainId);
+    expect((await query("SELECT id FROM provider_identities WHERE sending_domain_id=$1 AND provider_account_id='pa_mock'", [created.domainId])).rowCount).toBe(1);
+  });
+
+  it("keeps concurrent registrations of one domain atomic", async () => {
+    const name = `concurrent-${crypto.randomUUID()}.test`;
+    const results = await Promise.allSettled([
+      createDomain({ domain: name, accountIds: [], inboundProviderAccountId: "pa_mock" }, "test"),
+      createDomain({ domain: name, accountIds: [], inboundProviderAccountId: null }, "test"),
+    ]);
+    expect(results.filter(result => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter(result => result.status === "rejected")).toHaveLength(1);
+    const [row] = (await query<{ id: string; inbound_provider_account_id: string | null }>("SELECT id,inbound_provider_account_id FROM sending_domains WHERE domain=$1", [name])).rows;
+    expect(row).toBeDefined();
+    domainIds.push(row.id);
+    expect(row.inbound_provider_account_id).toBe(results[0].status === "fulfilled" ? "pa_mock" : null);
+  });
+
+  it("revises and notifies only affected Services when domain settings change", async () => {
+    const d = await domain();
+    const receiver = await service();
+    const sender = await service();
+    await bind(receiver, d.domainId, d.identityId);
+    await bind(sender, d.domainId, d.identityId);
+    const receiverRevision = (await query<{ configuration_revision: number }>("SELECT configuration_revision FROM services WHERE id=$1", [receiver.serviceId])).rows[0].configuration_revision;
+    const receiverBinding = [{ domainId: d.domainId, receive: true, outboundIdentityId: d.identityId }];
+    await updateService(receiver.serviceId, configuration(receiver.identity.serviceName, receiverBinding), receiverRevision, "test");
+    for (const owner of [receiver, sender]) {
+      const callbackId = `cb_${crypto.randomUUID()}`;
+      const secret = sealSecret({ secret: "test-callback-secret" }, callbackId, 1);
+      await query("INSERT INTO callback_endpoints(id,service_id,name,url,secret_ciphertext,encrypted_dek,key_version,subscribed_events) VALUES($1,$2,$3,'https://callback.test/events',$4,$5,$6,$7)",
+        [callbackId, owner.serviceId, owner.identity.serviceName, secret.secretCiphertext, secret.encryptedDek, secret.keyVersion, ["service.permissions_changed"]]);
+    }
+    const state = async (serviceId: string) => {
+      const revision = (await query<{ configuration_revision: number }>("SELECT configuration_revision FROM services WHERE id=$1", [serviceId])).rows[0].configuration_revision;
+      const events = (await query<{ count: number }>("SELECT count(*)::int FROM callback_deliveries c JOIN callback_endpoints e ON e.id=c.endpoint_id WHERE e.service_id=$1 AND c.event_type='service.permissions_changed'", [serviceId])).rows[0].count;
+      return { revision, events };
+    };
+    const beforeReceiver = await state(receiver.serviceId);
+    const beforeSender = await state(sender.serviceId);
+
+    await setDomainInboundProvider(d.domainId, "pa_mock", "test");
+    expect(await state(receiver.serviceId)).toEqual({ revision: beforeReceiver.revision + 1, events: 1 });
+    expect(await state(sender.serviceId)).toEqual(beforeSender);
+    await expect(updateService(receiver.serviceId, configuration(receiver.identity.serviceName, receiverBinding), beforeReceiver.revision, "test"))
+      .rejects.toThrow("changed");
+    await setDomainInboundProvider(d.domainId, "pa_mock", "test");
+    expect(await state(receiver.serviceId)).toEqual({ revision: beforeReceiver.revision + 1, events: 1 });
+
+    await toggleDomain(d.domainId, false, "test");
+    expect(await state(receiver.serviceId)).toEqual({ revision: beforeReceiver.revision + 2, events: 2 });
+    expect(await state(sender.serviceId)).toEqual({ revision: beforeSender.revision + 1, events: 1 });
+    await toggleDomain(d.domainId, false, "test");
+    expect(await state(sender.serviceId)).toEqual({ revision: beforeSender.revision + 1, events: 1 });
   });
 
   it("binds the same domain to multiple services, each with its own outbound provider", async () => {

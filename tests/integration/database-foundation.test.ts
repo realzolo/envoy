@@ -28,6 +28,11 @@ describe("database migration foundation", () => {
       expect(await initializeDatabase(client)).toBe("initialized");
       expect(await initializeDatabase(client)).toBe("validated");
       expect((await client.query("SELECT to_regclass('envoy_meta.migrations') AS journal")).rows[0].journal).toBe("envoy_meta.migrations");
+      await client.query("UPDATE envoy_meta.migrations SET sha256='unexpected' WHERE file='001_initial.sql'");
+      await expect(initializeDatabase(client)).rejects.toThrow("checksum or order differs");
+      expect((await client.query("SELECT sha256 FROM envoy_meta.migrations WHERE file='001_initial.sql'")).rows[0].sha256).toBe("unexpected");
+      await client.query("UPDATE envoy_meta.migrations SET sha256=$1 WHERE file='001_initial.sql'", [createHash("sha256").update(await readFile("db/migrations/001_initial.sql")).digest("hex")]);
+      expect(await initializeDatabase(client)).toBe("validated");
       const descriptions = await client.query<{ table_count: string; column_count: string; described_tables: string; described_columns: string }>(`
         SELECT count(DISTINCT c.oid)::text AS table_count,count(*)::text AS column_count,
           count(DISTINCT c.oid) FILTER (WHERE nullif(btrim(obj_description(c.oid,'pg_class')),'') IS NOT NULL)::text AS described_tables,
@@ -63,7 +68,7 @@ describe("database migration foundation", () => {
   });
 
   it("records the reset V1 SQL checksum", async () => {
-    expect(createHash("sha256").update(await readFile("db/migrations/001_initial.sql")).digest("hex")).toBe("1b5746e8d7aeed5d6520d2487ee50cda0f8d9a7876a1b22dde204359243ebf2c");
+    expect(createHash("sha256").update(await readFile("db/migrations/001_initial.sql")).digest("hex")).toBe("610afb19e5ab5354979923951e5c4994c9735c79f3d0407baf96d03af8c2c9eb");
   });
 
   it("allows multiple Services to receive the same domain through separate bindings", async () => {

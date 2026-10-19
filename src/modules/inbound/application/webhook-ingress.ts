@@ -1,6 +1,7 @@
 import { contentFreeOutboundEvents } from "@/integrations/providers/event-facts";
 import type { CanonicalEvent, ProviderType, WebhookRequest } from "@/integrations/providers/contracts";
 import type { WebhookDependencies } from "./webhook-ports";
+import { address } from "../domain/message";
 
 export function createWebhookIngress(dependencies: WebhookDependencies) {
 async function ingestProviderWebhook(provider: ProviderType, opaqueToken: string, request: WebhookRequest) {
@@ -13,6 +14,10 @@ async function ingestProviderWebhook(provider: ProviderType, opaqueToken: string
     return { status: 401 as const, error: "Webhook verification failed" }
   }
   if (!verified.valid || !verified.replaySafe) return { status: 401 as const, error: "Webhook verification failed" };
+  const routing = endpoint.module.inbound?.routingReceipt(verified);
+  const supplied = routing?.envelopeRecipients;
+  const recipients = supplied?.length && supplied.every(item => /^[^\s<>@,]+@[^\s<>@,]+$/.test(item))
+    ? [...new Set(supplied.map(address))] : [];
   // Normalization is provider-local parsing, never mailbox fetching. Freeze only content-free outbound facts.
   let normalized: CanonicalEvent[] | null = null;
   try {
@@ -48,6 +53,8 @@ async function ingestProviderWebhook(provider: ProviderType, opaqueToken: string
         providerEventId: eventId, nativeType: verified.nativeType, rawBody, objectKey, verification, securityVersion: endpoint.security_version,
         expiresAt: normalized ? new Date(Date.now() + 900_000) : null, normalizedJson: normalized ? JSON.stringify(normalized) : null });
       if (!created) return { duplicate: true, id: await repository.existingId(endpoint.provider_account_id, eventId) };
+      if (routing) await repository.freezeInboundReceipt({ accountId: endpoint.provider_account_id, endpointId: endpoint.id,
+        externalId: routing.externalMessageId, recipients, rawEventId: id });
       await repository.completeUploads(uploadKeys);
       await repository.enqueue(id, dependencies.id("out"));
       return { duplicate: false, id };

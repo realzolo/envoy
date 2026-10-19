@@ -178,32 +178,60 @@ async function createDomain(input: {
       throw new Error(`This Mailgun account sends through ${account.context.config.sendingDomain}. Associate it only with that exact sending domain.`);
     }
   }
-  const domainId = (await repository.upsertDomain({id:createId("sd"),domain:domain})).rows[0].id;
-  if (validated.inboundProviderAccountId) await repository.setInboundProvider({id:domainId,providerAccountId:validated.inboundProviderAccountId});
-  const results = [];
+  const existingDomain = (await repository.findDomainByName({domain})).rows[0];
+  if (existingDomain && validated.inboundProviderAccountId !== undefined) {
+    throw new Error("Domain already registered. Change its inbound provider on the domain page.");
+  }
+  type PreparedIdentity =
+    | { accountId: string; kind: "existing" }
+    | { accountId: string; kind: "dashboard" }
+    | { accountId: string; kind: "managed"; status: string; externalIdentityId: string; dnsRecords: string }
+    | { accountId: string; kind: "failed"; error: string };
+  const prepared: PreparedIdentity[] = [];
   for (const { accountId, account, identity } of accounts) {
-    const existing = (await repository.findDomainIdentity({sendingDomainId:domainId,providerAccountId:accountId})).rows[0];
-    if (existing) { results.push({ accountId, status: existing.status, existing: true }); continue }
-    const identityId = createId("pi");
-    if (!identity) {
-      await repository.insertDashboardIdentity({id:identityId,sendingDomainId:domainId,providerAccountId:accountId});
-      results.push({ accountId, status: "verified", verification: "provider_dashboard" });
-      continue
-    }
-    try {
-      const created = await identity.createIdentity(domain, account.context);
-      await repository.insertManagedIdentity({id:identityId,sendingDomainId:domainId,providerAccountId:accountId,externalIdentityId:created.externalIdentityId,status:created.status,dnsRecords:JSON.stringify(created.dnsRecords)});
-      results.push({ accountId, status: created.status })
-    } catch (error) {
-      await repository.insertFailedIdentity({id:identityId,sendingDomainId:domainId,providerAccountId:accountId});
-      results.push({ accountId, status: "failed", error: error instanceof Error ? error.message : "Identity setup failed" })
+    if (existingDomain && (await repository.findDomainIdentity({sendingDomainId:existingDomain.id,providerAccountId:accountId})).rowCount) {
+      prepared.push({accountId,kind:"existing"});
+    } else if (!identity) {
+      prepared.push({accountId,kind:"dashboard"});
+    } else {
+      try {
+        const created = await identity.createIdentity(domain, account.context);
+        prepared.push({accountId,kind:"managed",status:created.status,externalIdentityId:created.externalIdentityId,dnsRecords:JSON.stringify(created.dnsRecords)});
+      } catch (error) {
+        prepared.push({accountId,kind:"failed",error:error instanceof Error ? error.message : "Identity setup failed"});
+      }
     }
   }
-  await audit(actor, "sending_domain.create", "sending_domain", domainId, {
-    domain,
-    identities: results
+  return unitOfWork.run(async client => {
+    const inserted = (await client.insertDomain({id:createId("sd"),domain})).rows[0];
+    const domainId = inserted?.id ?? (await client.findDomainByName({domain})).rows[0].id;
+    if (!inserted && validated.inboundProviderAccountId !== undefined) {
+      throw new Error("Domain already registered. Change its inbound provider on the domain page.");
+    }
+    if (inserted && validated.inboundProviderAccountId) {
+      await client.setInboundProvider({id:domainId,providerAccountId:validated.inboundProviderAccountId});
+    }
+    const results = [];
+    for (const setup of prepared) {
+      const {accountId} = setup;
+      const existing = (await client.findDomainIdentity({sendingDomainId:domainId,providerAccountId:accountId})).rows[0];
+      if (existing) { results.push({ accountId, status: existing.status, existing: true }); continue }
+      if (setup.kind === "existing") throw new Error("Provider identity changed during registration. Retry this request.");
+      const identityId = createId("pi");
+      if (setup.kind === "dashboard") {
+        await client.insertDashboardIdentity({id:identityId,sendingDomainId:domainId,providerAccountId:accountId});
+        results.push({ accountId, status: "verified", verification: "provider_dashboard" });
+      } else if (setup.kind === "managed") {
+        await client.insertManagedIdentity({id:identityId,sendingDomainId:domainId,providerAccountId:accountId,externalIdentityId:setup.externalIdentityId,status:setup.status,dnsRecords:setup.dnsRecords});
+        results.push({ accountId, status: setup.status });
+      } else if (setup.kind === "failed") {
+        await client.insertFailedIdentity({id:identityId,sendingDomainId:domainId,providerAccountId:accountId});
+        results.push({ accountId, status: "failed", error: setup.error });
+      }
+    }
+    await client.recordAudit({actor,action:"sending_domain.create",resourceType:"sending_domain",resourceId:domainId,details:{domain,identities:results}});
+    return { domainId, identities: results }
   });
-  return { domainId, identities: results }
 }
 async function validateInboundProvider(accountId: string) {
   const account = await loadProviderAccount(accountId);
@@ -214,27 +242,42 @@ async function validateInboundProvider(accountId: string) {
 async function setDomainInboundProvider(id: string, providerAccountId: string | null, actor: string) {
   const accountId = providerAccountId === null ? null : identifierSchema.parse(providerAccountId);
   if (accountId) await validateInboundProvider(accountId);
-  const updated = await repository.setInboundProvider({id,providerAccountId:accountId});
-  if (!updated.rowCount) throw new Error("Domain not found");
-  await audit(actor,"sending_domain.inbound_provider_update","sending_domain",id,{providerAccountId:accountId});
+  await unitOfWork.run(async client => {
+    const current = (await client.lockDomain({id})).rows[0];
+    if (!current) throw new Error("Domain not found");
+    if (current.inbound_provider_account_id === accountId) return;
+    await client.setInboundProvider({id,providerAccountId:accountId});
+    await client.notifyDomainBindingsChanged({domainId:id,receiveOnly:true});
+    await client.recordAudit({actor,action:"sending_domain.inbound_provider_update",resourceType:"sending_domain",resourceId:id,details:{providerAccountId:accountId}});
+  });
 }
 async function toggleDomain(id: string, enabled: boolean, actor: string) {
-  await repository.setDomainStatus({id:id,status:enabled ? "active" : "disabled"});
-  await audit(actor, "sending_domain.toggle", "sending_domain", id, { enabled })
+  await unitOfWork.run(async client => {
+    const current = (await client.lockDomain({id})).rows[0];
+    if (!current) throw new Error("Domain not found");
+    const status = enabled ? "active" : "disabled";
+    if (current.status === status) return;
+    await client.setDomainStatus({id,status});
+    await client.notifyDomainBindingsChanged({domainId:id,receiveOnly:false});
+    await client.recordAudit({actor,action:"sending_domain.toggle",resourceType:"sending_domain",resourceId:id,details:{enabled}});
+  });
 }
 async function refreshIdentity(id: string, actor: string) {
   const row = (await repository.findIdentityAccount({id:id})).rows[0];
   if (!row) throw new Error("Provider identity not found");
+  if (row.status === "disabled") throw new Error("Enable this provider identity before refreshing it");
   const account = await loadProviderAccount(row.provider_account_id);
   if (!account.module.identity) throw new Error("This domain is verified in the provider dashboard and cannot be refreshed by Envoy");
   if (!row.external_identity_id) {
     const result = await account.module.identity.createIdentity(row.domain, account.context);
-    await repository.saveCreatedIdentity({id:id,externalIdentityId:result.externalIdentityId,status:result.status,dnsRecords:JSON.stringify(result.dnsRecords)});
+    const saved = await repository.saveCreatedIdentity({id:id,externalIdentityId:result.externalIdentityId,status:result.status,dnsRecords:JSON.stringify(result.dnsRecords)});
+    if (!saved.rows[0] || saved.rows[0].status === "disabled") throw new Error("Provider identity was disabled during refresh");
     await audit(actor, "provider_identity.refresh", "provider_identity", id, { status: result.status });
     return result
   }
   const result = await account.module.identity.checkIdentity(row.external_identity_id, account.context);
-  await repository.saveIdentityVerification({id:id,status:result.status,dnsRecords:JSON.stringify(result.dnsRecords)});
+  const saved = await repository.saveIdentityVerification({id:id,status:result.status,dnsRecords:JSON.stringify(result.dnsRecords)});
+  if (!saved.rowCount) throw new Error("Provider identity was disabled during refresh");
   await audit(actor, "provider_identity.refresh", "provider_identity", id, { status: result.status });
   return result
 }

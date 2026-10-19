@@ -94,25 +94,27 @@ describe("database-driven callback retry", () => {
 it("replaces one callback secret only after pausing and draining in-flight requests",async()=>{
   const endpoint=createId("callback"),first=createId("cbx"),second=createId("cbx");
   const service=createId("svc");await query("INSERT INTO services(id,name) VALUES($1,$1)",[service]);
-  const oldSecret="old-callback-test-key",newSecret="new-callback-test-key";
+  const oldSecret="old-callback-test-key";
   const envelope=sealSecret({secret:oldSecret},endpoint,1);
   await query("INSERT INTO callback_endpoints(id,service_id,name,url,secret_ciphertext,encrypted_dek,key_version,subscribed_events) VALUES($1,$5,'single secret','https://callback.test/events',$2,$3,$4,ARRAY['email.failed'])",[endpoint,envelope.secretCiphertext,envelope.encryptedDek,envelope.keyVersion,service]);
   try {
     for(const id of [first,second]) await query("INSERT INTO callback_deliveries(id,endpoint_id,event_type,payload) VALUES($1,$2,'email.failed',$3)",[id,endpoint,{id,type:"email.failed",apiVersion:"2026-09-01"}]);
-    await expect(replaceCallbackSecret(endpoint,newSecret,"test")).rejects.toThrow("Disable callback delivery");
+    await expect(replaceCallbackSecret(endpoint,"test")).rejects.toThrow("Disable callback delivery");
     network.resolve.mockResolvedValue({});let finish!:(value:unknown)=>void;
     network.post.mockImplementationOnce(()=>new Promise(resolve=>{finish=resolve;}));
     const inflight=deliverCallback(first);await vi.waitFor(()=>expect(network.post).toHaveBeenCalledTimes(1));
     await toggleCallback(endpoint,false,"test");
     expect((await query("SELECT status FROM callback_deliveries WHERE id=$1",[first])).rows[0].status).toBe("delivering");
-    await expect(replaceCallbackSecret(endpoint,newSecret,"test")).rejects.toThrow("in-flight callback deliveries");
+    await expect(replaceCallbackSecret(endpoint,"test")).rejects.toThrow("in-flight callback deliveries");
     await deliverCallback(second);expect(network.post).toHaveBeenCalledTimes(1);
     finish({status:202,statusText:"Accepted",body:""});await inflight;
     await query("UPDATE callback_deliveries SET status='delivering',updated_at=now()-interval '3 minutes' WHERE id=$1",[second]);
-    await expect(replaceCallbackSecret(endpoint,newSecret,"test")).rejects.toThrow("in-flight callback deliveries");
+    await expect(replaceCallbackSecret(endpoint,"test")).rejects.toThrow("in-flight callback deliveries");
     await deliverCallback(second);expect(network.post).toHaveBeenCalledTimes(1);
     expect((await query("SELECT status FROM callback_deliveries WHERE id=$1",[second])).rows[0].status).toBe("dead_letter");
-    expect(await replaceCallbackSecret(endpoint,newSecret,"test")).toEqual({secret:newSecret});
+    const {secret:newSecret}=await replaceCallbackSecret(endpoint,"test");
+    expect(newSecret).toMatch(/^ev_cb_[A-Za-z0-9_-]{32}$/);
+    expect(newSecret).not.toBe(oldSecret);
     await toggleCallback(endpoint,true,"test");
     expect(await replayDeadLetters("test",{deliveryId:second})).toBe(1);
     network.post.mockResolvedValue({status:202,statusText:"Accepted",body:""});await deliverCallback(second);

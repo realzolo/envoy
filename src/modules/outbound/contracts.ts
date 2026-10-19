@@ -65,9 +65,6 @@ export type Candidate = {
     provider_type: ProviderType;
     provider_name: string;
     domain: string;
-    quota: Record<string, unknown>;
-    monthly_usage: string;
-    daily_usage: string;
     account_status: string;
     health: Record<string, unknown>;
     identity_status: string;

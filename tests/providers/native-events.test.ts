@@ -76,7 +76,7 @@ describe("Postmark native inbound JSON", () => {
     expect(receipt.valid).toBe(true);
     expect(receipt.nativeType).toBe("Inbound");
     const inbound = await adapter.inbound!.receive(receipt, contexts.postmark);
-    expect(inbound).toMatchObject({ externalMessageId: "inbound-message", cc: ["cc@example.net"], authorDate: new Date("2026-10-17T08:00:00Z") });
+    expect(inbound).toMatchObject({ externalMessageId: "inbound-message:inbound@example.com", cc: ["cc@example.net"], authorDate: new Date("2026-10-17T08:00:00Z") });
     expect(Buffer.from(inbound!.attachments[0].content).toString()).toBe("hello");
   });
 });

@@ -9,9 +9,6 @@ export function evaluateCandidate(row: {
     health: Record<string, unknown>;
     identity_status: string;
     domain_status: string;
-    quota: Record<string, unknown>;
-    monthly_usage: string;
-    daily_usage: string;
 }) {
     const reasons: string[] = [];
     if (row.account_status !== "active")
@@ -22,12 +19,5 @@ export function evaluateCandidate(row: {
         reasons.push("identity_unverified");
     if (row.domain_status !== "active")
         reasons.push("domain_disabled");
-    for (const [key, usage, reason] of [["monthlyLimit", row.monthly_usage, "monthly_quota_exhausted"], ["dailyLimit", row.daily_usage, "daily_quota_exhausted"]] as const) {
-        const limit = configuredLimit(row.quota, key);
-        if (limit === null)
-            reasons.push("invalid_quota");
-        else if (limit !== undefined && Number(usage) >= limit)
-            reasons.push(reason);
-    }
     return reasons;
 }

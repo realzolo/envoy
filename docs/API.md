@@ -224,9 +224,9 @@ A Service has a globally unique name (case-insensitive). **Pause** disables all 
 
 For outbound mail, Envoy checks the authenticated Service's binding to the From domain and uses that binding's single provider identity. The identity must belong to the same domain and its provider must be available. Message category does not select a different provider.
 
-Under **Services**, create or edit one configuration containing the Service name, domain bindings, Event callback URL, and advanced permissions. Each domain binding has a receiving switch and an optional outbound provider identity. Both directions may be disabled. Saving atomically replaces that Service's bindings and applies to every active key without reissuance. A domain can have several receiving Services, each with a separate private copy. The domain itself selects one inbound provider account; leaving it empty disables inbound mail. Disabled domains and suspended Services remain unusable. Subdomains must be registered and bound separately.
+Under **Services**, create or edit one configuration containing the Service name, domain bindings, Event callback URL, and advanced permissions. Each domain binding has a receiving switch and an optional outbound provider identity. Remove a binding to disable both directions. Saving atomically replaces that Service's bindings and applies to every active key without reissuance. A domain can have several receiving Services, each with a separate private copy. The domain itself selects one inbound provider account; leaving it empty disables new inbound mail without changing the Service's receiving permission or hiding historical mail. Disabled domains and suspended Services remain unusable. Subdomains must be registered and bound separately.
 
-**Manage credentials** only issues, rotates, or revokes keys of the same Service. The first key is issued on Service creation and plaintext is shown once. Changes to names, callbacks, domain bindings, or Service suppression management belong in **Edit configuration**. Service suppression management is disabled by default; enabling it allows the API to list, add, and remove Service recipient and list suppression rules, affecting that Service across its sending domains. Editors save against the configuration revision they loaded; stale saves are rejected so a previous form cannot restore revoked access. Configuration changes are audited and send `service.permissions_changed` through the current active callback subscription. An empty Event callback URL selects polling only; removing a URL disables delivery while retaining callback history.
+**Manage credentials** only issues, rotates, or revokes keys of the same Service. The first key is issued on Service creation and plaintext is shown once. Changes to names, callbacks, domain bindings, or Service suppression management belong in **Edit configuration**. Service suppression management is disabled by default; enabling it allows the API to list, add, and remove Service recipient and list suppression rules, affecting that Service across its sending domains. Editors save against the configuration revision they loaded; stale saves are rejected so a previous form cannot restore revoked access. Service configuration changes and domain provider/status changes affecting a bound Service increment its revision and send `service.permissions_changed` through the current active callback subscription. An empty Event callback URL selects polling only; removing a URL disables delivery while retaining callback history.
 
 Reason codes include `DOMAIN_SEND_NOT_AUTHORIZED`, `DOMAIN_RECEIVE_NOT_AUTHORIZED`, `SENDING_DOMAIN_DISABLED`, `INBOUND_DOMAIN_DISABLED`, `NO_ELIGIBLE_ROUTE`, `INBOUND_INGRESS_UNAVAILABLE`, `CALLBACK_DISABLED` and `CALLBACK_EVENT_NOT_SUBSCRIBED`. Handle unknown future codes generically. The send API retains `SENDER_NOT_AUTHORIZED` and `NO_ELIGIBLE_ROUTE` problem codes.
 
@@ -241,11 +241,11 @@ Key rotation keeps the same Service, domain bindings, resource ownership, cursor
 Routing uses provider-authenticated SMTP recipients, never visible To/Cc/Bcc, `Delivered-To`, `X-Original-To`, arbitrary
 MIME headers, or a provider's outbound domain verification status. An outbound identity does not confer receiving permission. The domain's inbound provider account must match the authenticated ingress, and each receiving Service needs an enabled binding.
 
-Every matching Service-domain binding participates. One domain may deliver to several Services. Matched domains for the same Service merge into one copy with the union of that Service's envelope addresses; the Service's active
+Every matching Service-domain binding participates. One domain may deliver to several Services. Matched domains in one provider delivery unit for the same Service merge into one copy with the union of that Service's envelope addresses; Postmark sends separate inbound webhook deliveries per original recipient, so those are separate units. The Service's active
 callback endpoint receives one event. Other services receive separate IDs and private
 attachment ownership. Repeated provider message receipts do not create new copies, attachments or callbacks within
 the same service. A retry after a partial fanout resumes unfinished copies and retains successful ones. Mailgun uses
-its authenticated transport receipt ID for deduplication rather than an untrusted RFC Message-ID.
+a digest of its authenticated JSON receipt for deduplication rather than an untrusted RFC Message-ID.
 
 `GET /inbound-messages/{id}` adds:
 
@@ -384,10 +384,10 @@ use a constant-time digest comparison, and accept at most 300 seconds of absolut
 Check that `x-envoy-id` equals the authenticated body's ID and deduplicate it durably. Each retry keeps the same event
 ID and body and generates a fresh timestamp/signature. Payload `apiVersion` is independent of authentication.
 
-To replace a callback secret, pause the endpoint, wait until its in-flight count reaches zero, replace the single secret
-in both Envoy and the consumer, then resume and replay failed callbacks. Administrator `callback.replace_secret` rejects
-active endpoints and endpoints with in-flight attempts; it accepts a supplied 16–512 character secret or generates one
-shown once. Pausing prevents new dispatches without hiding already in-flight HTTP attempts. Expired attempts are closed
+To replace a callback secret, pause the endpoint, wait until its in-flight count reaches zero, generate a new secret
+in Envoy, update the consumer with the once-shown value, then resume and replay failed callbacks. Administrator
+`callback.replace_secret` rejects active endpoints, endpoints with in-flight attempts, and client-supplied secrets.
+Pausing prevents new dispatches without hiding already in-flight HTTP attempts. Expired attempts are closed
 by recovery while paused. Failed callbacks remain replayable after resuming. `/inbound-changes` and `/outbound-changes`
 provide independent inbound and outbound compensation. The example
 uses only `ENVOY_CALLBACK_SECRET`. This operation never changes the Service Key or its Service identity.

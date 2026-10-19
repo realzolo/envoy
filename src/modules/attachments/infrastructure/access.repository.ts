@@ -15,7 +15,19 @@ return {
   lockLiveAttempt(input: { attemptId: string; messageId: string }) { return client.query<Record<string,unknown>>(`SELECT a.id FROM submission_attempts a JOIN submissions s ON s.id=a.submission_id
         WHERE a.id=$1 AND s.message_id=$2 AND s.current_attempt_id=a.id AND s.status='submitting'
           AND a.status='submitting' AND a.submission_deadline_at>clock_timestamp() FOR SHARE OF a,s`, [input.attemptId, input.messageId]); },
-  verifySendingPermission(input: { messageId: string }) { return client.query<Record<string,unknown>>(`SELECT id FROM messages m WHERE id=$1 AND ${outboundDomainAccess('m')}`, [input.messageId]); },
+  verifySendingPermission(input: { messageId: string; attemptId: string }) { return client.query<Record<string,unknown>>(`SELECT a.id FROM submission_attempts a
+    JOIN submissions sub ON sub.id=a.submission_id
+    JOIN messages m ON m.id=sub.message_id
+    JOIN service_domain_bindings b ON b.service_id=m.service_id AND b.sending_domain_id=m.sending_domain_id
+    JOIN provider_identities pi ON pi.id=b.outbound_provider_identity_id AND pi.sending_domain_id=m.sending_domain_id
+    JOIN provider_accounts pa ON pa.id=pi.provider_account_id
+    JOIN sending_domains sd ON sd.id=m.sending_domain_id
+    JOIN services svc ON svc.id=m.service_id
+    WHERE m.id=$1 AND a.id=$2 AND b.outbound_provider_identity_id=a.provider_identity_id
+      AND pi.provider_account_id=a.provider_account_id AND pi.status='verified'
+      AND pa.status='active' AND coalesce(pa.health->>'status','healthy') NOT IN ('unhealthy','offline')
+      AND sd.status='active' AND svc.status='active'
+    FOR SHARE OF b,pi,pa,sd,svc`, [input.messageId, input.attemptId]); },
   findDownloadableFile(input: { id: string; serviceId: string | undefined }) { return client.query<{file_name:string;sha256:string;content_purged_at:Date|null}>(`SELECT file_name,sha256,content_purged_at FROM outbound_files f WHERE id=$1 AND service_id=$2 AND ${outboundDomainAccess('f')}`, [input.id, input.serviceId]); },
   findInboundDownload(input: { id: string; parentId: string | undefined; serviceId: string | null }) { return client.query<{file_name:string;sha256:string;content_purged_at:Date|null}>(`SELECT a.file_name,a.sha256,a.content_purged_at FROM inbound_attachments a JOIN inbound_messages i ON i.id=a.inbound_message_id
         WHERE a.id=$1 AND i.id=$2 AND ($3::text IS NULL OR i.service_id=$3) AND ($3::text IS NULL OR ${inboundDomainAccess('i')}) AND i.status='ready' AND i.content_purged_at IS NULL`, [input.id, input.parentId, input.serviceId]); },

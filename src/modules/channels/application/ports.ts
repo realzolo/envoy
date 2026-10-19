@@ -24,7 +24,10 @@ export interface ManagementRepository {
   saveWebhookSecurity(input:{id:string;securityConfigCiphertext:unknown;securityEncryptedDek:unknown;keyVersion:string;securityVersion:number;expectedTopicArn:null|string;ipAllowlist:unknown[]}):Promise<RepositoryResult<SaveWebhookSecurityRow>>;
   recordWebhookSecurityUpdate(input:{actor:string;resourceId:string;details:unknown}):Promise<RepositoryResult<RecordWebhookSecurityUpdateRow>>;
   setWebhookStatus(input:{id:string;status:string}):Promise<RepositoryResult<SetWebhookStatusRow>>;
-  upsertDomain(input:{id:string;domain:string}):Promise<RepositoryResult<UpsertDomainRow>>;
+  insertDomain(input:{id:string;domain:string}):Promise<RepositoryResult<InsertDomainRow>>;
+  findDomainByName(input:{domain:string}):Promise<RepositoryResult<FindDomainByNameRow>>;
+  lockDomain(input:{id:string}):Promise<RepositoryResult<LockDomainRow>>;
+  notifyDomainBindingsChanged(input:{domainId:string;receiveOnly:boolean}):Promise<void>;
   setInboundProvider(input:{id:string;providerAccountId:string|null}):Promise<RepositoryResult<SetInboundProviderRow>>;
   findDomainIdentity(input:{sendingDomainId:string;providerAccountId:string}):Promise<RepositoryResult<FindDomainIdentityRow>>;
   insertDashboardIdentity(input:{id:string;sendingDomainId:string;providerAccountId:string}):Promise<RepositoryResult<InsertDashboardIdentityRow>>;
@@ -70,7 +73,9 @@ export type LockWebhookSecurityRow={
 export type SaveWebhookSecurityRow=never;
 export type RecordWebhookSecurityUpdateRow=never;
 export type SetWebhookStatusRow=never;
-export type UpsertDomainRow={ id: string };
+export type InsertDomainRow={ id: string };
+export type FindDomainByNameRow={ id: string };
+export type LockDomainRow={ id:string;status:string;inbound_provider_account_id:string|null };
 export type SetInboundProviderRow={ id: string };
 export type FindDomainIdentityRow={ id: string; status: string };
 export type InsertDashboardIdentityRow=never;
@@ -81,8 +86,9 @@ export type FindIdentityAccountRow={
     provider_account_id: string;
     external_identity_id: string | null;
     domain: string;
+    status: string;
   };
-export type SaveCreatedIdentityRow=never;
+export type SaveCreatedIdentityRow={ status: string };
 export type SaveIdentityVerificationRow=never;
 export type FindIdentityProviderTypeRow={ type: ProviderType };
 export type SetIdentityStatusRow=never;

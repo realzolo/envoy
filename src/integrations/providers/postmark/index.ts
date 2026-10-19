@@ -19,6 +19,16 @@ const payloadSchema = z.object({
     DeliveredAt: z.string().optional(),
     BouncedAt: z.string().optional()
 }).passthrough();
+function inboundRoutingReceipt(verified: { nativeType: string; providerEventId?: string; parsed: unknown }) {
+    const p = verified.parsed as Record<string, unknown>;
+    if (p.RecordType !== "Inbound") return null;
+    const recipient = typeof p.OriginalRecipient === "string" ? p.OriginalRecipient : undefined;
+    const messageId = String(p.MessageID ?? verified.providerEventId ?? stableEventId(p));
+    return {
+        externalMessageId: recipient ? `${messageId}:${recipient.toLowerCase()}` : messageId,
+        envelopeRecipients: recipient ? [recipient] : undefined
+    };
+}
 export const postmarkModule: ProviderModule = {
     descriptor: {
         type: "postmark",
@@ -89,7 +99,9 @@ export const postmarkModule: ProviderModule = {
             return {
                 valid: ipValid && authValid && schemaValid,
                 replaySafe: true,
-                providerEventId: typeof p.ID === "number" ? `${p.RecordType}:${p.ID}` : stableEventId(p),
+                providerEventId: p.RecordType === "Inbound"
+                    ? stableEventId([p.RecordType, p.MessageID ?? stableEventId(p), p.OriginalRecipient])
+                    : typeof p.ID === "number" ? `${p.RecordType}:${p.ID}` : stableEventId(p),
                 nativeType: String(p.RecordType ?? "unknown"),
                 parsed
             };
@@ -113,10 +125,11 @@ export const postmarkModule: ProviderModule = {
         }
     },
     inbound: {
+        routingReceipt: inboundRoutingReceipt,
         async receive(verified) {
+            const routing = inboundRoutingReceipt(verified);
+            if (!routing) return null;
             const p = verified.parsed as Record<string, unknown>;
-            if (p.RecordType !== "Inbound")
-                return null;
             const attachments = Array.isArray(p.Attachments) ? p.Attachments.flatMap(item => {
                 const a = item as Record<string, unknown>;
                 if (typeof a.Content !== "string")
@@ -130,9 +143,9 @@ export const postmarkModule: ProviderModule = {
             }) : [];
             const fields = await inboundHeaders(p.Headers);
             return {
-                externalMessageId: String(p.MessageID ?? verified.providerEventId ?? crypto.randomUUID()),
+                externalMessageId: routing.externalMessageId,
                 ...fields,
-                envelopeRecipients: typeof p.OriginalRecipient === "string" ? [p.OriginalRecipient] : undefined,
+                envelopeRecipients: routing.envelopeRecipients,
                 replyTo: p.ReplyTo ? (await inboundHeaders(`Reply-To: ${String(p.ReplyTo)}`)).replyTo : fields.replyTo,
                 from: String(p.From ?? ""),
                 to: Array.isArray(p.ToFull) ? p.ToFull.map(item => String((item as Record<string, unknown>).Email ?? "")) : (await inboundHeaders(`To: ${String(p.To ?? "")}`)).to,

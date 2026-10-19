@@ -714,6 +714,10 @@ function Account({ account }: { account: Row }) {
         <Space direction="vertical" size="mini">
           <Typography.Text type="secondary">Provider webhook URL</Typography.Text>
           {type === "postmark" ? <Typography.Text type="secondary">Save webhook verification below to generate its Basic Auth URL.</Typography.Text> : <CopyableEndpoint path={endpointPath} />}
+          {type === "mailgun" && <>
+            <Typography.Text type="secondary">Inbound route URL (JSON format)</Typography.Text>
+            <CopyableEndpoint path={`${endpointPath}/json`} />
+          </>}
         </Space>
         <Space wrap size="small">
           <ActionButton body={{method:"POST",path:`/api/admin/provider-accounts/${encodeURIComponent(String(account.id))}/health-checks`,payload:{id: account.id}}} success={result => {

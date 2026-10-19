@@ -189,6 +189,29 @@ describe("provider webhook security and normalization", () => {
       externalMessageId: "mailgun-message-123"
     })
   });
+  it("accepts only full-body signed Mailgun JSON for inbound routing", async () => {
+    const adapter = providerRegistry("mailgun");
+    const context = {
+      accountId: "pa",
+      config: { type: "mailgun", schemaVersion: 1, region: "us", sendingDomain: "example.test" },
+      secret: { type: "mailgun", apiKey: "key-test" }
+    } satisfies ProviderSendContext;
+    const rawBody = Buffer.from(JSON.stringify({ recipient: "support@example.test", from: "sender@example.net", "body-plain": "Hello", "message-headers": [["To", "visible@example.net"]], attachments: [] }));
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const signature = createHmac("sha256", "mailgun-signing-key").update(timestamp).update(rawBody).digest("hex");
+    const security = { webhookSigningKey: "mailgun-signing-key" };
+    const headers = { "content-type": "application/json", "x-mailgun-timestamp": timestamp, "x-mailgun-signature": signature };
+    const verified = await adapter.webhook.verify({ rawBody, headers }, context, security);
+    expect(verified.valid).toBe(true);
+    expect(adapter.inbound!.routingReceipt(verified)).toMatchObject({ envelopeRecipients: ["support@example.test"] });
+    expect(await adapter.inbound!.receive(verified, context)).toMatchObject({ text: "Hello", to: ["visible@example.net"] });
+    const tampered = Buffer.from(rawBody.toString().replace("support@example.test", "billing@example.test"));
+    expect((await adapter.webhook.verify({ rawBody: tampered, headers }, context, security)).valid).toBe(false);
+    const token = "signed-token";
+    const formSignature = createHmac("sha256", "mailgun-signing-key").update(timestamp + token).digest("hex");
+    const multipart = Buffer.from([...[ ["timestamp", timestamp], ["token", token], ["signature", formSignature], ["recipient", "support@example.test"] ].map(([name, value]) => `--boundary\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`), "--boundary--\r\n"].join(""));
+    expect((await adapter.webhook.verify({ rawBody: multipart, headers: { "content-type": "multipart/form-data; boundary=boundary" } }, context, security)).valid).toBe(false);
+  });
   it("uses Postmark Basic Auth, opaque endpoint routing, IP allowlist, and schema validation", async () => {
     const raw = await fixture("postmark-delivered.json");
     const context = {

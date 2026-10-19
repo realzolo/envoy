@@ -39,7 +39,7 @@ export function createCallbackService(deps: CallbackDependencies) {
     async createCallback(input: CallbackInput, actor: string) {
       const validated = callbackInputSchema.parse(input);
       validated.url = await transport.validate(validated.url);
-      const endpointId = id("cb"), secret = validated.secret ?? secrets.generate(), envelope = secrets.seal(secret, endpointId);
+      const endpointId = id("cb"), secret = secrets.generate(), envelope = secrets.seal(secret, endpointId);
       await unitOfWork.run(async repo => {
         if (!await repo.activeService(validated.serviceId)) throw new Error("An active service is required for a callback endpoint");
         await repo.createEndpoint(endpointId, validated, envelope);
@@ -52,13 +52,12 @@ export function createCallbackService(deps: CallbackDependencies) {
       if (!enabled) await repo.stopPending(endpointId);
       await repo.audit(actor, "callback_endpoint.toggle", "callback_endpoint", endpointId, { enabled });
     }),
-    replaceCallbackSecret: (endpointId: string, requestedSecret: string | undefined, actor: string) => unitOfWork.run(async repo => {
-      const secret = requestedSecret?.trim() || secrets.generate();
-      if (secret.length < 16 || secret.length > 512) throw new Error("Callback signing secret must contain 16 to 512 characters");
+    replaceCallbackSecret: (endpointId: string, actor: string) => unitOfWork.run(async repo => {
       const current = await repo.lockEndpoint(endpointId);
       if (!current) throw new Error("Callback endpoint not found");
       if (current.status !== "disabled") throw new Error("Disable callback delivery before replacing its secret");
       if (await repo.hasInFlight(endpointId)) throw new Error("Wait for in-flight callback deliveries to finish or recover before replacing the secret");
+      const secret = secrets.generate();
       await repo.replaceSecret(endpointId, secrets.seal(secret, endpointId));
       await repo.audit(actor, "callback_endpoint.replace_secret", "callback_endpoint", endpointId);
       return { secret };

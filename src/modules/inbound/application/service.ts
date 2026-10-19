@@ -10,10 +10,12 @@ async function persistInbound(input: InboundInput) {
   const supplied = input.message.envelopeRecipients;
   const recipients = supplied?.length && supplied.every(item => /^[^\s<>@,]+@[^\s<>@,]+$/.test(item))
     ? [...new Set(supplied.map(address))] : [];
-  const proposed = recipients.length ? await dependencies.unitOfWork.run(async client => (await client.findDispatches({ endpointId: input.webhookEndpointId, recipients, accountId: input.providerAccountId })).rows) : [];
   // Freeze the complete dispatch plan at the first durable processing decision.
   // Concurrent retries read the winner; later binding changes never expand historical access.
   const receipt = await dependencies.unitOfWork.run(async client => {
+    const existing = (await client.readReceipt({ accountId: input.providerAccountId, externalId: input.message.externalMessageId })).rows[0];
+    if (existing) return existing;
+    const proposed = recipients.length ? (await client.findDispatches({ endpointId: input.webhookEndpointId, recipients, accountId: input.providerAccountId })).rows : [];
     await client.freezeReceipt({ accountId: input.providerAccountId, externalId: input.message.externalMessageId, routesJson: JSON.stringify(proposed), rawEventId: input.rawEventId });
     return (await client.readReceipt({ accountId: input.providerAccountId, externalId: input.message.externalMessageId })).rows[0];
   });
@@ -42,7 +44,10 @@ async function persistInbound(input: InboundInput) {
     try {
       const id = await persistRoutedInbound({ ...input, message }, scope, matching);
       firstId ||= id;
-    } catch (error) { failures.push(error); }
+    } catch (error) {
+      if (error instanceof InboundTerminalError && error.code === "DOMAIN_RECEIVE_NOT_AUTHORIZED") continue;
+      failures.push(error);
+    }
   }
   if (failures.length === 1) throw failures[0];
   if (failures.length) throw new AggregateError(failures,"Inbound copies require retry");
@@ -51,9 +56,10 @@ async function persistInbound(input: InboundInput) {
 
 async function persistRoutedInbound(input: InboundInput, scope: string, routes: InboundDispatch[]) {
   const route = routes[0];
-  const allowed=(await dependencies.repository.allowedDomains({ serviceId: route.service_id, accountId: input.providerAccountId })).rows.map(row=>row.domain);
-  const envelopeRecipients=input.message.envelopeRecipients?.filter(recipient=>allowed.includes(recipient.split('@')[1]))??[];
-  if(!envelopeRecipients.length) throw new InboundTerminalError("Domain receiving permission was revoked","DOMAIN_RECEIVE_NOT_AUTHORIZED");
+  const allowed=(await dependencies.repository.allowedDomains({ serviceId: route.service_id })).rows.map(row=>row.domain);
+  const envelopeRecipients=input.message.envelopeRecipients??[];
+  if(!envelopeRecipients.length || envelopeRecipients.some(recipient=>!allowed.includes(recipient.split('@')[1])))
+    throw new InboundTerminalError("Domain receiving permission was revoked","DOMAIN_RECEIVE_NOT_AUTHORIZED");
   const message = {...input.message,envelopeRecipients,bcc:input.message.bcc.filter(item=>envelopeRecipients.includes(address(item)))};
   const duplicate = (await dependencies.repository.findCopy({ accountId: input.providerAccountId, externalId: message.externalMessageId, scope: scope })).rows[0];
   if (duplicate?.content_purged_at) return duplicate.id;

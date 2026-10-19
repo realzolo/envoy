@@ -57,7 +57,9 @@ describe("native admin mail", () => {
       const disabled=await adminData("domains");
       expect(disabled.domains?.find(domain=>domain.id==="sd_atlas")?.inbound_provider_account_id).toBeNull();
       const unavailable=await discoverMail({serviceId:"svc_atlas_auth",serviceName:"Atlas Auth",rateLimitPerMinute:60});
-      expect(unavailable.domains.find(domain=>domain.id==="sd_atlas")?.permissions.receive).toBe(false);
+      const binding = unavailable.domains.find(domain=>domain.id==="sd_atlas");
+      expect(binding?.permissions.receive).toBe(true);
+      expect(binding?.receiving.state).toBe("unavailable");
     } finally {
       await setDomainInboundProvider("sd_atlas","pa_mock","test-admin");
     }

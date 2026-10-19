@@ -11,7 +11,7 @@ export const discoveryRepository: DiscoveryRepository = {
       last_accepted_at: Date | null; last_delivered_at: Date | null; last_received_at: Date | null;
     }>(`SELECT d.id,d.domain,'active' AS status,d.status AS domain_status,
       (b.outbound_provider_identity_id IS NOT NULL) AS send_allowed,
-      (b.receive_enabled AND d.inbound_provider_account_id IS NOT NULL) AS receive_allowed,
+      b.receive_enabled AS receive_allowed,
       s.configuration_revision AS revision,
       EXISTS(SELECT 1 FROM provider_identities pi
         JOIN provider_accounts a ON a.id=pi.provider_account_id

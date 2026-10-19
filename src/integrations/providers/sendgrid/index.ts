@@ -137,9 +137,17 @@ export const sendgridModule: ProviderModule = {
         }
     },
     inbound: {
+        routingReceipt(verified) {
+            if (verified.nativeType !== "inbound") return null;
+            const p = verified.parsed as Record<string, MultipartValue | MultipartValue[]>;
+            const raw = typeof p.envelope === "string" ? p.envelope : "";
+            let envelopeRecipients: string[] | undefined;
+            try { envelopeRecipients = smtpRecipients(JSON.parse(raw).to); } catch { /* Untrusted or absent envelope. */ }
+            return { externalMessageId: verified.providerEventId ?? stableEventId(p), envelopeRecipients };
+        },
         async receive(verified) {
-            if (verified.nativeType !== "inbound")
-                return null;
+            const routing = sendgridModule.inbound!.routingReceipt(verified);
+            if (!routing) return null;
             const p = verified.parsed as Record<string, MultipartValue | MultipartValue[]>;
             const text = (key: string) => typeof p[key] === "string" ? p[key] as string : "";
             const mime = text("email") ? await simpleParser(text("email")) : null;
@@ -150,16 +158,8 @@ export const sendgridModule: ProviderModule = {
             });
             return {
                 ...fields,
-                externalMessageId: verified.providerEventId ?? crypto.randomUUID(),
-                envelopeRecipients: (() => {
-                    try {
-                        const value = JSON.parse(text("envelope"));
-                        return smtpRecipients(value.to);
-                    }
-                    catch {
-                        return undefined;
-                    }
-                })(),
+                externalMessageId: routing.externalMessageId,
+                envelopeRecipients: routing.envelopeRecipients,
                 from: mime?.from?.text ?? text("from"),
                 to: mime ? mailAddresses(mime.to) : (await inboundHeaders(`To: ${text("to")}`)).to,
                 cc: mime ? mailAddresses(mime.cc) : (await inboundHeaders(`Cc: ${text("cc")}`)).cc,

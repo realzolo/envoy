@@ -35,7 +35,7 @@ Modules import each other's `public.ts` or `contracts.ts`. A `policy.ts` facet m
 
 Service is the business isolation boundary. Its globally unique name, active/suspended status, domain bindings, callback and suppression management permission are configured independently. API keys belong to one Service and authenticate against its current status. Messages, inbound copies, files and business suppression rules carry only service ownership. Pausing a Service invalidates all its keys and prevents mail content access, inbound delivery and new outbound submission until it is resumed.
 
-Each domain selects one inbound provider account, or none to disable receiving. A `service_domain_bindings` row connects one Service to one exact domain. Its receive switch delivers a private copy to that Service; multiple Services may receive the same domain. Its optional outbound provider identity selects the single provider account used when that Service sends from the domain. A missing identity disables sending. Suppression scopes are global, Service, or a list within one Service; a Service can manage only its own rules when explicitly authorized.
+Each domain selects one inbound provider account, or none to disable new inbound delivery. A `service_domain_bindings` row connects one Service to one exact domain. Its receive switch grants that Service a private copy and access to its retained mail; multiple Services may receive the same domain. Its optional outbound provider identity selects the single provider account used when that Service sends from the domain. A missing identity disables sending. Suppression scopes are global, Service, or a list within one Service; a Service can manage only its own rules when explicitly authorized.
 
 ### Inbound
 
@@ -45,13 +45,14 @@ flowchart LR
   V --> E[Read trusted envelope recipients]
   E --> D[Match exact domain and its inbound provider]
   D --> B[Find all receiving Service bindings]
-  B --> S1[Private copy for Service A]
-  B --> S2[Private copy for Service B]
+  B --> R[Persist frozen receipt and route before 202]
+  R --> S1[Private copy for Service A]
+  R --> S2[Private copy for Service B]
   S1 --> N1[Callback or polling]
   S2 --> N2[Callback or polling]
 ```
 
-The mailbox local part does not select a Service. Without trusted envelope recipients, ingress is rejected; the visible `To` header is never used as a substitute. Resend's current adapter cannot supply trusted envelope recipients, so it is unavailable for inbound domain selection.
+The mailbox local part does not select a Service. Without trusted envelope recipients, ingress is quarantined; the visible `To` header is never used as a substitute. Route ownership is frozen when the verified webhook is accepted, so later provider changes do not discard accepted mail. Resend's current adapter cannot supply trusted envelope recipients, so it is unavailable for inbound domain selection.
 
 ### Outbound
 

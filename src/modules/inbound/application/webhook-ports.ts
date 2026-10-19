@@ -8,6 +8,7 @@ export type VerifiedReceipt = {
 };
 export interface WebhookRepository {
   insertReceipt(receipt: VerifiedReceipt): Promise<boolean>;
+  freezeInboundReceipt(input: { accountId: string; endpointId: string; externalId: string; recipients: string[]; rawEventId: string }): Promise<void>;
   existingId(accountId: string, eventId: string): Promise<string>;
   completeUploads(keys: string[]): Promise<void>;
   enqueue(id: string, outboxId: string): Promise<void>;

@@ -39,12 +39,8 @@ async function revokeServiceCredential(id: string, actor: string) {
 async function replaceBindings(client: ManagementRepository, serviceId: string, config: ServiceConfiguration) {
   const selectedIds = config.domains.map(binding => binding.domainId);
   const registered = await client.findRegisteredDomains({ selectedIds });
-  if (registered.rows.length !== selectedIds.length || registered.rows.some(domain => domain.status !== "active")) {
-    throw new Error("Every selected domain must be registered and active");
-  }
-  const domains = new Map(registered.rows.map(domain => [domain.id, domain]));
-  if (config.domains.some(binding => binding.receive && !domains.get(binding.domainId)?.inbound_ready)) {
-    throw new Error("Receiving requires a configured inbound provider for the domain");
+  if (registered.rows.length !== selectedIds.length) {
+    throw new Error("Every selected domain must be registered");
   }
   const identityIds = config.domains.flatMap(binding => binding.outboundIdentityId ? [binding.outboundIdentityId] : []);
   const identities = await client.findProviderIdentities({ identityIds });
@@ -52,8 +48,8 @@ async function replaceBindings(client: ManagementRepository, serviceId: string, 
   if (identities.rows.length !== identityIds.length || config.domains.some(binding => {
     if (!binding.outboundIdentityId) return false;
     const identity = byId.get(binding.outboundIdentityId);
-    return !identity || identity.sending_domain_id !== binding.domainId || identity.status !== "verified" || identity.account_status !== "active";
-  })) throw new Error("Sending requires a verified provider identity for the selected domain");
+    return !identity || identity.sending_domain_id !== binding.domainId;
+  })) throw new Error("Sending provider identity must belong to the selected domain");
   await client.deleteServiceBindings({ serviceId });
   for (const binding of config.domains) {
     await client.insertServiceBinding({ id: createId("sdb"), serviceId, domainId: binding.domainId,

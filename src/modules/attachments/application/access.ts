@@ -47,7 +47,7 @@ async function withSafeOutboundAttachments<T>(messageId:string,attemptId:string,
       // The message lock serializes recovery/cancellation; use wall-clock time, not BEGIN's timestamp.
       const live = await client.access.lockLiveAttempt({ attemptId: attemptId, messageId: messageId });
       if (!live.rowCount) throw new Error("Submission preparation lease is no longer valid");
-      if(!(await client.access.verifySendingPermission({ messageId: messageId })).rowCount) throw new AttachmentUseError("FILE_UNAVAILABLE","DOMAIN_SEND_NOT_AUTHORIZED");
+      if(!(await client.access.verifySendingPermission({ messageId: messageId, attemptId: attemptId })).rowCount) throw new AttachmentUseError("FILE_UNAVAILABLE","DOMAIN_SEND_NOT_AUTHORIZED");
       assertSendDeadline(owner.send_before);
     };
     await beforeSend();

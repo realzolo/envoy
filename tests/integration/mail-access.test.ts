@@ -1,6 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { db, query } from "@/platform/database";
-import { persistInbound, getInboundMessage, listInboundMessages } from "@/modules/inbound/public";
+import { persistInbound, ingestProviderWebhook, getInboundMessage, listInboundMessages } from "@/modules/inbound/public";
+import { processRawProviderEvent } from "@/modules/outbound/public";
+import { providerRegistry } from "@/integrations/providers/registry";
 
 const tag = crypto.randomUUID().replaceAll("-", "");
 const domain = `access-${tag}.test`;
@@ -9,6 +11,7 @@ const domainId = `sd_${tag}`;
 const otherDomainId = `sd_other_${tag}`;
 const services = [`svc_a_${tag}`, `svc_b_${tag}`, `svc_c_${tag}`];
 const externalIds: string[] = [];
+const rawIds: string[] = [];
 
 function message(envelopeRecipients?: string[]) {
   const externalMessageId = crypto.randomUUID();
@@ -44,6 +47,8 @@ beforeAll(async () => {
 afterAll(async () => {
   await query("DELETE FROM inbound_messages WHERE external_message_id=ANY($1)", [externalIds]);
   await query("DELETE FROM inbound_receipts WHERE external_message_id=ANY($1)", [externalIds]);
+  await query("DELETE FROM outbox_events WHERE payload->>'rawEventId'=ANY($1)", [rawIds]);
+  await query("DELETE FROM raw_provider_events WHERE id=ANY($1)", [rawIds]);
   await query("DELETE FROM services WHERE id=ANY($1)", [services]);
   await query("DELETE FROM sending_domains WHERE id=ANY($1)", [[domainId, otherDomainId]]);
   await db().end();
@@ -83,5 +88,101 @@ describe("domain-bound inbound delivery", () => {
       await query("UPDATE service_domain_bindings SET receive_enabled=true WHERE service_id=$1 AND sending_domain_id=$2", [services[0], domainId]);
     }
     expect(await getInboundMessage(own, services[0])).not.toBeNull();
+  });
+
+  it("keeps accepted webhook routes and historical access across an ingress provider switch", async () => {
+    const externalMessageId = crypto.randomUUID();
+    externalIds.push(externalMessageId);
+    const body = { id: crypto.randomUUID(), type: "inbound.received", externalMessageId,
+      envelopeRecipients: [`help@${domain}`], from: "sender@example.net", to: [`help@${domain}`], subject: "Provider switch", text: "Before switch" };
+    const received = await ingestProviderWebhook("mock", "test-endpoint", {
+      rawBody: Buffer.from(JSON.stringify(body)), headers: { authorization: "Bearer test-webhook-token" }
+    });
+    if (received.status !== 202) throw new Error("Expected accepted webhook");
+    rawIds.push(received.id);
+    const frozen = (await query<{ routes: Array<{ service_id: string }> }>("SELECT routes FROM inbound_receipts WHERE provider_account_id='pa_mock' AND external_message_id=$1", [externalMessageId])).rows[0];
+    expect(frozen.routes.map(route => route.service_id).sort()).toEqual(services.slice(0, 2).sort());
+    const replacement = `pa_${tag}`;
+    await query("INSERT INTO provider_accounts(id,type,name,status,public_config,health,quota) VALUES($1,'mock',$1,'active','{}','{}','{}')", [replacement]);
+    try {
+      await query("UPDATE sending_domains SET inbound_provider_account_id=$2 WHERE id=$1", [domainId, replacement]);
+      await processRawProviderEvent(received.id);
+      const copies = (await query<{ id: string; service_id: string }>("SELECT id,service_id FROM inbound_messages WHERE external_message_id=$1 ORDER BY service_id", [externalMessageId])).rows;
+      expect(copies.map(copy => copy.service_id)).toEqual(services.slice(0, 2));
+      for (const copy of copies) expect((await getInboundMessage(copy.id, copy.service_id))?.status).toBe("ready");
+      const later = await deliver([`help@${domain}`]);
+      expect((await query<{ status: string; rejection_reason: string }>("SELECT status,rejection_reason FROM inbound_messages WHERE external_message_id=$1", [later])).rows)
+        .toEqual([{ status: "rejected", rejection_reason: "NO_RECEIVING_SERVICE" }]);
+    } finally {
+      await query("UPDATE sending_domains SET inbound_provider_account_id='pa_mock' WHERE id=$1", [domainId]);
+      await query("DELETE FROM provider_accounts WHERE id=$1", [replacement]);
+    }
+  });
+
+  it("honors explicit receive revocation after a webhook is accepted", async () => {
+    const externalMessageId = crypto.randomUUID();
+    externalIds.push(externalMessageId);
+    const received = await ingestProviderWebhook("mock", "test-endpoint", {
+      rawBody: Buffer.from(JSON.stringify({ id: crypto.randomUUID(), type: "inbound.received", externalMessageId,
+        envelopeRecipients: [`help@${domain}`], from: "sender@example.net", to: [`help@${domain}`], subject: "Revoked after accept", text: "Body" })),
+      headers: { authorization: "Bearer test-webhook-token" }
+    });
+    if (received.status !== 202) throw new Error("Expected accepted webhook");
+    rawIds.push(received.id);
+    await query("UPDATE service_domain_bindings SET receive_enabled=false WHERE service_id=$1 AND sending_domain_id=$2", [services[0], domainId]);
+    try {
+      await processRawProviderEvent(received.id);
+      const copies = (await query<{ service_id: string; status: string }>("SELECT service_id,status FROM inbound_messages WHERE external_message_id=$1 ORDER BY service_id", [externalMessageId])).rows;
+      expect(copies).toEqual([{ service_id: services[1], status: "ready" }]);
+      expect((await query<{ processed_at: Date | null }>("SELECT processed_at FROM raw_provider_events WHERE id=$1", [received.id])).rows[0].processed_at).not.toBeNull();
+    } finally {
+      await query("UPDATE service_domain_bindings SET receive_enabled=true WHERE service_id=$1 AND sending_domain_id=$2", [services[0], domainId]);
+    }
+  });
+
+  it("does not partially deliver a multi-domain Service copy after one domain is revoked", async () => {
+    const extraBinding = `sdb_multi_${tag}`;
+    const externalMessageId = crypto.randomUUID();
+    externalIds.push(externalMessageId);
+    await query("INSERT INTO service_domain_bindings(id,service_id,sending_domain_id,receive_enabled) VALUES($1,$2,$3,true)",
+      [extraBinding, services[0], otherDomainId]);
+    try {
+      const received = await ingestProviderWebhook("mock", "test-endpoint", {
+        rawBody: Buffer.from(JSON.stringify({ id: crypto.randomUUID(), type: "inbound.received", externalMessageId,
+          envelopeRecipients: [`help@${domain}`, `private@${otherDomain}`], from: "sender@example.net",
+          to: [`help@${domain}`], subject: "Two domains", text: "Body" })),
+        headers: { authorization: "Bearer test-webhook-token" }
+      });
+      if (received.status !== 202) throw new Error("Expected accepted webhook");
+      rawIds.push(received.id);
+      const frozen = (await query<{ routes: Array<{ service_id: string; recipients: string[] }> }>(
+        "SELECT routes FROM inbound_receipts WHERE provider_account_id='pa_mock' AND external_message_id=$1", [externalMessageId])).rows[0];
+      expect(frozen.routes.find(route => route.service_id === services[0])?.recipients).toHaveLength(2);
+      await query("UPDATE service_domain_bindings SET receive_enabled=false WHERE id=$1", [extraBinding]);
+      await processRawProviderEvent(received.id);
+      const copies = (await query<{ service_id: string; status: string }>(
+        "SELECT service_id,status FROM inbound_messages WHERE external_message_id=$1 ORDER BY service_id", [externalMessageId])).rows;
+      expect(copies).toEqual([{ service_id: services[1], status: "ready" }, { service_id: services[2], status: "ready" }]);
+    } finally {
+      await query("DELETE FROM service_domain_bindings WHERE id=$1", [extraBinding]);
+    }
+  });
+
+  it("creates independent fanout copies for Postmark recipients sharing MessageID", async () => {
+    const adapter = providerRegistry("postmark");
+    const context = { accountId: "pa_mock", config: { type: "postmark" as const, schemaVersion: 1 as const, messageStream: "outbound" }, secret: { type: "postmark" as const, serverToken: "test" } };
+    for (const recipient of [`support@${domain}`, `billing@${domain}`]) {
+      const verified = { valid: true, replaySafe: true, nativeType: "Inbound", providerEventId: crypto.randomUUID(),
+        parsed: { RecordType: "Inbound", MessageID: "shared-postmark-message", OriginalRecipient: recipient, From: "sender@example.net", To: recipient, Subject: "Shared provider ID", TextBody: "Body" } };
+      const mail = await adapter.inbound!.receive(verified, context);
+      if (!mail) throw new Error("Expected Postmark inbound message");
+      externalIds.push(mail.externalMessageId);
+      await persistInbound({ providerAccountId: "pa_mock", webhookEndpointId: "pwe_mock", rawEventId: null!, message: mail });
+    }
+    const copies = (await query<{ service_id: string; external_message_id: string }>("SELECT service_id,external_message_id FROM inbound_messages WHERE external_message_id=ANY($1) ORDER BY external_message_id,service_id", [externalIds.slice(-2)])).rows;
+    expect(copies).toHaveLength(4);
+    expect(new Set(copies.map(copy => copy.external_message_id)).size).toBe(2);
+    expect(copies.filter(copy => copy.service_id === services[0])).toHaveLength(2);
+    expect(copies.filter(copy => copy.service_id === services[1])).toHaveLength(2);
   });
 });

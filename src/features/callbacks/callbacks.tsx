@@ -2,51 +2,15 @@
 
 import styles from "@/components/admin-views.module.css";
 
-import { Alert,Button,Checkbox,Collapse,Descriptions,Form,Input,Modal,Space,Typography } from "@arco-design/web-react";
-import { IconRotateLeft,IconSend } from "@arco-design/web-react/icon";
+import { Alert,Button,Checkbox,Collapse,Descriptions,Form,Modal,Space,Typography } from "@arco-design/web-react";
+import { IconRefresh,IconRotateLeft,IconSend } from "@arco-design/web-react/icon";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 
-import { useState } from "react";
+import { useEffect,useState } from "react";
 
 import { ActionButton,ActionForm,CopyableValue,type Data,DataTable,Field,Notice,Prerequisite,type Row,Secret,StatusTag,TableCard,date,record,rows,useAction,value } from "@/components/admin-console-shared";
 import { ResourceDetail } from "@/components/admin-resource-detail";
-
-function ReplaceCallback({ callback }: { callback: Row }) {
-  const action = useAction();
-  const [secret, setSecret] = useState("");
-  const [requestedSecret, setRequestedSecret] = useState("");
-  const canReplace = callback.status === "disabled" && Number(callback.in_flight ?? 0) === 0;
-  return (
-    <Collapse bordered={false}>
-      <Collapse.Item name="replace" header="Replace callback secret">
-        <Space direction="vertical" size="small" className={styles.stack}>
-          <Typography.Text type="secondary">Pause delivery and wait for all in-flight requests to finish. Replace the single secret here and in the consumer, then resume and replay failed callbacks. Each Service has one current secret.</Typography.Text>
-          {!canReplace && <Alert type="info" content={`Pause this endpoint and wait for in-flight requests to reach zero before replacing its secret. Current in-flight requests: ${Number(callback.in_flight ?? 0)}.`} />}
-          <Input.Password value={requestedSecret} onChange={setRequestedSecret} autoComplete="new-password" placeholder="New secret, or leave blank to generate one" disabled={!canReplace} />
-          <Button
-            size="small"
-            disabled={!canReplace}
-            loading={action.pending}
-            onClick={async () => {
-              try {
-                const result = await action.run({method:"PUT",path:`/api/admin/callback-endpoints/${encodeURIComponent(String(callback.id))}/signing-secret`,payload:{id: callback.id, secret: requestedSecret}}) as { secret?: string };
-                setSecret(result.secret ?? "");
-                setRequestedSecret("");
-                action.setNotice("Secret replaced. Update the consumer with this same secret before resuming delivery.");
-              } catch {
-                // Inline notice owns failures from this request.
-              }
-            }}
-          >
-            Replace secret while paused
-          </Button>
-          {secret && <Secret value={secret} />}
-          <Notice notice={action.notice} />
-        </Space>
-      </Collapse.Item>
-    </Collapse>
-  );
-}
 
 export function Callbacks({ data }: { data: Data }) {
   const action = useAction();
@@ -89,9 +53,8 @@ export function Callbacks({ data }: { data: Data }) {
               render: (_, callback) => (
                 <div className={styles.actions}>
                   {callback.status === "active" && <Button size="small" loading={action.pending} onClick={async () => { try { const result = record(await action.run({method:"POST",path:`/api/admin/callback-endpoints/${encodeURIComponent(String(callback.id))}/tests`,payload:{id: callback.id}})); if (typeof result.deliveryId === "string") setSelectedDeliveryId(result.deliveryId); } catch { /* Inline notice handles the error. */ } }}><IconSend />Test</Button>}
-                  <Button size="small" disabled={!callback.url} onClick={() => setEditing(callback)}>Subscriptions and secret</Button>
+                  <Button size="small" disabled={!callback.url} onClick={() => setEditing(callback)}>Manage callback</Button>
                   {Number(callback.dead_letters ?? 0) > 0 && <ActionButton body={{method:"POST",path:`/api/admin/callback-replays`,payload:{endpointId: callback.id}}} confirmTitle="Replay endpoint dead letters?" confirmText={`Queue ${value(callback, "dead_letters")} failed callbacks for ${value(callback, "name")}?`}><IconRotateLeft />Replay endpoint</ActionButton>}
-                  {Boolean(callback.url) && <ActionButton body={{method:"PATCH",path:`/api/admin/callback-endpoints/${encodeURIComponent(String(callback.id))}`,payload:{id: callback.id, enabled: callback.status !== "active"}}}>{callback.status === "active" ? "Pause" : "Resume"}</ActionButton>}
                 </div>
               ),
             },
@@ -134,17 +97,86 @@ export function Callbacks({ data }: { data: Data }) {
 
 function EditCallback({ callback, onClose }: { callback: Row; onClose: () => void }) {
   const action = useAction();
+  const rotation = useAction();
+  const router = useRouter();
   const [form] = Form.useForm();
   const initialEvents = Array.isArray(callback.subscribed_events) ? callback.subscribed_events.map(String) : [];
   const [events, setEvents] = useState(initialEvents);
-  return <Modal title="Callback subscriptions and secret" style={{ width: 640, maxWidth: "calc(100vw - 32px)" }} visible onCancel={onClose} confirmLoading={action.pending} onOk={async () => {
-    await form.validate();
-    try { await action.run({method:"PUT",path:`/api/admin/callback-endpoints/${encodeURIComponent(String(callback.id))}/subscriptions`,payload:{id: callback.id, events}}); onClose(); } catch { /* Preserve the form for correction. */ }
-  }} okButtonProps={{ disabled: !events.length }}>
-    <ActionForm fieldErrors={action.fields} form={form} layout="vertical" initialValues={{ name: callback.name, url: callback.url }}>
-      <Typography.Text>Event callback URL: {value(callback, "url")}</Typography.Text>
-      <Field label="Subscribed events" required><Checkbox.Group className={styles.eventChoices} value={events} onChange={next => setEvents(next.map(String))} options={["email.accepted", "email.delivered", "email.bounced", "email.failed", "email.suppressed", "inbound.received", "service.permissions_changed"]} /></Field>
-    </ActionForm><Notice notice={action.notice} />
-    <ReplaceCallback callback={callback} />
+  const [secret, setSecret] = useState("");
+  const endpointPath = `/api/admin/callback-endpoints/${encodeURIComponent(String(callback.id))}`;
+  const paused = callback.status === "disabled";
+  const inFlight = Number(callback.in_flight ?? 0);
+
+  useEffect(() => {
+    if (!paused || inFlight === 0) return;
+    const timer = window.setInterval(() => router.refresh(), 2000);
+    return () => window.clearInterval(timer);
+  }, [paused, inFlight, router]);
+
+  async function toggle(enabled: boolean) {
+    try {
+      await rotation.run({method:"PATCH",path:endpointPath,payload:{id:callback.id,enabled}});
+      rotation.setNotice(enabled ? "Delivery resumed. Replay failed callbacks if needed." : "Delivery paused. Waiting for active requests to finish.");
+    } catch { /* Inline notice owns the failure. */ }
+  }
+
+  function generateSecret() {
+    Modal.confirm({
+      title: "Generate a new callback secret?",
+      content: "The current secret will stop working immediately. Update the consumer before resuming delivery.",
+      okText: "Generate secret",
+      onOk: async () => {
+        const result = await rotation.run({method:"PUT",path:`${endpointPath}/signing-secret`,payload:{}}) as {secret:string};
+        setSecret(result.secret);
+        rotation.setNotice("New secret generated. Update the consumer before resuming delivery.");
+      },
+    });
+  }
+
+  function resume() {
+    if (!secret) { void toggle(true); return; }
+    Modal.confirm({
+      title: "Resume callback delivery?",
+      content: "Confirm that the consumer now uses the new secret.",
+      okText: "Resume delivery",
+      onOk: () => toggle(true),
+    });
+  }
+
+  return <Modal title="Manage callback" style={{ width: 640, maxWidth: "calc(100vw - 32px)" }} visible footer={null} onCancel={() => {
+    if (!secret) { onClose(); return; }
+    Modal.confirm({
+      title: "Close secret view?",
+      content: "This secret cannot be shown again. Save it in the consumer before closing.",
+      okText: "Close view",
+      onOk: onClose,
+    });
+  }}>
+    <Space direction="vertical" size="large" className={styles.stack}>
+      <Space direction="vertical" size="small" className={styles.stack}>
+        <Typography.Text bold>Subscriptions</Typography.Text>
+        <Typography.Text type="secondary">{value(callback, "url")}</Typography.Text>
+        <ActionForm fieldErrors={action.fields} form={form} layout="vertical">
+          <Field label="Events" required><Checkbox.Group className={styles.eventChoices} value={events} onChange={next => setEvents(next.map(String))} options={["email.accepted", "email.delivered", "email.bounced", "email.failed", "email.suppressed", "inbound.received", "service.permissions_changed"]} /></Field>
+        </ActionForm>
+        <Button size="small" loading={action.pending} disabled={!events.length} onClick={async () => {
+          await form.validate();
+          try { await action.run({method:"PUT",path:`${endpointPath}/subscriptions`,payload:{id:callback.id,events}}); } catch { /* Preserve the form for correction. */ }
+        }}>Save subscriptions</Button>
+        <Notice notice={action.notice} />
+      </Space>
+      <Space direction="vertical" size="small" className={styles.stack}>
+        <Typography.Text bold>Signing secret</Typography.Text>
+        {paused && inFlight > 0 && <Alert type="info" content={`Waiting for ${inFlight} in-flight ${inFlight === 1 ? "request" : "requests"} to finish.`} />}
+        <Space wrap>
+          {!paused && <Button size="small" loading={rotation.pending} onClick={() => void toggle(false)}>Pause delivery</Button>}
+          {paused && inFlight > 0 && <Button size="small" icon={<IconRefresh />} onClick={() => router.refresh()}>Refresh status</Button>}
+          {paused && inFlight === 0 && !secret && <Button size="small" type="primary" loading={rotation.pending} onClick={generateSecret}>Generate new secret</Button>}
+          {paused && <Button size="small" disabled={inFlight > 0 || rotation.pending} onClick={resume}>Resume delivery</Button>}
+        </Space>
+        {secret && <Secret value={secret} />}
+        <Notice notice={rotation.notice} />
+      </Space>
+    </Space>
   </Modal>;
 }

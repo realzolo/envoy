@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import type { CanonicalEventType, ProviderModule } from "../contracts";
 import { inboundHeaders } from "../inbound-fields";
 import { accepted, assertMessageCapabilities, buildMimeMessage, checkedJson, decodeJson, event, eventDate, header, messageRecipients, type MultipartValue, nativeMailCapabilities, parseMultipart, stableEventId, submitRequest } from "../shared";
@@ -58,7 +58,8 @@ export const mailgunModule: ProviderModule = {
             if (!signingKey)
                 return { valid: false, replaySafe: false, nativeType: "unknown", parsed: null };
             const contentType = header(request.headers, "content-type");
-            const parsed = contentType.includes("multipart/form-data") ? await parseMultipart(request.rawBody, contentType) : decodeJson(request.rawBody);
+            const multipart = contentType.includes("multipart/form-data");
+            const parsed = multipart ? await parseMultipart(request.rawBody, contentType) : decodeJson(request.rawBody);
             const value = (key: string) => {
                 const v = (parsed as Record<string, unknown>)[key];
                 return typeof v === "string" ? v : "";
@@ -67,14 +68,23 @@ export const mailgunModule: ProviderModule = {
             const timestamp = value("timestamp") || String(signature.timestamp ?? "");
             const token = value("token") || String(signature.token ?? "");
             const actual = value("signature") || String(signature.signature ?? "");
-            const expected = createHmac("sha256", signingKey).update(timestamp + token).digest("hex");
-            const valid = actual.length === expected.length && timingSafeEqual(Buffer.from(actual), Buffer.from(expected));
             const data = ((parsed as Record<string, unknown>)["event-data"] ?? {}) as Record<string, unknown>;
-            const inbound = contentType.includes("multipart/form-data") && !data.event;
+            const inbound = typeof (parsed as Record<string, unknown>).recipient === "string" && !data.event;
+            const bodySignature = header(request.headers, "x-mailgun-signature");
+            const bodyTimestamp = header(request.headers, "x-mailgun-timestamp");
+            const signedBody = inbound && contentType.includes("application/json") && Boolean(bodySignature && bodyTimestamp);
+            const proofTimestamp = signedBody ? bodyTimestamp : timestamp;
+            const expected = createHmac("sha256", signingKey)
+                .update(proofTimestamp)
+                .update(signedBody ? request.rawBody : Buffer.from(token))
+                .digest("hex");
+            const suppliedSignature = signedBody ? bodySignature : actual;
+            const valid = Boolean(signingKey) && (!inbound || signedBody) && suppliedSignature.length === expected.length
+                && timingSafeEqual(Buffer.from(suppliedSignature), Buffer.from(expected));
             return {
                 valid,
-                replaySafe: Math.abs(Date.now() / 1000 - Number(timestamp)) < 300,
-                providerEventId: inbound ? token : String(data.id ?? token),
+                replaySafe: Math.abs(Date.now() / 1000 - Number(proofTimestamp)) < 300,
+                providerEventId: inbound ? createHash("sha256").update(request.rawBody).digest("hex") : String(data.id ?? token),
                 nativeType: inbound ? "inbound" : String(data.event ?? "unknown"),
                 parsed
             };
@@ -109,30 +119,43 @@ export const mailgunModule: ProviderModule = {
         }
     },
     inbound: {
+        routingReceipt(verified) {
+            if (verified.nativeType !== "inbound") return null;
+            const p = verified.parsed as Record<string, MultipartValue | MultipartValue[]>;
+            const recipient = typeof p.recipient === "string" && p.recipient ? p.recipient : undefined;
+            return { externalMessageId: verified.providerEventId ?? stableEventId(p), envelopeRecipients: recipient ? [recipient] : undefined };
+        },
         async receive(verified) {
-            if (verified.nativeType !== "inbound")
-                return null;
+            const routing = mailgunModule.inbound!.routingReceipt(verified);
+            if (!routing) return null;
             const p = verified.parsed as Record<string, MultipartValue | MultipartValue[]>;
             const text = (key: string) => typeof p[key] === "string" ? p[key] as string : "";
-            const attachments = Object.entries(p).filter(([key, value]) => key.startsWith("attachment") && !Array.isArray(value) && typeof value !== "string").map(([, value]) => {
+            const multipartAttachments = Object.entries(p).filter(([key, value]) => key.startsWith("attachment") && !Array.isArray(value) && typeof value !== "string").map(([, value]) => {
                 const file = value as Exclude<MultipartValue, string>;
                 return { fileName: file.name, contentType: file.type, content: file.bytes };
             });
-            const fields = await inboundHeaders(text("message-headers") ? JSON.parse(text("message-headers")) : "");
+            const jsonAttachments = Array.isArray(p.attachments) ? p.attachments.flatMap(item => {
+                if (!item || typeof item !== "object") return [];
+                const file = item as Record<string, unknown>;
+                if (typeof file.content !== "string") return [];
+                return [{ fileName: String(file.filename ?? "attachment"), contentType: String(file["content-type"] ?? "application/octet-stream"), content: new Uint8Array(Buffer.from(file.content, "base64")) }];
+            }) : [];
+            const headers = Array.isArray(p["message-headers"]) ? p["message-headers"] : text("message-headers") ? JSON.parse(text("message-headers")) : "";
+            const fields = await inboundHeaders(headers);
             return {
                 ...fields,
-                externalMessageId: verified.providerEventId ?? crypto.randomUUID(),
+                externalMessageId: routing.externalMessageId,
                 messageId: fields.messageId ?? (text("Message-Id") || undefined),
-                envelopeRecipients: text("recipient") ? [text("recipient")] : undefined,
+                envelopeRecipients: routing.envelopeRecipients,
                 from: text("from") || text("sender"),
                 to: fields.to.length ? fields.to : (await inboundHeaders(`To: ${text("To")}`)).to,
                 cc: fields.cc.length ? fields.cc : (await inboundHeaders(`Cc: ${text("Cc")}`)).cc,
                 bcc: [],
                 subject: text("subject"),
-                html: text("body-html"),
+                html: Array.isArray(p["body-html"]) ? p["body-html"].filter((part): part is string => typeof part === "string").join("\n") : text("body-html"),
                 text: text("body-plain"),
                 rawMime: typeof p["body-mime"] === "string" ? new TextEncoder().encode(p["body-mime"] as string) : undefined,
-                attachments,
+                attachments: [...multipartAttachments, ...jsonAttachments],
                 receivedAt: new Date(Number(text("timestamp") || Date.now() / 1000) * 1000)
             };
         }

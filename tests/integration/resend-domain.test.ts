@@ -67,4 +67,29 @@ describe("managed domain DNS persistence", () => {
     expect(create).toHaveBeenCalledTimes(1);
     expect(await identity(result.domainId)).toMatchObject({ status: "verified", dns_records: records });
   });
+
+  it("never re-enables an identity disabled during a provider refresh", async () => {
+    vi.spyOn(resendModule.identity!, "createIdentity").mockResolvedValue({ externalIdentityId: "resend-domain", status: "pending", dnsRecords: [] });
+    const result = await associate("resend-disabled-refresh.example.com");
+    const pending = await identity(result.domainId);
+    vi.spyOn(resendModule.identity!, "checkIdentity").mockImplementation(async () => {
+      await query("UPDATE provider_identities SET status='disabled' WHERE id=$1", [pending.id]);
+      return { status: "verified", dnsRecords: records };
+    });
+    await expect(refreshIdentity(pending.id, "test")).rejects.toThrow("disabled during refresh");
+    expect(await identity(result.domainId)).toMatchObject({ status: "disabled" });
+    await expect(refreshIdentity(pending.id, "test")).rejects.toThrow("Enable this provider identity");
+  });
+
+  it("retains the provider ID if an identity is disabled during its first refresh", async () => {
+    vi.spyOn(resendModule.identity!, "createIdentity").mockRejectedValueOnce(new Error("Temporary failure"));
+    const result = await associate("resend-disabled-create.example.com");
+    const failed = await identity(result.domainId);
+    vi.spyOn(resendModule.identity!, "createIdentity").mockImplementation(async () => {
+      await query("UPDATE provider_identities SET status='disabled' WHERE id=$1", [failed.id]);
+      return { externalIdentityId: "created-while-disabled", status: "verified", dnsRecords: records };
+    });
+    await expect(refreshIdentity(failed.id, "test")).rejects.toThrow("disabled during refresh");
+    expect(await identity(result.domainId)).toMatchObject({ status: "disabled", external_identity_id: "created-while-disabled" });
+  });
 });

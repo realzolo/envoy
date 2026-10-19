@@ -21,7 +21,8 @@ export function createRoutingRepository(client: Pick<PoolClient, "query">): Rout
     count(*) FILTER (WHERE a.started_at>=date_trunc('month',now())) AS monthly,
     count(*) FILTER (WHERE a.started_at>=date_trunc('day',now())) AS daily
     FROM submission_attempts a JOIN submission_deliveries sd ON sd.submission_id=a.submission_id
-    WHERE a.provider_account_id=$1 AND a.status IN ('submitting','accepted','reconciled','unknown','reconciling')`, [input.providerAccountId]);
+    WHERE a.provider_account_id=$1 AND a.started_at>=date_trunc('month',now())
+      AND a.status IN ('submitting','accepted','reconciled','unknown','reconciling')`, [input.providerAccountId]);
         },
         lockSubmissionRecipients(input: {
             submissionId: string;
@@ -118,14 +119,9 @@ export function createRoutingRepository(client: Pick<PoolClient, "query">): Rout
             serviceId: string;
         }) {
             return client.query<Candidate>(`SELECT pi.provider_account_id,pi.id AS provider_identity_id,
-      pa.type AS provider_type,pa.name AS provider_name,sd.domain,pa.quota,pa.status AS account_status,pa.health,pi.status AS identity_status,sd.status AS domain_status,
-      usage.monthly_usage::text,usage.daily_usage::text
+      pa.type AS provider_type,pa.name AS provider_name,sd.domain,pa.status AS account_status,pa.health,pi.status AS identity_status,sd.status AS domain_status
       FROM service_domain_bindings b JOIN provider_identities pi ON pi.id=b.outbound_provider_identity_id
       JOIN provider_accounts pa ON pa.id=pi.provider_account_id JOIN sending_domains sd ON sd.id=b.sending_domain_id
-      CROSS JOIN LATERAL (SELECT count(*) FILTER (WHERE a.started_at>=date_trunc('month',now())) AS monthly_usage,
-        count(*) FILTER (WHERE a.started_at>=date_trunc('day',now())) AS daily_usage
-        FROM submission_attempts a JOIN submission_deliveries sm ON sm.submission_id=a.submission_id
-        WHERE a.provider_account_id=pa.id AND a.status IN ('submitting','accepted','reconciled','unknown','reconciling')) usage
       WHERE b.sending_domain_id=$1 AND b.service_id=$2 AND pi.sending_domain_id=$1`, [input.sendingDomainId, input.serviceId]);
         },
         insertAttempt(input: {

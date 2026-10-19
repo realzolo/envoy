@@ -193,6 +193,8 @@ checks every typed table/column, and leaves migration files untouched. Setup ver
 complete catalog before and after upgrading, and records successful versions in `envoy_meta.migrations` in the same
 transaction. BullMQ manages its separate schema through its official API. Health and Worker startup require the
 current application migration checksums.
+Databases initialized with an earlier prelaunch V1 checksum must be rebuilt before using this revision; there is no
+in-place upgrade from that reset schema.
 English table and column comments are maintained in `src/platform/database/schema/documentation.ts`; generation
 requires a nonempty description for every typed table and column, and initialization validates the stored comments.
 

@@ -94,6 +94,9 @@ copy its `whsec_...` Signing secret into **Resend webhook signing secret**. See 
 [official verification guide](https://resend.com/docs/webhooks/verify-webhooks-requests). The other providers retain their
 own public-key, SNS-topic, signing-key or Basic Auth settings. These credentials verify provider → Envoy traffic; the
 Event callback signing secret authenticates Envoy → your application. Neither replaces an API key.
+For Mailgun inbound routes, use the separate **Inbound route URL (JSON format)** shown in the provider account and
+configure Mailgun's JSON route format. Its full-body signature protects the SMTP recipient used for routing; the regular
+Provider webhook URL remains for Mailgun event webhooks. The legacy multipart inbound route format is rejected.
 
 Saved verification settings are encrypted and never echoed. Updating requires complete replacement settings; leaving
 the form untouched preserves the current configuration. Saving shows configured/waiting, and only an actual verified
@@ -109,7 +112,8 @@ before enabling business receipt; this does not change Resend outbound support.
 
 ## Authoritative schema
 
-The fresh-project `001_initial.sql` includes the full application schema and both change streams. Future changes append
+The fresh-project `001_initial.sql` includes the full application schema and both change streams. Rebuild any database
+initialized with an earlier prelaunch V1 checksum before running setup for this revision. Future changes append
 contiguous versions and checksums. `pnpm db:generate` writes the typed `db/schema.sql` snapshot, and `pnpm db:check`
 verifies it and all migration checksums. Setup serializes migrations, validates the recorded catalog, applies missing
 versions and records checksums in `envoy_meta.migrations` atomically. A nonempty unjournaled application schema and any
@@ -145,8 +149,8 @@ unknown outbound sends for operator resolution; content deletion cannot bypass t
 
 For service credential rotation, use **Issue replacement**, deploy its once-shown key, check the new credential ID's
 usage time, then revoke the old ID before `overlapUntil`. Callback secrets follow a separate manual procedure:
-**Pause** the endpoint, wait for **In flight** to reach zero, use **Replace callback secret** and update the consumer with
-the same single secret, then **Resume** and replay endpoint dead letters. Active endpoints and endpoints with unfinished
+**Pause** the endpoint, wait for **In flight** to reach zero, use **Generate new secret** and update the consumer with
+the once-shown value, then **Resume** and replay endpoint dead letters. Envoy always generates the secret; active endpoints and endpoints with unfinished
 attempts reject secret replacement. Recovery closes expired paused attempts; a live HTTP attempt is allowed to finish
 and remains visible until then. Reconcile `/inbound-changes` and outgoing status/events after the pause. Retries use their
 current Unix timestamp with the original event ID and UTF-8 body. Consumers use a fixed 300-second replay window and

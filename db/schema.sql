@@ -601,6 +601,7 @@ ALTER TABLE "request_logs" ADD CONSTRAINT "request_logs_service_id_fkey" FOREIGN
 ALTER TABLE "request_logs" ADD CONSTRAINT "request_logs_message_id_fkey" FOREIGN KEY ("message_id") REFERENCES "public"."messages"("id") ON DELETE set null ON UPDATE no action;
 CREATE UNIQUE INDEX "services_name_key" ON "services" USING btree (lower("name"));
 CREATE UNIQUE INDEX "provider_credentials_one_active" ON "provider_credentials" USING btree ("provider_account_id") WHERE (status = 'active'::text);
+CREATE INDEX "service_domain_bindings_inbound_fanout" ON "service_domain_bindings" USING btree ("sending_domain_id") WHERE "service_domain_bindings"."receive_enabled";
 CREATE INDEX "deliveries_lifecycle_idx" ON "deliveries" USING btree ("lifecycle_status","queued_at" DESC NULLS FIRST);
 CREATE INDEX "deliveries_message_status" ON "deliveries" USING btree ("message_id","lifecycle_status");
 CREATE INDEX "delivery_events_delivery_occurred_cursor" ON "delivery_events" USING btree ("delivery_id","occurred_at" DESC NULLS FIRST,"id" DESC NULLS FIRST);

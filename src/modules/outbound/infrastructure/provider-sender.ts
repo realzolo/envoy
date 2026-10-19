@@ -23,8 +23,12 @@ export const providerSender = {
             // Preserve that response rather than converting provider acceptance into a retry.
             if (result)
                 return result;
+            if (error instanceof AttachmentUseError)
+                throw new SendPreparationError(error.reasonCode, error.reasonCode);
+            if (error instanceof SendDeadlineError)
+                throw new SendPreparationError(error.code, error.message);
             if (!started)
-                throw new SendPreparationError(error instanceof SendDeadlineError || error instanceof AttachmentUseError ? error.code : "LOCAL_PREPARATION_FAILED", error instanceof SendDeadlineError ? error.message : error instanceof AttachmentUseError ? error.reasonCode : "Local message preparation failed");
+                throw new SendPreparationError("LOCAL_PREPARATION_FAILED", "Local message preparation failed");
             throw error;
         }
         if (!result)

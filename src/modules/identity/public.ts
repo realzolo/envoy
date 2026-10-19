@@ -12,6 +12,7 @@ export type { ServiceIdentity } from './contracts';
 export { activeServiceExists,identityAdminReads } from './infrastructure/admin.read-repository';
 export const {authorizedSendingDomain,canAccessInbound}=createAuthorizationService(createAuthorizationRepository);
 export const discoverMail=createDiscoveryService(discoveryRepository);
+export { notifyDomainBindingsChanged } from './infrastructure/permission-notifications';
 export const purgeContent=createContentService(contentUnitOfWork);
 
 import { hashApiKey } from '@/platform/crypto/hash';

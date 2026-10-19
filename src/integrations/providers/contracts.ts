@@ -245,6 +245,7 @@ export interface IdentityPort {
     }>;
 }
 export interface InboundPort {
+    routingReceipt(verified: WebhookVerification): { externalMessageId: string; envelopeRecipients?: string[] } | null;
     receive(verified: WebhookVerification, context: ProviderSendContext): Promise<CanonicalInboundMessage | null>;
 }
 export interface SuppressionPort {

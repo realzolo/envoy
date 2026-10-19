@@ -14,16 +14,20 @@ function DomainBindingsEditor({ domains, value: bindings = [], onChange }: {
   return <Space direction="vertical" size="medium" className={styles.stack}>
     <Select mode="multiple" showSearch allowClear maxTagCount={2} placeholder="Select domains" value={selected}
       options={domains.filter(domain => domain.status === "active" || selected.includes(value(domain, "id"))).map(domain => ({ value: value(domain, "id"), label: `${value(domain, "domain")}${domain.status === "active" ? "" : " (disabled)"}` }))}
-      onChange={(domainIds: string[]) => onChange?.(domainIds.map(domainId => bindings.find(binding => binding.domainId === domainId) ?? { domainId, receive: domains.find(domain => domain.id === domainId)?.inbound_ready === true, outboundIdentityId: null }))} />
+      onChange={(domainIds: string[]) => onChange?.(domainIds.map(domainId => bindings.find(binding => binding.domainId === domainId) ?? { domainId, receive: true, outboundIdentityId: null }))} />
     {bindings.map(binding => {
       const domain = domains.find(item => item.id === binding.domainId);
-      const identities = rows(domain?.identities).filter(identity => identity.status === "verified" && identity.accountStatus === "active");
-      return <Space key={binding.domainId} wrap align="center">
-        <Typography.Text code>{value(domain ?? {}, "domain")}</Typography.Text>
-        <Checkbox checked={binding.receive} disabled={!domain?.inbound_provider_account_id} onChange={receive => update(binding.domainId, { receive })}>Receive</Checkbox>
-        <Select style={{ minWidth: 190 }} placeholder="No sending provider" allowClear value={binding.outboundIdentityId ?? undefined}
-          options={identities.map(identity => ({ value: value(identity, "id"), label: value(identity, "account") }))}
-          onChange={identityId => update(binding.domainId, { outboundIdentityId: identityId ? String(identityId) : null })} />
+      const identities = rows(domain?.identities);
+      return <Space key={binding.domainId} direction="vertical" size="mini" align="start">
+        <Space wrap align="center">
+          <Typography.Text code>{value(domain ?? {}, "domain")}</Typography.Text>
+          <Checkbox checked={binding.receive} onChange={receive => update(binding.domainId, { receive })}>Receive</Checkbox>
+          {binding.receive && !domain?.inbound_ready && <StatusTag>Ingress unavailable</StatusTag>}
+          <Select style={{ minWidth: 190 }} placeholder="No sending provider" allowClear value={binding.outboundIdentityId ?? undefined}
+            options={identities.map(identity => ({ value: value(identity, "id"), label: `${value(identity, "account")} (${value(identity, "status")})` }))}
+            onChange={identityId => update(binding.domainId, { outboundIdentityId: identityId ? String(identityId) : null })} />
+        </Space>
+        {!binding.receive && !binding.outboundIdentityId && <Typography.Text type="error">Select a sending provider or remove this domain.</Typography.Text>}
       </Space>;
     })}
   </Space>;

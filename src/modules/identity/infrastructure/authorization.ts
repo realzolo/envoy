@@ -3,7 +3,7 @@ import type { PoolClient } from "pg";
 
 /** SQL expressions passed here come from internal queries, never request input. */
 export function domainPermission(serviceId: string, domainId: string, permission: "send" | "receive") {
-  const direction = permission === "send" ? "b.outbound_provider_identity_id IS NOT NULL" : "b.receive_enabled AND d.inbound_provider_account_id IS NOT NULL";
+  const direction = permission === "send" ? "b.outbound_provider_identity_id IS NOT NULL" : "b.receive_enabled";
   return `EXISTS(SELECT 1 FROM service_domain_bindings b
     JOIN sending_domains d ON d.id=b.sending_domain_id
     JOIN services s ON s.id=b.service_id
@@ -15,7 +15,7 @@ export function domainPermission(serviceId: string, domainId: string, permission
 export function effectiveDomainBinding(serviceId: string, domainId: string) {
   return `SELECT 'active' AS status,
     (b.outbound_provider_identity_id IS NOT NULL) AS send_allowed,
-    (b.receive_enabled AND d.inbound_provider_account_id IS NOT NULL) AS receive_allowed,
+    b.receive_enabled AS receive_allowed,
     s.configuration_revision AS revision
     FROM service_domain_bindings b
     JOIN sending_domains d ON d.id=b.sending_domain_id
@@ -23,16 +23,15 @@ export function effectiveDomainBinding(serviceId: string, domainId: string) {
     WHERE b.service_id=${serviceId} AND b.sending_domain_id=${domainId}`;
 }
 
-/** These predicates use frozen transport ownership, never caller-supplied domain claims. */
 export function outboundDomainAccess(alias: string) {
   return domainPermission(`${alias}.service_id`, `${alias}.sending_domain_id`, "send");
 }
+/** Inbound access follows the Service's current domain permission, regardless of past ingress provider. */
 export function inboundDomainAccess(alias: string) {
   // A multi-domain resource is indivisible: fail closed if any private envelope domain was revoked.
   return `(cardinality(${alias}.envelope_recipients)>0 AND NOT EXISTS(
     SELECT 1 FROM unnest(${alias}.envelope_recipients) er WHERE NOT EXISTS(
       SELECT 1 FROM sending_domains d WHERE d.domain=split_part(er,'@',2)
-        AND d.inbound_provider_account_id=${alias}.provider_account_id
         AND ${domainPermission(`${alias}.service_id`, "d.id", "receive")})))`;
 }
 export async function authorizedSendingDomain(serviceId: string, domain: string, client?: PoolClient) {

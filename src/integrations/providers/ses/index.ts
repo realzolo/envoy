@@ -252,14 +252,25 @@ export const sesModule: ProviderModule = {
         }
     },
     inbound: {
+        routingReceipt(verified) {
+            const envelope = verified.parsed as Record<string, unknown>;
+            if (typeof envelope?.Message !== "string") return null;
+            const payload = JSON.parse(envelope.Message) as Record<string, unknown>;
+            const receipt = (payload.receipt ?? {}) as Record<string, unknown>;
+            const action = Array.isArray(receipt.action) ? receipt.action[0] as Record<string, unknown> : receipt.action as Record<string, unknown> | undefined;
+            if (!action || action.type !== "S3" || typeof action.bucketName !== "string" || typeof action.objectKey !== "string") return null;
+            const mail = (payload.mail ?? {}) as Record<string, unknown>;
+            return { externalMessageId: String(mail.messageId ?? action.objectKey), envelopeRecipients: smtpRecipients(receipt.recipients) };
+        },
         async receive(verified, context) {
             if (context.config.type !== "ses")
                 throw new Error("Invalid SES configuration");
+            const routing = sesModule.inbound!.routingReceipt(verified);
+            if (!routing) return null;
             const envelope = verified.parsed as Record<string, unknown>;
             const payload = JSON.parse(String(envelope.Message)) as Record<string, unknown>;
             const receipt = (payload.receipt ?? {}) as Record<string, unknown>;
             const action = Array.isArray(receipt.action) ? receipt.action[0] as Record<string, unknown> : receipt.action as Record<string, unknown> | undefined;
-            const mail = (payload.mail ?? {}) as Record<string, unknown>;
             if (!action || action.type !== "S3" || typeof action.bucketName !== "string" || typeof action.objectKey !== "string")
                 return null;
             const object = await new S3Client({
@@ -271,9 +282,9 @@ export const sesModule: ProviderModule = {
             const bytes = await object.Body.transformToByteArray();
             const parsed = await simpleParser(Buffer.from(bytes));
             return {
-                externalMessageId: String(mail.messageId ?? action.objectKey),
+                externalMessageId: routing.externalMessageId,
                 messageId: parsed.messageId,
-                envelopeRecipients: smtpRecipients(receipt.recipients),
+                envelopeRecipients: routing.envelopeRecipients,
                 replyTo: mailAddresses(parsed.replyTo), inReplyTo: parsed.inReplyTo,
                 references: typeof parsed.references === "string" ? [parsed.references] : parsed.references ?? [],
                 from: parsed.from?.text ?? "",

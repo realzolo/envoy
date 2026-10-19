@@ -1,5 +1,6 @@
 import { adminMutation,strings,text } from '@/server/admin-mutation';
 import { createDomain } from '@/modules/channels/public';
+import { z } from 'zod';
 
 export async function POST(request:Request) {
 
@@ -7,7 +8,7 @@ return adminMutation(request,async (body,actor)=>{let result:unknown=null;let st
         result = await createDomain({
           domain: text(body, "domain"),
           accountIds: strings(body.accountIds),
-          inboundProviderAccountId: typeof body.inboundProviderAccountId === 'string' ? body.inboundProviderAccountId : null
+          inboundProviderAccountId: z.union([z.string().trim().min(1), z.null()]).optional().parse(body.inboundProviderAccountId)
         }, actor);
         status = 201;
         

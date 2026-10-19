@@ -35,11 +35,27 @@ describe("inbound provider ownership and RFC fields", () => {
   it("uses Postmark OriginalRecipient and keeps its provider ID separate from RFC Message-ID", async () => {
     const adapter = providerRegistry("postmark");
     const parsed = { RecordType: "Inbound",MessageID: "provider-uuid",OriginalRecipient: "alias@example.test",To: "visible@example.net",ReplyTo: headers["Reply-To"],Headers: Object.entries(headers).map(([Name,Value]) => ({ Name,Value })) };
-    expect(await adapter.inbound!.receive(receipt(parsed),contexts.postmark)).toMatchObject({ ...expected,externalMessageId: "provider-uuid",envelopeRecipients: ["alias@example.test"] });
+    expect(await adapter.inbound!.receive(receipt(parsed),contexts.postmark)).toMatchObject({ ...expected,externalMessageId: "provider-uuid:alias@example.test",envelopeRecipients: ["alias@example.test"] });
     expect(await adapter.inbound!.receive(receipt({ ...parsed,ReplyTo: undefined }),contexts.postmark)).toMatchObject(expected);
     const missing = await adapter.inbound!.receive(receipt({ ...parsed,OriginalRecipient: undefined,Headers: [] }),contexts.postmark);
     expect(missing!.messageId).toBeUndefined();
     expect(missing!.envelopeRecipients).toBeUndefined();
+  });
+  it("keeps Postmark deliveries to two recipients distinct even with one MessageID", async () => {
+    const adapter = providerRegistry("postmark");
+    const security = { username: "envoy", password: "secret" };
+    const headers = { authorization: `Basic ${Buffer.from("envoy:secret").toString("base64")}` };
+    const payload = { RecordType: "Inbound", MessageID: "same-message", From: "sender@example.net", To: "visible@example.net" };
+    const first = await adapter.webhook.verify({ rawBody: Buffer.from(JSON.stringify({ ...payload, OriginalRecipient: "support@example.test" })), headers }, contexts.postmark, security);
+    const second = await adapter.webhook.verify({ rawBody: Buffer.from(JSON.stringify({ ...payload, OriginalRecipient: "billing@example.test" })), headers }, contexts.postmark, security);
+    expect(first.valid).toBe(true);
+    expect(second.valid).toBe(true);
+    expect(first.providerEventId).not.toBe(second.providerEventId);
+    const firstMessage = await adapter.inbound!.receive(first, contexts.postmark);
+    const secondMessage = await adapter.inbound!.receive(second, contexts.postmark);
+    expect(firstMessage?.externalMessageId).not.toBe(secondMessage?.externalMessageId);
+    expect(firstMessage?.envelopeRecipients).toEqual(["support@example.test"]);
+    expect(secondMessage?.envelopeRecipients).toEqual(["billing@example.test"]);
   });
   it("uses SES receipt recipients rather than mail.destination or MIME To/Cc", async () => {
     const s3 = mockClient(S3Client);

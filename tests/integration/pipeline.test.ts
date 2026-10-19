@@ -19,6 +19,8 @@ import { markAccepted, markDeterminateFailure, markUnknown, markReconciled, getA
 import { createMessageSchema, createSuppressionSchema } from "@/lib/contracts";
 import { providerRegistry } from "@/integrations/providers/registry";
 import { processDelivery } from "@/worker/delivery";
+import { providerSender } from "@/modules/outbound/infrastructure/provider-sender";
+import { submissionPolicy } from "@/integrations/providers/submission-policy";
 import { db, query, transaction } from "@/platform/database";
 
 const identity = {
@@ -699,6 +701,71 @@ describe("durable message pipeline", () => {
     expect(second.providerAccountId).toBe(first.providerAccountId);
     expect(second.providerIdentityId).toBe(first.providerIdentityId);
     await markAccepted(second.attemptId, `retry-accepted-${crypto.randomUUID()}`);
+  });
+  it("rejects a prepared attempt after its binding, identity, or provider health changes", async () => {
+    const accepted = await acceptMessage({ identity, idempotencyKey: crypto.randomUUID(), input: request });
+    messageIds.push(accepted.message.id);
+    const delivery = (await query<{ id: string }>("SELECT id FROM deliveries WHERE message_id=$1", [accepted.message.id])).rows[0];
+    const prepared = await prepareRecipientSubmission(delivery.id);
+    if (!prepared || "reconcileAttemptId" in prepared) throw new Error("Expected a prepared attempt");
+    const alternateAccount = `pa_${crypto.randomUUID()}`;
+    const alternate = `pi_${crypto.randomUUID()}`;
+    await query("INSERT INTO provider_accounts(id,type,name,status,public_config,health,quota) VALUES($1,'mock',$2,'active',$3,$4,$5)",
+      [alternateAccount, alternateAccount, { behavior: "deliver" }, { status: "healthy" }, { monthlyLimit: 100000 }]);
+    await query("INSERT INTO provider_identities(id,sending_domain_id,provider_account_id,status) VALUES($1,'sd_atlas',$2,'verified')", [alternate, alternateAccount]);
+    const send = vi.spyOn(providerRegistry("mock").sender, "send");
+    try {
+      await query("UPDATE service_domain_bindings SET outbound_provider_identity_id=$1 WHERE id='sdb_atlas'", [alternate]);
+      await expect(providerSender.send(prepared)).rejects.toMatchObject({ code: "DOMAIN_SEND_NOT_AUTHORIZED" });
+      await query("UPDATE service_domain_bindings SET outbound_provider_identity_id='pi_atlas_mock' WHERE id='sdb_atlas'");
+      await query("UPDATE provider_identities SET status='disabled' WHERE id='pi_atlas_mock'");
+      await expect(providerSender.send(prepared)).rejects.toMatchObject({ code: "DOMAIN_SEND_NOT_AUTHORIZED" });
+      await query("UPDATE provider_identities SET status='verified' WHERE id='pi_atlas_mock'");
+      await query("UPDATE provider_accounts SET health=$1 WHERE id='pa_mock'", [{ status: "offline" }]);
+      await expect(providerSender.send(prepared)).rejects.toMatchObject({ code: "DOMAIN_SEND_NOT_AUTHORIZED" });
+      expect(send).not.toHaveBeenCalled();
+    } finally {
+      send.mockRestore();
+      await query("UPDATE service_domain_bindings SET outbound_provider_identity_id='pi_atlas_mock' WHERE id='sdb_atlas'");
+      await query("UPDATE provider_identities SET status='verified' WHERE id='pi_atlas_mock'");
+      await query("UPDATE provider_accounts SET health=$1 WHERE id='pa_mock'", [{ status: "healthy" }]);
+      await query("DELETE FROM provider_identities WHERE id=$1", [alternate]);
+      await query("DELETE FROM provider_accounts WHERE id=$1", [alternateAccount]);
+    }
+  });
+  it("holds the sending binding stable while the provider call is in flight", async () => {
+    const accepted = await acceptMessage({ identity, idempotencyKey: crypto.randomUUID(), input: request });
+    messageIds.push(accepted.message.id);
+    const delivery = (await query<{ id: string }>("SELECT id FROM deliveries WHERE message_id=$1", [accepted.message.id])).rows[0];
+    const prepared = await prepareRecipientSubmission(delivery.id);
+    if (!prepared || "reconcileAttemptId" in prepared) throw new Error("Expected a prepared attempt");
+    let enter!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>(resolve => { enter = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const send = vi.spyOn(providerRegistry("mock").sender, "send").mockImplementationOnce(async () => {
+      enter();
+      await gate;
+      await submissionPolicy()?.beforeSend();
+      return { outcome: "accepted", externalMessageId: crypto.randomUUID() };
+    });
+    let update: Promise<unknown> | undefined;
+    try {
+      const sending = providerSender.send(prepared);
+      await entered;
+      let changed = false;
+      update = query("UPDATE service_domain_bindings SET outbound_provider_identity_id=NULL WHERE id='sdb_atlas'").then(() => { changed = true; });
+      await new Promise(resolve => setTimeout(resolve, 30));
+      expect(changed).toBe(false);
+      release();
+      await expect(sending).resolves.toMatchObject({ outcome: "accepted" });
+      await update;
+    } finally {
+      release();
+      send.mockRestore();
+      await update;
+      await query("UPDATE service_domain_bindings SET outbound_provider_identity_id='pi_atlas_mock' WHERE id='sdb_atlas'");
+    }
   });
   it("accepts, sanitizes, deduplicates, and routes inbound mail while outbound is disabled", async () => {
     const eventId = `fixture-inbound-${crypto.randomUUID()}`;

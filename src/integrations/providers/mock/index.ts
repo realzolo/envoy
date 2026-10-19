@@ -69,9 +69,14 @@ export const mockModule: ProviderModule = {
         }
     },
     inbound: {
+        routingReceipt(verified) {
+            if (verified.nativeType !== "inbound.received") return null;
+            const p = verified.parsed as Record<string, unknown>;
+            return { externalMessageId: String(p.externalMessageId ?? p.id ?? verified.providerEventId), envelopeRecipients: smtpRecipients(p.envelopeRecipients) };
+        },
         async receive(verified) {
-            if (verified.nativeType !== "inbound.received")
-                return null;
+            const routing = mockModule.inbound!.routingReceipt(verified);
+            if (!routing) return null;
             const p = verified.parsed as Record<string, unknown>;
             const to = Array.isArray(p.to) ? p.to.map(String) : typeof p.to === "string" ? [p.to] : [];
             const attachments = Array.isArray(p.attachments) ? p.attachments.flatMap(item => {
@@ -86,8 +91,8 @@ export const mockModule: ProviderModule = {
                     }];
             }) : [];
             return {
-                externalMessageId: String(p.externalMessageId ?? p.id ?? crypto.randomUUID()),
-                envelopeRecipients: smtpRecipients(p.envelopeRecipients),
+                externalMessageId: routing.externalMessageId,
+                envelopeRecipients: routing.envelopeRecipients,
                 messageId: typeof p.messageId === "string" ? p.messageId : undefined,
                 from: String(p.from ?? "sender@example.net"),
                 to,

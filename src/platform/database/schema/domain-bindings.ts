@@ -1,4 +1,5 @@
-import { boolean, foreignKey, pgTable, text, timestamp, unique } from "drizzle-orm/pg-core";
+import { boolean, foreignKey, index, pgTable, text, timestamp, unique } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { services } from "./identity";
 import { providerIdentities, sendingDomains } from "./channels";
 
@@ -19,4 +20,5 @@ export const serviceDomainBindings = pgTable("service_domain_bindings", {
     name: "service_domain_bindings_outbound_identity_domain_fkey",
   }).onDelete("restrict"),
   unique("service_domain_bindings_service_domain_key").on(table.serviceId, table.sendingDomainId),
+  index("service_domain_bindings_inbound_fanout").on(table.sendingDomainId).where(sql`${table.receiveEnabled}`),
 ]);
