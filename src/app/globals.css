@@ -5,7 +5,7 @@ body { margin: 0; background: var(--color-fill-2); color: var(--color-text-1); -
 button, a { -webkit-tap-highlight-color: transparent; }
 ::selection { background: rgb(var(--arcoblue-2)); }
 .envoy-logo { display: inline-flex; align-items: center; gap: 10px; color: var(--color-text-1); font-size: 20px; white-space: nowrap; }
-.envoy-mark { background: rgb(var(--arcoblue-6)); color: #fff; }
+.envoy-mark { display: block; flex: none; width: 30px; height: 30px; }
 .page-stack { display: flex; min-width: 0; flex-direction: column; gap: 16px; }
 .page-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding: 0 0 4px; }
 .page-header__main { display: flex; min-width: 0; align-items: flex-start; gap: 12px; }
