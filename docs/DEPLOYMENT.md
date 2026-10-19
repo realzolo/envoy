@@ -1,80 +1,241 @@
-# Envoy Docker Deployment
+# Production Deployment
 
-The production server checks out the source and builds one Docker image. Docker Compose runs the Web and Worker as
-separate containers, executes database migration as a one-off task, and attaches all three services to the explicit
-`envoy-network` bridge network. PostgreSQL and R2 remain external.
+This guide deploys Envoy from a server-side Git checkout using Docker Compose. Commands assume the repository is
+installed at `/data/envoy` and the current user can run Docker commands.
+
+The Compose configuration runs three services from the same application image:
+
+| Service | Responsibility |
+| --- | --- |
+| `web` | Next.js application, operations console, API, and provider event ingress |
+| `worker` | Delivery, event processing, callbacks, attachment scanning jobs, and background maintenance |
+| `migrate` | One-time application and BullMQ PostgreSQL schema migration |
 
 ## Requirements
 
-- Git
-- Docker Engine
-- Docker Compose v2
+- A Linux server with Git, Docker Engine, Docker Compose v2, curl, and OpenSSL.
+- PostgreSQL 14 or newer with a database accessible from the application containers.
+- S3-compatible object storage, such as Cloudflare R2, for production content and attachments.
+- A reachable ClamAV scanner with current signatures when using attachments.
 
-## Checkout And Configure
+Use direct or session-pooled PostgreSQL connections. Transaction-pooled connections cannot preserve the `LISTEN`
+sessions used by the queue backend. The database role must be able to apply application and queue migrations.
+
+Node.js and pnpm are provided by the Docker image build.
+
+Check the server tools:
 
 ```bash
-git clone REPLACE_WITH_REPOSITORY_URL /data/envoy
+git --version
+docker version
+docker compose version
+```
+
+## 1. Check Out the Repository
+
+```bash
+git clone https://github.com/realzolo/envoy.git /data/envoy
 cd /data/envoy
+```
+
+## 2. Create Server Configuration
+
+Run these commands once for a new installation:
+
+```bash
 cp docker-compose.example.yml docker-compose.yml
 cp .env.example .env.production
+chmod 600 .env.production
+```
+
+The repository maintains one environment reference, `.env.example`. Development uses `.env.local`; Docker production
+uses `.env.production` through Compose's `env_file` setting.
+
+Both `docker-compose.yml` and `.env.production` are ignored by Git. Keep server-specific changes in those files and
+review changes to the committed examples when upgrading. Do not overwrite existing server configuration with the copy
+commands above during an update. Environment files are also excluded from the Docker build context.
+
+Edit the production environment:
+
+```bash
 vi .env.production
 ```
 
-The server-owned `docker-compose.yml` is ignored by Git, so local edits do not conflict with source updates.
-`.env.example` is the single configuration reference for both local development (`.env.local`) and production
-(`.env.production`). Its defaults target local development: set `DATABASE_URL` to a database reachable from the
-containers, change `OBJECT_STORAGE_DRIVER` to `s3`, and uncomment and fill in the object storage settings. For R2,
-set `OBJECT_STORAGE_REGION=auto` and the account-specific endpoint. `NODE_ENV=production` is set by the Docker image.
+The example defaults to local development. Configure these values before starting production:
 
-Replace every active `replace_with_*` value. Ensure the database, R2 credentials, KEK,
-administrator
-credentials and session secret are correct. Configure the Envoy-only scanner for attachment use; without it, files remain unavailable and are never silently approved. See [Attachment Safety](ATTACHMENT-SAFETY.md). `.env.production` is ignored by Git and excluded from the Docker build context.
+| Setting | Production configuration |
+| --- | --- |
+| `DATABASE_URL` | PostgreSQL connection string reachable from the containers; use the TLS settings required by your database provider |
+| `ENVOY_KEK_BASE64` | A base64-encoded key that decodes to exactly 32 bytes |
+| `ENVOY_KEK_VERSION` | A stable identifier for the current encryption key, such as `kek-1` |
+| `ENVOY_ADMIN_EMAIL` | Administrator login email |
+| `ENVOY_ADMIN_PASSWORD` | A strong administrator password |
+| `ENVOY_SESSION_SECRET` | A randomly generated session signing secret |
+| `OBJECT_STORAGE_DRIVER` | Set to `s3`; the `local` driver is for development |
+| `OBJECT_STORAGE_BUCKET` | Production storage bucket |
+| `OBJECT_STORAGE_REGION` | Storage region; use `auto` for R2 |
+| `OBJECT_STORAGE_ENDPOINT` | Account-specific endpoint for R2 or another S3-compatible service |
+| `OBJECT_STORE_ACCESS_KEY_ID` | Object storage access key |
+| `OBJECT_STORE_SECRET_ACCESS_KEY` | Object storage secret key |
+| `CLAMAV_HOST` / `CLAMAV_PORT` | Scanner address reachable from the worker; the default port is `3310` |
 
-## Build And Start
+Uncomment the storage and scanner settings you need, and replace every active `replace_with_*` value.
+Inside a container, `localhost` refers to that container. Use addresses reachable from the application containers for
+PostgreSQL and ClamAV.
+
+Generate the KEK and session secret separately, then copy each result into its corresponding setting:
 
 ```bash
-docker compose build
-docker compose run --rm migrate
-docker compose up -d web worker
+# ENVOY_KEK_BASE64
+openssl rand -base64 32
+
+# ENVOY_SESSION_SECRET
+openssl rand -hex 32
 ```
 
-Envoy binds port `6178` to `127.0.0.1` only. Put an HTTPS reverse proxy on the same host in front of it; do not expose
-the Compose port directly to the internet. Verify the deployment:
+Back up the KEK separately from the database. Preserve its value and version across deployments; losing it makes
+existing encrypted credentials unreadable. Keep prior keys in `ENVOY_KEK_KEYRING_JSON` when rotating versioned keys.
+
+For R2, use `OBJECT_STORAGE_REGION=auto` and an endpoint in the form
+`https://ACCOUNT_ID.r2.cloudflarestorage.com`. Use bucket-default encryption and leave
+`OBJECT_STORE_SERVER_SIDE_ENCRYPTION` unset. R2 credentials use the `OBJECT_STORE_*` settings independently of AWS
+runtime credentials used by SES.
+
+The Docker image sets `NODE_ENV=production`; it does not need to be added to the environment file. Server processes
+use UTC by default. Keep `PORT=6178` unless you also update the Compose port mapping and health check.
+
+## 3. Build and Start
+
+Validate the configuration first:
 
 ```bash
-docker compose ps
+docker compose config --quiet
+```
+
+After validation succeeds, build and start the services:
+
+```bash
+docker compose up -d --build
+```
+
+Compose builds the shared `envoy:production` image, runs `migrate`, and starts Web and Worker after the migration
+completes successfully. Migration initializes both the application schema and the BullMQ PostgreSQL schema.
+
+The default port mapping exposes the application on the server at `http://127.0.0.1:6178`. Public HTTPS access is
+configured separately.
+
+## 4. Verify the Deployment
+
+```bash
+docker compose ps -a
+docker compose logs --tail=100 web worker migrate
 curl --fail http://127.0.0.1:6178/api/health
 ```
 
-The session cookie follows the browser-facing protocol. HTTPS reverse proxies must forward `X-Forwarded-Proto`.
-Set `ENVOY_TRUST_PROXY=true` only when that proxy overwrites client-supplied `X-Forwarded-*` headers and the Envoy
-port is not directly reachable by untrusted clients. This is required when provider IP allowlists are used behind a
-reverse proxy. Use HTTPS for public deployments.
+A healthy API response is:
 
-Outbound callback endpoints must be public HTTPS addresses by default. For trusted private-network consumers, set
-`ENVOY_ALLOW_PRIVATE_CALLBACKS=true`; this also permits HTTP only for private outbound callback addresses.
+```json
+{"name":"envoy","status":"ok"}
+```
 
-## Update
+Expected service states:
+
+| Service | Expected result |
+| --- | --- |
+| `migrate` | `Exited (0)` after completing successfully |
+| `web` | Running; health changes from `starting` to `healthy` after checks pass |
+| `worker` | Running; logs include `Envoy PostgreSQL workers started` |
+
+The health endpoint checks database access, queue schema compatibility, and the outbox query. It does not confirm
+that Worker is running, storage is accessible, attachments can be scanned, or a provider can send mail. Check Worker
+logs and its heartbeat in the operations console separately.
+
+Sign in using `ENVOY_ADMIN_EMAIL` and `ENVOY_ADMIN_PASSWORD`. A new database has no business configuration: create
+service credentials, configure provider accounts and domains, and set up routing before sending a test message.
+Provider API keys and webhook secrets belong in the operations console, where they are encrypted in the database.
+
+## 5. Update an Existing Deployment
+
+Before updating, back up PostgreSQL, including its `bullmq` schema, and preserve the production environment, KEKs,
+and required object storage data. Review migration and configuration changes for the target release.
+
+Pull the source without overwriting the server's configuration files:
 
 ```bash
 cd /data/envoy
 git pull --ff-only
-docker compose build
-docker compose run --rm migrate
-docker compose up -d web worker
 ```
 
-## Operations
+Apply any required configuration changes, then run:
 
 ```bash
-docker compose logs -f web
-docker compose logs -f worker
+docker compose config --quiet &&
+docker compose build web &&
+docker compose run --rm --no-deps migrate &&
+docker compose up -d --no-deps --force-recreate web worker
+```
+
+The commands are chained so a failure stops the remaining steps. The new image is built once, migration must succeed
+before application containers are replaced, and both Web and Worker use the newly built image. `--no-deps` avoids
+running the migration again after the explicit migration step. Container recreation causes a brief service interruption.
+
+Repeat the deployment verification commands after every update. For attachment policy changes, follow the drain and
+stop procedure in [Operations](OPERATIONS.md#attachment-safety-operations) before replacing running instances.
+
+## 6. Routine Operations
+
+```bash
+# Inspect all service states, including the completed migration task.
+docker compose ps -a
+
+# Follow application logs.
+docker compose logs -f web worker
+
+# Restart existing application containers.
 docker compose restart web worker
+
+# Stop application containers while retaining them.
+docker compose stop web worker
+
+# Remove the deployment's containers.
 docker compose down
 ```
 
-For fresh installations, `001_initial.sql` directly creates the final domain authorization model, domain-owned files, Service-scoped inbound routes and one callback with one current secret per Service.
-Migration still refuses a checksum mismatch; no data-bearing database is reset and no ledger is rewritten to force startup. Deploy matching Web and Worker binaries together. For an attachment policy change, follow the
-stopped/drained all-instance procedure in [Operations](OPERATIONS.md#attachment-safety-operations).
+After changing `.env.production`, recreate the application containers to load the new values:
 
-Use PostgreSQL 14+ with direct or session-pooled connections. Default Web plus Worker connection budget is 48, plus deployment/monitoring headroom. Migration initializes business and BullMQ schemas explicitly. R2 uses separate `OBJECT_STORE_ACCESS_KEY_ID` / `OBJECT_STORE_SECRET_ACCESS_KEY`; AWS runtime credentials remain available to SES. Leave SSE unset for R2 and use bucket-default encryption.
+```bash
+docker compose config --quiet &&
+docker compose up -d --no-deps --force-recreate web worker
+```
+
+`docker compose restart` keeps the existing container environment. Shutting down Compose does not delete data stored
+in PostgreSQL or object storage.
+
+## Troubleshooting
+
+| Symptom | Checks |
+| --- | --- |
+| Build fails | Check Docker build output, registry access, package downloads, and available disk space and memory. |
+| `migrate` exits with a nonzero code | Read migration logs; check the database URL, database permissions, and schema compatibility before starting Web or Worker. |
+| Migration reports a checksum mismatch | Stop the upgrade and investigate the schema history. Do not reset a data-bearing database or rewrite migration checksums to force startup. |
+| Web remains unhealthy or `/api/health` returns `503` | Inspect Web logs and verify database connectivity and both application and queue schemas. |
+| Worker exits or messages remain queued | Inspect Worker logs, its console heartbeat, database connectivity, provider configuration, and routing. |
+| Administrator login fails | Verify the configured email and password and recreate containers after environment changes. |
+| Attachments remain unavailable | Verify storage credentials, bucket access, scanner connectivity, current signatures, and Worker logs. Missing or failing scanners block attachment use. |
+
+To inspect a failed migration container:
+
+```bash
+docker compose logs --tail=200 migrate
+```
+
+When a migration was run with `docker compose run --rm`, inspect its terminal output because the temporary container
+is removed after exit.
+
+## Rollback
+
+Check out a known compatible source revision and repeat the build, migration, and container recreation steps above.
+Confirm that the older application and queue backend support the current database schema before rolling back. Application rollback does not reverse database
+migrations. Restore backups only through a planned database recovery procedure.
+
+For ongoing delivery, credential rotation, retention, and recovery procedures, see [Operations](OPERATIONS.md).
