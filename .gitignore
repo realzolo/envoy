@@ -22,6 +22,9 @@
 /dist/
 /var/
 
+# Server-owned Compose configuration at the repository root
+/docker-compose.yml
+
 # misc
 .DS_Store
 *.pem
@@ -32,7 +35,7 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
+# Runtime env files stay local; only the shared configuration example is committed.
 .env*
 !.env.example
 

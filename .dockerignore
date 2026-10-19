@@ -10,8 +10,8 @@ coverage
 *.log
 docs
 tests
-deploy
 scripts/*
 !scripts/migrate.ts
 docker-compose.yml
+docker-compose.example.yml
 README.md

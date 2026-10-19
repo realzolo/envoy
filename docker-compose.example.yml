@@ -1,3 +1,4 @@
+# Copy to docker-compose.yml before using; the server's copy is Git-ignored.
 name: envoy
 
 x-envoy-service: &envoy-service

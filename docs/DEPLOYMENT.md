@@ -15,9 +15,16 @@ separate containers, executes database migration as a one-off task, and attaches
 ```bash
 git clone REPLACE_WITH_REPOSITORY_URL /data/envoy
 cd /data/envoy
-cp deploy/env.production.example .env.production
+cp docker-compose.example.yml docker-compose.yml
+cp .env.example .env.production
 vi .env.production
 ```
+
+The server-owned `docker-compose.yml` is ignored by Git, so local edits do not conflict with source updates.
+`.env.example` is the single configuration reference for both local development (`.env.local`) and production
+(`.env.production`). Its defaults target local development: set `DATABASE_URL` to a database reachable from the
+containers, change `OBJECT_STORAGE_DRIVER` to `s3`, and uncomment and fill in the object storage settings. For R2,
+set `OBJECT_STORAGE_REGION=auto` and the account-specific endpoint. `NODE_ENV=production` is set by the Docker image.
 
 Replace every active `replace_with_*` value. Ensure the database, R2 credentials, KEK,
 administrator

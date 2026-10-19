@@ -38,9 +38,16 @@ git pull --ff-only
 ## 3. 配置环境变量
 
 ```bash
-cp deploy/env.production.example .env.production
+cp docker-compose.example.yml docker-compose.yml
+cp .env.example .env.production
 vi .env.production
 ```
+
+`docker-compose.yml` 是服务器自行维护的配置，已被 Git 忽略；后续更新源码不会覆盖它。
+
+项目只维护 `.env.example` 一份配置示例：本地复制为 `.env.local`，生产复制为 `.env.production`。
+示例默认使用本地开发配置；生产需要修改数据库地址，并启用下方的对象存储配置。
+`NODE_ENV=production` 由 Docker 镜像设置，无需在环境文件中重复配置。
 
 将所有已启用配置中的 `replace_with_*` 替换为真实值，重点确认：
 
@@ -51,6 +58,7 @@ vi .env.production
 - 对业务服务的出站回调默认只允许公网 HTTPS 地址；仅当需要调用受信任内网服务时设置 `ENVOY_ALLOW_PRIVATE_CALLBACKS=true`，此时仅内网出站回调可使用 HTTP
 - R2 Endpoint、存储桶和独立的 `OBJECT_STORE_ACCESS_KEY_ID` / `OBJECT_STORE_SECRET_ACCESS_KEY` 正确；AWS 默认凭据链保留给 SES，不与 R2 共用
 - `OBJECT_STORAGE_PREFIX=envoy`
+- 将 `OBJECT_STORAGE_DRIVER=local` 改为 `s3`，取消对象存储配置的注释；R2 使用 `OBJECT_STORAGE_REGION=auto`
 - 扫描设施仅在 Envoy 配置。缺少扫描器时附件不可使用，不会静默放行；业务无需配置扫描主机、端口或超时。详见 [附件安全合同及接入清单](ATTACHMENT-SAFETY.md)
 
 生成 KEK 和 Session Secret：

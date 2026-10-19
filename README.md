@@ -131,7 +131,9 @@ signed business callback delivery, and **Audit Log** to review administrator act
 
 Production deployment builds the Docker image from a server-side Git checkout and runs separate Web and Worker
 containers with Docker Compose. The application binds to loopback port `6178`; an HTTPS reverse proxy on the same host
-publishes it. PostgreSQL, R2, and secrets are provided through `.env.production`. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) or the
+publishes it. Copy `docker-compose.example.yml` to the Git-ignored `docker-compose.yml` and the shared `.env.example` to
+`.env.production` before deployment. Configure a database reachable from the containers and switch object storage to
+`s3` with your R2 settings. PostgreSQL, R2, and secrets are provided through `.env.production`. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) or the
 [Chinese guide](docs/DEPLOYMENT.zh-CN.md).
 
 ## Commands
