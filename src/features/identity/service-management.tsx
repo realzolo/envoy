@@ -67,7 +67,7 @@ function ServiceEditor({ service, data, onClose, onSaved }: { service?: Row; dat
         <Typography.Text>Domains: {configuration.domains.map(binding => `${value(rows(data.domains).find(domain => domain.id === binding.domainId) ?? {}, "domain")} (${[binding.receive ? "receive" : "", binding.outboundIdentityId ? "send" : ""].filter(Boolean).join(" + ")})`).join(", ") || "None"}</Typography.Text>
         <Typography.Text>Event callback URL: {service ? `${initial.callbackUrl || "Polling only"} → ` : ""}{configuration.callbackUrl || "Polling only"}</Typography.Text>
         <Typography.Text>Suppression management: {service ? `${initial.suppressionManagement ? "Allowed" : "Disabled"} → ` : ""}{configuration.suppressionManagement ? "Allowed" : "Disabled"}</Typography.Text>
-        <Typography.Text bold>{service ? `This configuration applies to every active API key for ${configuration.serviceName}. A new key is not required.` : "The first API key will be shown once."}</Typography.Text>
+        <Typography.Text bold>{service ? `This configuration applies to every active API key for ${configuration.serviceName}. A new key is not required.` : `The first API key${configuration.callbackUrl ? " and callback signing secret" : ""} will be shown once.`}</Typography.Text>
         {!configuration.domains.length && <Alert type="info" content="This service has no domains." />}
       </Space>,
       onOk: async () => {
@@ -133,12 +133,18 @@ export function Services({ data }: { data: Data }) {
   const services = rows(data.services);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [credentialServiceId, setCredentialServiceId] = useState<string | null>(null);
-  const [secrets, setSecrets] = useState("");
+  const [issuedSecrets, setIssuedSecrets] = useState<{ key: string; callbackSecret: string } | null>(null);
   const selectedService = services.find(service => service.id === credentialServiceId);
 
   return <Space direction="vertical" size="large" className={styles.stack}>
     <Space><Button type="primary" onClick={() => setEditingId("new")}>Create service</Button></Space>
-    {secrets && <Space direction="vertical" className={styles.stack}><Secret value={secrets} label="Copy these secrets now. They are shown only once." /><Button onClick={() => setSecrets("")}>Dismiss secrets</Button></Space>}
+    <Modal title={issuedSecrets?.key ? "Service created" : "Callback configured"} visible={issuedSecrets !== null} onCancel={() => setIssuedSecrets(null)} footer={<Button type="primary" onClick={() => setIssuedSecrets(null)}>Done</Button>}>
+      <Space direction="vertical" size="large" className={styles.stack}>
+        <Typography.Text type="secondary">Copy these values now. They cannot be shown again.</Typography.Text>
+        {issuedSecrets?.key && <Secret value={issuedSecrets.key} label="Service Key" />}
+        {issuedSecrets?.callbackSecret && <Secret value={issuedSecrets.callbackSecret} label="Callback signing secret" />}
+      </Space>
+    </Modal>
     <TableCard title="Services">{services.length ? <DataTable data={services} minWidth="980px" columns={[
       { title: "Service", render: (_, service) => value(service, "name") },
       { title: "Status", render: (_, service) => <StatusTag>{value(service, "status")}</StatusTag> },
@@ -157,7 +163,8 @@ export function Services({ data }: { data: Data }) {
     ]} /> : <Empty description="Create a service to configure mail permissions, receive events, and issue API keys." />}</TableCard>
     {editingId && <ServiceEditor key={editingId} service={services.find(service => service.id === editingId)} data={data} onClose={() => setEditingId(null)} onSaved={result => {
       const callback = record(result.callback);
-      setSecrets([value(result, "key"), callback.secret ? `Callback signing secret: ${value(callback, "secret")}` : ""].filter(Boolean).join("\n"));
+      const key = value(result, "key"), callbackSecret = value(callback, "secret");
+      if (key || callbackSecret) setIssuedSecrets({ key, callbackSecret });
     }} />}
     {selectedService && <Credentials service={selectedService} credentials={rows(data.credentials).filter(credential => credential.service_id === selectedService.id)} onClose={() => setCredentialServiceId(null)} />}
   </Space>;
