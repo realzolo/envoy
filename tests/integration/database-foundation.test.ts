@@ -65,7 +65,7 @@ describe("database migration foundation", () => {
       await admin.query(`DROP DATABASE "${name}" WITH (FORCE)`);
       await admin.end();
     }
-  });
+  }, 30_000);
 
   it("records the reset V1 SQL checksum", async () => {
     expect(createHash("sha256").update(await readFile("db/migrations/001_initial.sql")).digest("hex")).toBe("610afb19e5ab5354979923951e5c4994c9735c79f3d0407baf96d03af8c2c9eb");

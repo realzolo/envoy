@@ -34,7 +34,7 @@ pipeline, and security model.
 
 ## Local setup
 
-Requirements: Node.js 22+, pnpm, and PostgreSQL 14+ configured in `.env.local`.
+Requirements: Node.js 24 LTS, pnpm, and PostgreSQL 14+ configured in `.env.local`.
 
 Create `.env.local` from `.env.example` and set an explicit administrator email, password, session secret, and KEK before
 starting the application.
