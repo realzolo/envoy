@@ -8,7 +8,6 @@ return adminMutation(request,async (body,actor)=>{let result:unknown=null;let st
           id: await createInboundRoute({
             webhookEndpointId: text(body, "webhookEndpointId"),
             domainId: text(body, "domainId"),
-            productId: text(body, "productId"),
             serviceId: text(body,"serviceId"),
           }, actor)
         };

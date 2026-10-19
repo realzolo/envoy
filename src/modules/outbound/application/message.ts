@@ -19,14 +19,14 @@ export function createMessageService(dependencies: Omit<OutboundDependencies, "m
         return value;
     }
     function hashPayload(input: unknown) { return createHash("sha256").update(JSON.stringify(stable(input))).digest("hex"); }
-    async function isSuppressed(client: OutboundRepositories, productId: string, email: string, listId?: string) {
-        return Boolean((await client.message.isRecipientSuppressed({ email: email, productId: productId, listId: listId ?? null })).rowCount);
+    async function isSuppressed(client: OutboundRepositories, serviceId: string, email: string, listId?: string) {
+        return Boolean((await client.message.isRecipientSuppressed({ email: email, serviceId: serviceId, listId: listId ?? null })).rowCount);
     }
     async function assertRoutable(client: OutboundRepositories, message: MessageContent, recipients: {
         email: string;
         name?: string;
     }[]) {
-        const rows = (await client.message.findConfiguredProviderTypes({ sendingDomainId: message.sending_domain_id, productId: message.product_id, serviceId: message.service_id, messageCategory: message.message_category })).rows;
+        const rows = (await client.message.findConfiguredProviderTypes({ sendingDomainId: message.sending_domain_id, serviceId: message.service_id, messageCategory: message.message_category })).rows;
         if (!rows.length)
             throw new MessageValidationError(["No verified routing target is configured for this sender and message category."], "NO_ELIGIBLE_ROUTE");
         const envelope = subsetEnvelope(message, recipients);
@@ -64,12 +64,12 @@ export function createMessageService(dependencies: Omit<OutboundDependencies, "m
             const receipt = (row: {
                 id: string;
                 accepted_at: Date;
-                product: string;
+                service: string;
                 message_category: string;
                 recipient_count: number;
                 reference_id: string | null;
             }): AcceptedMessage => ({
-                id: row.id, processingState: "queued", outcome: "pending", product: row.product, category: row.message_category,
+                id: row.id, processingState: "queued", outcome: "pending", service: row.service, category: row.message_category,
                 recipientCount: row.recipient_count, acceptedAt: row.accepted_at.toISOString(), ...(row.reference_id ? { referenceId: row.reference_id } : {}),
             });
             if (existing) {
@@ -92,8 +92,8 @@ export function createMessageService(dependencies: Omit<OutboundDependencies, "m
             const attachments = await client.resolveOutboundAttachments(args.identity.serviceId, input.attachments, domainId);
             const id = createId("msg");
             const content: MessageContent = {
-                id, product_id: args.identity.productId, service_id: args.identity.serviceId, sending_domain_id: domainId,
-                sender_snapshot: { product: args.identity.product, fromName: input.from.name, fromEmail: input.from.email, domainId },
+                id, service_id: args.identity.serviceId, sending_domain_id: domainId,
+                sender_snapshot: { service: args.identity.serviceName, fromName: input.from.name, fromEmail: input.from.email, domainId },
                 to_recipients: input.to, cc_recipients: input.cc, bcc_recipients: input.bcc, reply_to: input.replyTo,
                 subject: input.subject, html_body: input.html ?? null, text_body: input.text ?? null,
                 headers: input.headers, in_reply_to: input.inReplyTo ?? null, references_ids: input.references,
@@ -103,7 +103,7 @@ export function createMessageService(dependencies: Omit<OutboundDependencies, "m
             const recipients = [];
             for (const role of ["to", "cc", "bcc"] as const)
                 for (const address of input[role])
-                    recipients.push({ ...address, role, blocked: await isSuppressed(client, args.identity.productId, address.email, input.metadata?.listId) });
+                    recipients.push({ ...address, role, blocked: await isSuppressed(client, args.identity.serviceId, address.email, input.metadata?.listId) });
             const allowed = recipients.filter(item => !item.blocked);
             if (allowed.length)
                 await assertRoutable(client, content, allowed);
@@ -129,7 +129,7 @@ export function createMessageService(dependencies: Omit<OutboundDependencies, "m
                 }, `message:${id}:${deliveryId}:accepted`);
             }
             await createSubmission(client, id, deliveryIds);
-            return { duplicate: false, message: receipt({ id, accepted_at: accepted.accepted_at, product: args.identity.product, message_category: input.category, recipient_count: recipients.length, reference_id: input.referenceId ?? null }) };
+            return { duplicate: false, message: receipt({ id, accepted_at: accepted.accepted_at, service: args.identity.serviceName, message_category: input.category, recipient_count: recipients.length, reference_id: input.referenceId ?? null }) };
         });
     }
     async function listMessages(serviceId: string, options: {
@@ -146,7 +146,7 @@ export function createMessageService(dependencies: Omit<OutboundDependencies, "m
         const more = rows.length > options.limit;
         const data = (more ? rows.slice(0, options.limit) : rows).map(row => ({
             id: row.id, processingState: row.processing_state, outcome: row.outcome, counts: row.counts, contentPolicy: row.content_policy, sendBefore: row.send_before?.toISOString() ?? null,
-            product: row.product, category: row.category, from: { email: row.sender_snapshot.fromEmail, name: row.sender_snapshot.fromName },
+            service: row.service, category: row.category, from: { email: row.sender_snapshot.fromEmail, name: row.sender_snapshot.fromName },
             subject: row.subject, referenceId: row.reference_id, recipientCount: row.recipient_count, acceptedAt: row.accepted_at.toISOString(),
         }));
         return { data, nextCursor: more ? encodeCursor(rows[options.limit - 1]) : null };

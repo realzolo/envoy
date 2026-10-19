@@ -1,9 +1,9 @@
 "use client";
 
-import { ActionButton,ActionForm,DataTable,Field,Notice,Secret,StatusTag,Submit,TableCard,date,formValue,record,requiredRule,rows,useAction,value,type Data,type FormValues,type Row } from "@/components/admin-console-shared";
+import { ActionButton,ActionForm,DataTable,Field,Notice,Secret,StatusTag,TableCard,date,record,requiredRule,rows,useAction,value,type Data,type Row } from "@/components/admin-console-shared";
 import styles from "@/components/admin-views.module.css";
 import { serviceConfigurationSchema,type DomainPermission,type ServiceConfiguration } from "@/lib/service-configuration";
-import { Alert,Button,Checkbox,Collapse,Drawer,Form,Grid,Input,Modal,Radio,Select,Space,Typography } from "@arco-design/web-react";
+import { Alert,Button,Checkbox,Collapse,Drawer,Form,Empty,Input,Modal,Radio,Select,Space,Typography } from "@arco-design/web-react";
 import { useState } from "react";
 
 function permissionFor(serviceId: string, grants: Row[], direction: "send" | "receive"): DomainPermission {
@@ -35,9 +35,8 @@ function PermissionEditor({ domains, value: permission = { mode: "none", domainI
   </Space>;
 }
 
-function initialConfiguration(service: Row | undefined, products: Row[]): ServiceConfiguration {
+function initialConfiguration(service: Row | undefined): ServiceConfiguration {
   return {
-    productId: service ? value(service, "product_id") : value(products[0] ?? {}, "id"),
     serviceName: service ? value(service, "name") : "",
     sending: service ? permissionFor(value(service, "id"), rows(service.domain_grants), "send") : { mode: "none", domainIds: [] },
     receiving: service ? permissionFor(value(service, "id"), rows(service.domain_grants), "receive") : { mode: "none", domainIds: [] },
@@ -49,8 +48,7 @@ function initialConfiguration(service: Row | undefined, products: Row[]): Servic
 function ServiceEditor({ service, data, onClose, onSaved }: { service?: Row; data: Data; onClose: () => void; onSaved: (result: Row) => void }) {
   const action = useAction();
   const [form] = Form.useForm();
-  const products = rows(data.products).filter(product => product.status === "active" || product.id === service?.product_id);
-  const [initial] = useState(() => initialConfiguration(service, products));
+  const [initial] = useState(() => initialConfiguration(service));
   const [revision] = useState(() => service?.configuration_revision);
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
   const [draft, setDraft] = useState(initial);
@@ -75,7 +73,7 @@ function ServiceEditor({ service, data, onClose, onSaved }: { service?: Row; dat
         <Typography.Text>Receiving: {service ? `${permissionSummary(initial.receiving)} → ` : ""}{permissionSummary(configuration.receiving)}</Typography.Text>
         {configuration.receiving.mode === "selected" && <Typography.Text type="secondary">{configuration.receiving.domainIds.map(id => value(rows(data.domains).find(domain => domain.id === id) ?? {}, "domain")).join(", ")}</Typography.Text>}
         <Typography.Text>Event callback URL: {service ? `${initial.callbackUrl || "Polling only"} → ` : ""}{configuration.callbackUrl || "Polling only"}</Typography.Text>
-        <Typography.Text>Product suppression management: {service ? `${initial.suppressionManagement ? "Allowed" : "Disabled"} → ` : ""}{configuration.suppressionManagement ? "Allowed" : "Disabled"}</Typography.Text>
+        <Typography.Text>Suppression management: {service ? `${initial.suppressionManagement ? "Allowed" : "Disabled"} → ` : ""}{configuration.suppressionManagement ? "Allowed" : "Disabled"}</Typography.Text>
         <Typography.Text bold>{service ? `This configuration applies to every active API key for ${configuration.serviceName}. A new key is not required.` : "The first API key will be shown once."}</Typography.Text>
         {configuration.sending.mode === "none" && configuration.receiving.mode === "none" && <Alert type="info" content="This service has no mail sending or receiving permission." />}
       </Space>,
@@ -92,14 +90,13 @@ function ServiceEditor({ service, data, onClose, onSaved }: { service?: Row; dat
     <Space direction="vertical" size="large" className={styles.stack}>
       <Typography.Text type="secondary">Permissions belong to the service and apply to all its API keys. Sending and receiving routes are configured separately.</Typography.Text>
       <ActionForm fieldErrors={{ ...action.fields, ...validationErrors }} form={form} initialValues={initial} layout="vertical" onValuesChange={(_, input) => { const values = input as Partial<ServiceConfiguration>; setValidationErrors({}); setDraft({ ...initial, ...values, sending: values.sending ?? initial.sending, receiving: values.receiving ?? initial.receiving }); }} onSubmit={values => review(values as ServiceConfiguration)}>
-        <Field field="productId" label="Product" required rules={requiredRule}><Select disabled={Boolean(service)} options={products.map(product => ({ value: value(product, "id"), label: value(product, "name") }))} /></Field>
-        <Field field="serviceName" label="Service name" required rules={requiredRule}><Input placeholder="API Service" /></Field>
+        <Field field="serviceName" label="Service name" hint="Use a unique name to identify the application or workload." required rules={requiredRule}><Input placeholder="e.g. Order notifications" /></Field>
         <Field field="sending" label="Sending permission"><PermissionEditor domains={rows(data.domains)} /></Field>
         <Field field="receiving" label="Receiving permission"><PermissionEditor domains={rows(data.domains)} /></Field>
         <Field field="callbackUrl" label="Event callback URL" hint="Leave empty to poll for events. A new signing secret is shown once when the callback is first configured."><Input placeholder="https://api.example.com/mail/events" allowClear /></Field>
         {service?.callback_status === "disabled" && initial.callbackUrl && <Alert type="info" content="Callback delivery is paused. Editing the service keeps it paused; resume delivery under Callbacks." />}
         <Collapse bordered={false}><Collapse.Item name="advanced" header="Advanced permissions">
-          <Field field="suppressionManagement" label="Suppression management" triggerPropName="checked" hint="Allows the API to list, add, and remove recipient suppression rules for this Product. Product rules affect every service and sending domain in the Product."><Checkbox>Allow product-wide suppression management</Checkbox></Field>
+          <Field field="suppressionManagement" label="Suppression management" triggerPropName="checked" hint="Allows this service to manage its own recipient and list suppression rules."><Checkbox>Allow suppression management</Checkbox></Field>
         </Collapse.Item></Collapse>
       </ActionForm>
       {noMail && <Alert type="info" content="This service has no mail sending or receiving permission. You can still create it and configure permissions later." />}
@@ -122,7 +119,7 @@ function Credentials({ service, credentials, onClose }: { service: Row; credenti
   return <Drawer title={`Credentials · ${value(service, "name")}`} visible width="min(1120px, 100vw)" onCancel={onClose} footer={<Button onClick={onClose}>Close</Button>} autoFocus focusLock>
     <Space direction="vertical" size="large" className={styles.stack}>
       <Typography.Text type="secondary">All keys use this service configuration. Plaintext keys are shown once.</Typography.Text>
-      <Button type="primary" disabled={service.product_status !== "active"} loading={action.pending} onClick={() => void issue()}>Issue key</Button>
+      <Button type="primary" disabled={service.status !== "active"} loading={action.pending} onClick={() => void issue()}>Issue key</Button>
       {key && <Secret value={key} />}
       <Notice notice={action.notice} />
       <DataTable data={credentials} minWidth="960px" columns={[
@@ -133,7 +130,7 @@ function Credentials({ service, credentials, onClose }: { service: Row; credenti
         { title: "Valid until", render: (_, credential) => credential.valid_to ? date(credential.valid_to) : "No fixed expiry" },
         { title: "Status", render: (_, credential) => <StatusTag>{credential.status === "active" && credential.valid_to && Date.parse(String(credential.valid_to)) <= Date.now() ? "Expired" : value(credential, "status")}</StatusTag> },
         { title: "Actions", render: (_, credential) => <Space wrap>
-          <Button size="small" disabled={service.product_status !== "active" || credential.status !== "active" || Boolean(credential.valid_to && Date.parse(String(credential.valid_to)) <= Date.now())} loading={action.pending} onClick={() => void issue(value(credential, "id"))}>Issue replacement</Button>
+          <Button size="small" disabled={service.status !== "active" || credential.status !== "active" || Boolean(credential.valid_to && Date.parse(String(credential.valid_to)) <= Date.now())} loading={action.pending} onClick={() => void issue(value(credential, "id"))}>Issue replacement</Button>
           {credential.status === "active" && <ActionButton danger body={{method:"DELETE",path:`/api/admin/service-credentials/${encodeURIComponent(String(credential.id))}`,payload:{id: credential.id}}} confirmTitle="Revoke key?" confirmOkText="Revoke" confirmText="This key will stop working immediately. Other keys and the service configuration remain available.">Revoke</ActionButton>}
         </Space> },
       ]} />
@@ -142,47 +139,31 @@ function Credentials({ service, credentials, onClose }: { service: Row; credenti
 }
 
 export function Services({ data }: { data: Data }) {
-  const products = rows(data.products), services = rows(data.services);
-  const activeProducts = products.filter(product => product.status === "active");
-  const productAction = useAction();
-  const [productForm] = Form.useForm();
+  const services = rows(data.services);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [credentialServiceId, setCredentialServiceId] = useState<string | null>(null);
   const [secrets, setSecrets] = useState("");
   const selectedService = services.find(service => service.id === credentialServiceId);
 
-  async function createProduct(values: FormValues) {
-    try {
-      await productAction.run({method:"POST",path:`/api/admin/products`,payload:{name: formValue(values, "name")}});
-      productForm.resetFields();
-    } catch { /* The notice retains the failure. */ }
-  }
-
   return <Space direction="vertical" size="large" className={styles.stack}>
-    <Alert type="info" content="Permissions and delivery readiness are separate. The All domains option includes current and future enabled domains; sending and receiving still require their domain routes." />
-    <Space><Button type="primary" disabled={!activeProducts.length} onClick={() => setEditingId("new")}>Create service</Button>{!activeProducts.length && <Typography.Text type="secondary">Create an active Product first.</Typography.Text>}</Space>
+    <Space><Button type="primary" onClick={() => setEditingId("new")}>Create service</Button></Space>
     {secrets && <Space direction="vertical" className={styles.stack}><Secret value={secrets} label="Copy these secrets now. They are shown only once." /><Button onClick={() => setSecrets("")}>Dismiss secrets</Button></Space>}
-    <TableCard title="Services"><DataTable data={services} minWidth="980px" columns={[
+    <TableCard title="Services">{services.length ? <DataTable data={services} minWidth="980px" columns={[
       { title: "Service", render: (_, service) => value(service, "name") },
-      { title: "Product", render: (_, service) => <Space direction="vertical" size="mini"><Typography.Text>{value(service, "product")}</Typography.Text>{service.product_status !== "active" && <StatusTag>{value(service, "product_status")}</StatusTag>}</Space> },
+      { title: "Status", render: (_, service) => <StatusTag>{value(service, "status")}</StatusTag> },
       { title: "Sending permission", render: (_, service) => permissionSummary(permissionFor(value(service, "id"), rows(service.domain_grants), "send")) },
       { title: "Receiving permission", render: (_, service) => permissionSummary(permissionFor(value(service, "id"), rows(service.domain_grants), "receive")) },
       { title: "Event callback", render: (_, service) => !service.callback_url ? "Polling only" : service.callback_status === "active" ? "Configured" : "Paused" },
-      { title: "Actions", render: (_, service) => <Space wrap><Button size="small" disabled={service.product_status !== "active"} onClick={() => setEditingId(value(service, "id"))}>Edit configuration</Button><Button size="small" onClick={() => setCredentialServiceId(value(service, "id"))}>Manage credentials</Button></Space> },
-    ]} /></TableCard>
-    <Collapse defaultActiveKey={products.length ? [] : ["products"]}><Collapse.Item name="products" header="Products">
-      <Space direction="vertical" size="large" className={styles.stack}>
-        <ActionForm fieldErrors={productAction.fields} form={productForm} layout="vertical" onSubmit={values => void createProduct(values as FormValues)}><Grid.Row gutter={[16, 0]}>
-          <Grid.Col xs={24}><Field field="name" label="Product name" required rules={requiredRule}><Input /></Field></Grid.Col>
-          <Grid.Col xs={24}><Submit pending={productAction.pending} labelText="Create product" /></Grid.Col>
-        </Grid.Row></ActionForm><Notice notice={productAction.notice} />
-        <DataTable data={products} columns={[
-          { title: "Product", render: (_, product) => value(product, "name") },
-          { title: "Status", render: (_, product) => <StatusTag>{value(product, "status")}</StatusTag> },
-          { title: "Action", render: (_, product) => <ActionButton body={{method:"PATCH",path:`/api/admin/products/${encodeURIComponent(String(product.id))}`,payload:{id: product.id, enabled: product.status !== "active"}}}>{product.status === "active" ? "Suspend" : "Activate"}</ActionButton> },
-        ]} />
-      </Space>
-    </Collapse.Item></Collapse>
+      { title: "Actions", render: (_, service) => <Space wrap>
+        <Button size="small" onClick={() => setEditingId(value(service, "id"))}>Edit configuration</Button>
+        <Button size="small" onClick={() => setCredentialServiceId(value(service, "id"))}>Manage credentials</Button>
+        <ActionButton body={{method:"PATCH",path:`/api/admin/services/${encodeURIComponent(String(service.id))}`,payload:{id:service.id,enabled:service.status!=="active"}}}
+          danger={service.status === "active"} confirmTitle={service.status === "active" ? "Pause service?" : "Resume service?"}
+          confirmText={service.status === "active" ? "API access and new mail sending and receiving will stop. Existing messages and credentials are retained." : "API access and mail permissions will become available again."}>
+          {service.status === "active" ? "Pause" : "Resume"}
+        </ActionButton>
+      </Space> },
+    ]} /> : <Empty description="Create a service to configure mail permissions, receive events, and issue API keys." />}</TableCard>
     {editingId && <ServiceEditor key={editingId} service={services.find(service => service.id === editingId)} data={data} onClose={() => setEditingId(null)} onSaved={result => {
       const callback = record(result.callback);
       setSecrets([value(result, "key"), callback.secret ? `Callback signing secret: ${value(callback, "secret")}` : ""].filter(Boolean).join("\n"));

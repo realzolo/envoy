@@ -13,8 +13,8 @@ const options = (apply: boolean) => ({ apply, batchSize: 100, days: { messages: 
 async function message(status: string) {
   const id = createId("retention");
   created.messages.push(id);
-  await query(`INSERT INTO messages(id,product_id,service_id,sending_domain_id,sender_snapshot,idempotency_key,payload_hash,recipient_count,subject,text_body,message_category,accepted_at)
-    VALUES ($1,'prd_atlas','svc_atlas_auth','sd_atlas','{"fromEmail":"security@mail.atlas.test"}',$1,'original-fingerprint',1,'Private subject','Private body','security',now()-interval '4000 days')`, [id]);
+  await query(`INSERT INTO messages(id,service_id,sending_domain_id,sender_snapshot,idempotency_key,payload_hash,recipient_count,subject,text_body,message_category,accepted_at)
+    VALUES ($1,'svc_atlas_auth','sd_atlas','{"fromEmail":"security@mail.atlas.test"}',$1,'original-fingerprint',1,'Private subject','Private body','security',now()-interval '4000 days')`, [id]);
   await query("INSERT INTO deliveries(id,message_id,recipient_email,recipient_role,lifecycle_status) VALUES ($1,$1,'retention@example.test','to',$2)", [id, status]);
   return id;
 }

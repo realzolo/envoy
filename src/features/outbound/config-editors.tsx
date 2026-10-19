@@ -3,6 +3,7 @@
 import { ActionForm,DataTable,Field,Notice,formValue,record,requiredRule,rows,useAction,value,type Data,type Row } from "@/components/admin-console-shared";
 import styles from "@/components/admin-views.module.css";
 import { Checkbox,Form,Grid,Input,InputNumber,Modal,Select,Space,Typography } from "@arco-design/web-react";
+import { ServiceScopeEditor } from "@/features/outbound/service-scope-editor";
 import { useState } from "react";
 
 export function AddDomainProvider({ domain, providers, onClose }: { domain: Row; providers: Row[]; onClose: () => void }) {
@@ -35,15 +36,14 @@ export function EditRouting({ policy, data, onClose }: { policy: Row; data: Data
   function updateTarget(identityId: string, field: "priority" | "weight" | "rateLimit", next: number) { setTargets(targets.map(row => row.identityId === identityId ? { ...row, [field]: next } : row)); }
   return <Modal title="Edit routing policy" visible style={{ width: 780, maxWidth: "calc(100vw - 24px)" }} onCancel={onClose} confirmLoading={action.pending} okButtonProps={{ disabled: !targets.length }} onOk={async () => {
     const values = await form.validate();
-    try { await action.run({method:"PUT",path:`/api/admin/routing-policies/${encodeURIComponent(String(policy.id))}`,payload:{id: policy.id, name: formValue(values, "name"), productId: formValue(values, "productId"), serviceId: formValue(values, "serviceId"), domainId, category: formValue(values, "category"), priority: Number(values.priority), targets}}); onClose(); } catch { /* Preserve configuration and inline error. */ }
+    try { await action.run({method:"PUT",path:`/api/admin/routing-policies/${encodeURIComponent(String(policy.id))}`,payload:{id: policy.id, name: formValue(values, "name"), services: values.services, domainId, category: formValue(values, "category"), priority: Number(values.priority), targets}}); onClose(); } catch { /* Preserve configuration and inline error. */ }
   }}>
-    <ActionForm fieldErrors={action.fields} form={form} layout="vertical" initialValues={{ name: policy.name, productId: policy.product_id ?? "", serviceId: policy.service_id ?? "", category: policy.message_category ?? "", priority: Number(policy.priority) }}>
+    <ActionForm fieldErrors={action.fields} form={form} layout="vertical" initialValues={{ name: policy.name, services: {mode:policy.service_scope,serviceIds:rows(policy.services).map(service=>value(service,"id"))}, category: policy.message_category ?? "", priority: Number(policy.priority) }}>
       <Grid.Row gutter={[16, 0]}>
-      <Grid.Col xs={24} md={12}><Field field="name" label="Name" required rules={requiredRule}><Input /></Field></Grid.Col>
-      <Grid.Col xs={24} md={12}><Field field="productId" label="Product"><Select options={[{ value: "", label: "Any product" }, ...rows(data.products).map(row => ({ value: value(row, "id"), label: value(row, "name") }))]} /></Field></Grid.Col>
-      <Grid.Col xs={24} md={12}><Field field="serviceId" label="Service"><Select options={[{ value: "", label: "Any service" }, ...rows(data.services).map(row => ({ value: value(row, "id"), label: `${value(row, "product")} / ${value(row, "name")}` }))]} /></Field></Grid.Col>
+      <Grid.Col xs={24} md={12}><Field field="name" label="Name" required rules={requiredRule}><Input placeholder="e.g. Transactional mail" /></Field></Grid.Col>
+      <Grid.Col xs={24} md={12}><Field field="services" label="Services"><ServiceScopeEditor services={rows(data.services)} /></Field></Grid.Col>
       <Grid.Col xs={24} md={12}><Field label="Sending domain" required><Select value={domainId} options={rows(data.domains).filter(row => row.status === "active").map(row => ({ value: value(row, "id"), label: value(row, "domain") }))} onChange={next => { setDomainId(String(next)); setTargets([]); }} /></Field></Grid.Col>
-      <Grid.Col xs={24} md={12}><Field field="category" label="Category (blank matches any)"><Input /></Field></Grid.Col>
+      <Grid.Col xs={24} md={12}><Field field="category" label="Category" hint="Leave empty to match any category."><Input placeholder="e.g. transactional" /></Field></Grid.Col>
       <Grid.Col xs={24} md={12}><Field field="priority" label="Policy priority (lower is preferred)" required><InputNumber min={0} max={10000} /></Field></Grid.Col>
       <Grid.Col xs={24} md={24}><Field label="Provider targets" required><Checkbox.Group value={targets.map(row => row.identityId)} onChange={next => changeTargets(next.map(String))} options={identities.map(row => ({ value: value(row, "id"), label: value(row, "account") }))} /></Field></Grid.Col>
       </Grid.Row>

@@ -14,7 +14,7 @@ const stats = `JOIN LATERAL (SELECT count(*)::int AS total,
   count(*) FILTER(WHERE lifecycle_status='canceled')::int AS canceled,
   jsonb_build_object(${deliveryStatuses.map(status => `'${status}',count(*) FILTER(WHERE lifecycle_status='${status}')`).join(",")},'suppressed',count(*) FILTER(WHERE compliance_status='suppressed')) AS counts
   FROM deliveries WHERE message_id=m.id) ds ON true`;
-const projection = `SELECT m.*,m.sender_snapshot->>'product' AS product,m.message_category AS category,ds.counts,
+const projection = `SELECT m.*,m.sender_snapshot->>'service' AS service,m.message_category AS category,ds.counts,
   CASE WHEN ds.queued=ds.total THEN 'queued' WHEN ds.active>0 OR ds.unknown>0 THEN 'processing' ELSE 'finished' END AS processing_state,
   CASE WHEN ds.unknown>0 THEN 'unknown' WHEN ds.active>0 THEN 'pending' WHEN ds.delivered=ds.total THEN 'succeeded'
     WHEN ds.canceled=ds.total THEN 'canceled' WHEN ds.delivered>0 THEN 'partially_failed' ELSE 'failed' END AS outcome,
@@ -24,16 +24,15 @@ export function createMessageRepository(client: Pool | PoolClient): MessageRepos
     return {
         isRecipientSuppressed(input: {
             email: string;
-            productId: string;
+            serviceId: string;
             listId: string | null;
         }) {
             return client.query<Record<string, unknown>>(`SELECT 1 FROM suppressions WHERE active=true AND email_normalized=lower($1)
-    AND (expires_at IS NULL OR expires_at>now()) AND (scope_type='global' OR (scope_type='product' AND product_id=$2)
-    OR (scope_type='list' AND product_id=$2 AND list_id=$3)) LIMIT 1`, [input.email, input.productId, input.listId]);
+    AND (expires_at IS NULL OR expires_at>now()) AND (scope_type='global' OR (scope_type='service' AND service_id=$2)
+    OR (scope_type='list' AND service_id=$2 AND list_id=$3)) LIMIT 1`, [input.email, input.serviceId, input.listId]);
         },
         findConfiguredProviderTypes(input: {
             sendingDomainId: string;
-            productId: string;
             serviceId: string;
             messageCategory: string;
         }) {
@@ -43,8 +42,8 @@ export function createMessageRepository(client: Pool | PoolClient): MessageRepos
     JOIN routing_targets rt ON rt.policy_id=rp.id JOIN provider_accounts pa ON pa.id=rt.provider_account_id
     JOIN provider_identities pi ON pi.id=rt.provider_identity_id AND pi.provider_account_id=pa.id
     WHERE rp.sending_domain_id=$1 AND pi.sending_domain_id=$1 AND pi.status='verified' AND rp.status='active'
-      AND (rp.product_id IS NULL OR rp.product_id=$2) AND (rp.service_id IS NULL OR rp.service_id=$3)
-      AND (rp.message_category IS NULL OR rp.message_category=$4)`, [input.sendingDomainId, input.productId, input.serviceId, input.messageCategory]);
+      AND (rp.service_scope='all' OR EXISTS(SELECT 1 FROM routing_policy_services rs WHERE rs.policy_id=rp.id AND rs.service_id=$2))
+      AND (rp.message_category IS NULL OR rp.message_category=$3)`, [input.sendingDomainId, input.serviceId, input.messageCategory]);
         },
         insertSubmission(input: {
             id: string;
@@ -87,11 +86,11 @@ export function createMessageRepository(client: Pool | PoolClient): MessageRepos
                 payload_hash: string;
                 payload_hash_key_version: string | null;
                 accepted_at: Date;
-                product: string;
+                service: string;
                 message_category: string;
                 recipient_count: number;
                 reference_id: string | null;
-            }>("SELECT id,payload_hash,payload_hash_key_version,accepted_at,sender_snapshot->>'product' AS product,message_category,recipient_count,reference_id FROM messages WHERE service_id=$1 AND idempotency_key=$2 FOR UPDATE", [input.serviceId, input.idempotencyKey]);
+            }>("SELECT id,payload_hash,payload_hash_key_version,accepted_at,sender_snapshot->>'service' AS service,message_category,recipient_count,reference_id FROM messages WHERE service_id=$1 AND idempotency_key=$2 FOR UPDATE", [input.serviceId, input.idempotencyKey]);
         },
         async insertMessage(input: {
             content: MessageContent;
@@ -104,7 +103,7 @@ export function createMessageRepository(client: Pool | PoolClient): MessageRepos
         }) {
             const content = input.content;
             const accepted = await database(client).insert(messages).values({
-                id: content.id, productId: content.product_id, serviceId: content.service_id, sendingDomainId: content.sending_domain_id,
+                id: content.id, serviceId: content.service_id, sendingDomainId: content.sending_domain_id,
                 requestId: input.requestId, idempotencyKey: input.idempotencyKey, payloadHash: input.payloadHash,
                 referenceId: input.referenceId, metadata: content.metadata, recipientCount: input.recipientCount,
                 subject: content.subject, htmlBody: content.html_body, textBody: content.text_body, messageCategory: content.message_category,
@@ -210,7 +209,7 @@ export function createMessageRepository(client: Pool | PoolClient): MessageRepos
     COALESCE(NOT a.outcome_determinate,false) AS uncertain,(a.status='submitting') IS TRUE AS live,(a.status IN ('accepted','reconciled') AND d.lifecycle_status='deferred') IS TRUE AS provider_pending,m.content_purged_at IS NOT NULL AS content_expired,(m.send_before<=clock_timestamp()) IS TRUE AS deadline_expired,
     ${outboundDomainAccess('m')} AS enabled,
     EXISTS(SELECT 1 FROM suppressions su WHERE su.active AND su.email_normalized=lower(d.recipient_email) AND (su.expires_at IS NULL OR su.expires_at>now())
-      AND (su.scope_type='global' OR (su.product_id=m.product_id AND (su.scope_type='product' OR su.list_id=m.metadata->>'listId')))) AS blocked
+      AND (su.scope_type='global' OR (su.service_id=m.service_id AND (su.scope_type='service' OR su.list_id=m.metadata->>'listId')))) AS blocked
     FROM deliveries d JOIN messages m ON m.id=d.message_id LEFT JOIN submission_attempts a ON a.id=d.current_attempt_id WHERE d.id=$1 FOR UPDATE OF d`, [input.deliveryId]);
         },
         lockDeliveryMessage(input: {

@@ -26,7 +26,7 @@ import { ATTACHMENT_QUEUE, closeQueues, createQueueWorker } from "@/platform/que
 import { dispatchOutboxBatch } from "@/platform/outbox/public";
 
 const tag=createId("safety"),a=`svc_${tag}_a`,b=`svc_${tag}_b`,key=`fixture_${tag}`;
-const identity={serviceId:a,serviceName:"Attachment safety",productId:"prd_atlas",product:"Atlas",rateLimitPerMinute:600};
+const identity={serviceId:a,serviceName:"Attachment safety",rateLimitPerMinute:600};
 const bytes=Buffer.from("harmless fixture bytes");
 const input=(files:string[])=>createMessageSchema.parse({category:"security",from:{email:"safe@mail.atlas.test"},to:[{email:"recipient@example.test"}],text:"body",
   attachments:files.map((fileId,index)=>({fileId,disposition:index ? "inline" : "attachment",...(index ? {contentId:`cid-${index}`} : {})}))});
@@ -38,11 +38,11 @@ const job=(submissionId:string)=>({data:{submissionId}} as Job<{submissionId:str
 const submission=async(messageId:string)=>(await query<{id:string}>("SELECT id FROM submissions WHERE message_id=$1",[messageId])).rows[0].id;
 
 beforeAll(async()=>{
- await query("INSERT INTO services(id,product_id,name) VALUES($1,'prd_atlas',$1),($2,'prd_atlas',$2)",[a,b]);
+ await query("INSERT INTO services(id,name) VALUES($1,$1),($2,$2)",[a,b]);
  await query("INSERT INTO service_credentials(id,service_id,key_prefix,key_hash) VALUES($1,$2,'fixture',$3)",[`cred_${tag}`,a,hashApiKey(key)]);
  await query("INSERT INTO service_domain_grants(id,service_id,sending_domain_id,send_allowed,receive_allowed) VALUES($1,$2,'sd_atlas',true,true)",[`grant_${tag}`,a]);
  await query("INSERT INTO service_domain_grants(id,service_id,sending_domain_id,send_allowed) VALUES($1,$2,'sd_atlas',true)",[`grant_${tag}_b`,b]);
- await query("INSERT INTO inbound_routes(id,provider_webhook_endpoint_id,sending_domain_id,product_id,service_id) VALUES($1,'pwe_mock','sd_atlas','prd_atlas',$2)",[`route_${tag}`,a]);
+ await query("INSERT INTO inbound_routes(id,provider_webhook_endpoint_id,sending_domain_id,service_id) VALUES($1,'pwe_mock','sd_atlas',$2)",[`route_${tag}`,a]);
 });
 afterAll(async()=>{
  const objects=(await query<{object_key:string}>(`SELECT object_key FROM outbound_files WHERE service_id=ANY($1)

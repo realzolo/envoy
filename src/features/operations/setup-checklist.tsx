@@ -5,7 +5,7 @@ import { Alert,Badge,Button,Card,Collapse,Select,Space,Tag,Typography } from "@a
 import { useState } from "react";
 
 export type SetupChain = {
-  id:string; product:string; service:string; category:string; sender:string;
+  id:string; service:string; category:string; sender:string;
   grant:boolean;credential:boolean;provider:boolean;identity:boolean;route:boolean;tested:boolean;observable:boolean;event_seen:boolean;
 };
 export type SetupState = { chains: SetupChain[] };
@@ -28,7 +28,7 @@ export function SetupChecklist({state}:{state:SetupState}) {
   return <Card title="Outbound configuration" extra={<Tag color={ready ? "green":"orange"}>{ready ? "Send configuration ready":"Setup required"}</Tag>}>
     {chain ? <Space direction="vertical" size="medium" style={{width:"100%"}}>
       <div className={styles.readiness}>
-        <Select aria-label="Service and domain authorization readiness" value={chain.id} onChange={setSelected} options={state.chains.map(row=>({value:row.id,label:`${row.product} / ${row.service} / ${row.category} / ${row.sender}`}))}/>
+        <Select aria-label="Service and domain authorization readiness" value={chain.id} onChange={setSelected} options={state.chains.map(row=>({value:row.id,label:`${row.service} / ${row.category} / ${row.sender}`}))}/>
         {next ? <Button href={next.href} type="primary">{next.title}</Button> : <Typography.Text type="success">All checks complete</Typography.Text>}
       </div>
       <Collapse bordered={false} style={{width:"100%"}}>

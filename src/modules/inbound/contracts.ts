@@ -7,7 +7,7 @@ export type InboundInput = {
   ingressReceivedAt?: Date;
 };
 export type InboundRoute = {
-  id: string; product_id: string; service_id: string;
+  id: string; service_id: string;
   recipients: string[];
 };
 

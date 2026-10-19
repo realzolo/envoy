@@ -28,14 +28,13 @@ beforeAll(async () => {
   try {
     await client.query(await readFile("db/migrations/001_initial.sql", "utf8"));
     await runMigrations(client, "bullmq");
-    await client.query(`INSERT INTO products(id,name) VALUES ('p','queue-test');
-      INSERT INTO services(id,product_id,name) VALUES ('s','p','queue-test');
+    await client.query(`INSERT INTO services(id,name) VALUES ('s','queue-test');
       INSERT INTO sending_domains(id,domain) VALUES ('domain','queue.test');
       INSERT INTO provider_accounts(id,type,name,public_config) VALUES ('provider','mock','queue-test','{}');
       INSERT INTO provider_webhook_endpoints(id,provider_account_id,opaque_token) VALUES ('webhook','provider','queue-test');
       INSERT INTO provider_identities(id,sending_domain_id,provider_account_id,status) VALUES ('identity','domain','provider','verified');
-      INSERT INTO messages(id,product_id,service_id,sending_domain_id,sender_snapshot,idempotency_key,payload_hash,recipient_count,subject,text_body,message_category)
-      VALUES ('m','p','s','domain','{}','queue-test','test',1,'Queue','test','transactional');`);
+      INSERT INTO messages(id,service_id,sending_domain_id,sender_snapshot,idempotency_key,payload_hash,recipient_count,subject,text_body,message_category)
+      VALUES ('m','s','domain','{}','queue-test','test',1,'Queue','test','transactional');`);
   } finally { client.release(); }
 }, 30_000);
 

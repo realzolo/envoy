@@ -22,7 +22,7 @@ const suffix = crypto.randomUUID().replaceAll("-", "");
 const serviceId = `svc_native_${suffix}`;
 const grantId = `sg_native_${suffix}`;
 const apiKey = `envoy_native_${suffix}`;
-const identity = { serviceId, serviceName: "Native integration", productId: "prd_atlas", product: "Atlas", rateLimitPerMinute: 600 };
+const identity = { serviceId, serviceName: "Native integration", rateLimitPerMinute: 600 };
 const base = createMessageSchema.parse({
   category: "security", from: { email: `dynamic-${suffix}@mail.atlas.test`, name: "业务系统动态名称" },
   to: [{ email: `to-${suffix}@example.net`, name: "To Recipient" }],
@@ -46,7 +46,7 @@ async function fixture(input = base) {
 const job = (submissionId: string) => ({ data: { submissionId } }) as Job<{ submissionId: string }>;
 
 beforeAll(async () => {
-  await query("INSERT INTO services(id,product_id,name) VALUES ($1,'prd_atlas','Native integration')", [serviceId]);
+  await query("INSERT INTO services(id,name) VALUES ($1,'Native integration')", [serviceId]);
   await query("INSERT INTO service_credentials(id,service_id,key_prefix,key_hash) VALUES ($1,$2,'envoy_native',$3)", [`cred_${suffix}`, serviceId, hashApiKey(apiKey)]);
   await query("INSERT INTO service_domain_grants(id,service_id,sending_domain_id,send_allowed,receive_allowed) VALUES ($1,$2,'sd_atlas',true,true)", [grantId, serviceId]);
   const secret = sealSecret({ secret: "native-callback-secret" }, `cb_${suffix}`, 1);
@@ -254,7 +254,7 @@ describe("native API integration", () => {
     const email = `late-suppression-${crypto.randomUUID()}@example.net`;
     const input = { ...base, cc: [{ email }] };
     const row = await fixture(input);
-    const suppression = await createSuppression({ productId: identity.productId, scope: "product", email, reason: "Late suppression" });
+    const suppression = await createSuppression({ serviceId: identity.serviceId, scope: "service", email, reason: "Late suppression" });
     const send = vi.spyOn(providerRegistry("mock").sender, "send");
     try {
       await processDelivery(job(row.submissionId));

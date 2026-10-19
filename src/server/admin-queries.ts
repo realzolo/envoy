@@ -17,7 +17,7 @@ export async function listEmailPage(filters:MessageFilters,limit=20){await requi
 export async function listEmails(limit=200){await requireAdmin();return readEmails(limit);}
 export async function getDeliveryDetail(id:string){await requireAdmin();return readDeliveryDetail(id);}
 export async function dashboardData(){await requireAdmin();return readDashboardData();}
-export async function messageComposerData(){await requireAdmin();return {services:(await identityAdminReads.services()).rows.filter(s=>s.product_status==='active')};}
+export async function messageComposerData(){await requireAdmin();return {services:(await identityAdminReads.services()).rows.filter(s=>s.status==='active')};}
 export async function adminData(section: AdminSection):Promise<AdminData> {
   await requireAdmin();
   switch (section) {
@@ -34,12 +34,12 @@ export async function adminData(section: AdminSection):Promise<AdminData> {
       return { providers, domains, descriptors: providerDescriptors() };
     }
     case "routing": {
-      const [products, services, domains, policies] = await Promise.all([readRows(identityAdminReads.products), readRows(identityAdminReads.services), readRows(channelsAdminReads.domains), readRows(outboundAdminReads.policies)]);
-      return { products, services, domains, policies };
+      const [services, domains, policies] = await Promise.all([readRows(identityAdminReads.services), readRows(channelsAdminReads.domains), readRows(outboundAdminReads.policies)]);
+      return { services, domains, policies };
     }
     case "api-keys": {
-      const [products, services, domains, credentials, grants] = await Promise.all([readRows(identityAdminReads.products), readRows(identityAdminReads.services), readRows(channelsAdminReads.domains), readRows(identityAdminReads.credentials), readRows(identityAdminReads.grants)]);
-      return { products, services, domains, credentials, grants };
+      const [services, domains, credentials, grants] = await Promise.all([readRows(identityAdminReads.services), readRows(channelsAdminReads.domains), readRows(identityAdminReads.credentials), readRows(identityAdminReads.grants)]);
+      return { services, domains, credentials, grants };
     }
     case "webhooks": {
       const [services, callbacks, callbackDeliveries] = await Promise.all([readRows(identityAdminReads.services), readRows(callbackAdminReads.callbacks), readRows(callbackAdminReads.callbackDeliveries)]);
@@ -50,14 +50,14 @@ export async function adminData(section: AdminSection):Promise<AdminData> {
       return { rawEvents, canonicalEvents };
     }
     case "suppressions": {
-      const [products, suppressions] = await Promise.all([readRows(identityAdminReads.products), readRows(suppressionAdminReads.suppressions)]);
-      return { products, suppressions };
+      const [services, suppressions] = await Promise.all([readRows(identityAdminReads.services), readRows(suppressionAdminReads.suppressions)]);
+      return { services, suppressions };
     }
     case "inbound": {
-      const [inbound, inboundRoutes, webhooks, domains, products, services, callbacks] = await Promise.all([
-        readRows(inboundAdminReads.inbound), readRows(inboundAdminReads.inboundRoutes), readRows(channelsAdminReads.webhooks), readRows(channelsAdminReads.domains), readRows(identityAdminReads.products), readRows(identityAdminReads.services), readRows(callbackAdminReads.callbacks)
+      const [inbound, inboundRoutes, webhooks, domains, services, callbacks] = await Promise.all([
+        readRows(inboundAdminReads.inbound), readRows(inboundAdminReads.inboundRoutes), readRows(channelsAdminReads.webhooks), readRows(channelsAdminReads.domains), readRows(identityAdminReads.services), readRows(callbackAdminReads.callbacks)
       ]);
-      return { inbound, inboundRoutes, webhooks, domains, products, services, callbacks };
+      return { inbound, inboundRoutes, webhooks, domains, services, callbacks };
     }
     case "logs": {
       const [audit,failedWork]=await Promise.all([readRows(reportingReads.audit),readRows(reportingReads.failedWork)]);

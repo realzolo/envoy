@@ -61,7 +61,7 @@ export function callbackRepository(client: Pool | PoolClient = pool()): Callback
       return !!(await client.query("UPDATE callback_deliveries SET status='terminated',terminated_at=clock_timestamp(),updated_at=now() WHERE id=$1 AND status='dead_letter' RETURNING id", [id])).rowCount;
     },
     async activeService(id) {
-      return !!(await client.query("SELECT s.id FROM services s JOIN products p ON p.id=s.product_id WHERE s.id=$1 AND p.status='active'", [id])).rowCount;
+      return !!(await client.query("SELECT s.id FROM services s WHERE s.id=$1 AND s.status='active'", [id])).rowCount;
     },
     async createEndpoint(id, input, secret) {
       await orm.insert(callbackEndpoints).values({ id, serviceId: input.serviceId, name: input.name, url: input.url, ...secret, subscribedEvents: input.events });

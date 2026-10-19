@@ -6,7 +6,7 @@ import { createAuthorizationRepository } from './infrastructure/authorization';
 import { discoveryRepository } from './infrastructure/capabilities.read-repository';
 import { contentUnitOfWork } from './infrastructure/content.repository';
 import { managementRepository,managementUnitOfWork } from './infrastructure/management.repository';
-export const {createProduct,toggleProduct,setDomainGrant,toggleDomainGrant,rotateServiceCredential,revokeServiceCredential,createService,updateService,issueServiceCredential}=createManagementService(managementRepository,managementUnitOfWork);
+export const {toggleService,setDomainGrant,toggleDomainGrant,rotateServiceCredential,revokeServiceCredential,createService,updateService,issueServiceCredential}=createManagementService(managementRepository,managementUnitOfWork);
 export { ContentConflictError,ServiceConfigurationConflictError } from './contracts';
 export type { ServiceIdentity } from './contracts';
 export { activeServiceExists,identityAdminReads } from './infrastructure/admin.read-repository';

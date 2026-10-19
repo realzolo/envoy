@@ -16,12 +16,9 @@ const purged = "Irreversible content purge time (timestamptz); a non-null value 
 
 /** Every entry is deliberately authored; adding a table/column requires an explicit business description. */
 export const schemaDocumentation = {
-  products: { table: "Product tenants grouping services, domain grants and product-level suppression rules", columns: {
-    id: "Unique product identifier", name: "Globally unique product name", status: "Product status: active (available) or suspended (paused)", createdAt: created, updatedAt: updated,
-  } },
-  services: { table: "Calling services within a product; isolation boundary for API credentials, messages and send/receive permissions", columns: {
-    id: "Unique service identifier", productId: "Owning product identifier; each service belongs to exactly one product", name: "Service name, unique within its product",
-    suppressionManagementAllowed: "Whether the service API may manage its product suppression rules; denied by default",
+  services: { table: "Calling services; isolation boundary for API credentials, messages and send/receive permissions", columns: {
+    id: "Unique service identifier", name: "Globally unique service name, compared case-insensitively", status: "Service status: active (available) or suspended (paused)",
+    suppressionManagementAllowed: "Whether the service API may manage its own suppression rules; denied by default",
     configurationRevision: "Positive configuration revision used for optimistic concurrency checks", createdAt: created, updatedAt: updated,
   } },
   serviceCredentials: { table: "Service API credentials storing only a key digest and display prefix, never the original API key", columns: {
@@ -68,11 +65,13 @@ export const schemaDocumentation = {
     dnsRecords: "JSON array of required DNS records, including names, types, values and verification details; empty when unavailable",
     lastCheckedAt: "Last provider identity verification check (timestamptz)", createdAt: created, updatedAt: updated,
   } },
-  routingPolicies: { table: "Outbound routing policies selecting provider targets by product, service, sending domain and message category", columns: {
-    id: "Unique routing policy identifier", name: "Routing policy display name", productId: "Product filter; null matches any product",
-    serviceId: "Service filter; requires the owning product to be specified", sendingDomainId: "Sending domain matched by this policy",
+  routingPolicies: { table: "Outbound routing policies selecting provider targets by service scope, sending domain and message category", columns: {
+    id: "Unique routing policy identifier", name: "Routing policy display name", serviceScope: "Service scope: all (current and future services) or selected (explicit membership)", sendingDomainId: "Sending domain matched by this policy",
     messageCategory: "Message category filter; null matches any category", priority: "Policy priority; lower values take precedence",
     status: "Policy status: active (enabled) or disabled", createdAt: created, updatedAt: updated,
+  } },
+  routingPolicyServices: { table: "Explicit service membership of routing policies with selected service scope; provider targets remain shared by the policy", columns: {
+    policyId: "Routing policy selecting this service", serviceId: "Service matched by the policy; composite primary key with policy_id",
   } },
   routingTargets: { table: "Provider sending targets within routing policies, including priority, weight, rate limits and circuit breaker state", columns: {
     id: "Unique routing target identifier", policyId: "Owning routing policy identifier", providerAccountId: "Target provider account identifier", providerIdentityId: "Target sending identity; must belong to the same provider account",
@@ -82,7 +81,7 @@ export const schemaDocumentation = {
     createdAt: created, updatedAt: updated,
   } },
   messages: { table: "Outbound message requests and immutable sending snapshots; deduplicated by service and idempotency key, with sensitive content envelope-encrypted", columns: {
-    contentPurgedAt: purged, id: "Unique outbound message identifier", productId: "Product that owns this message", serviceId: "Service that submitted this message",
+    contentPurgedAt: purged, id: "Unique outbound message identifier", serviceId: "Service that submitted this message",
     sendingDomainId: "Sending domain used by this message", requestId: "Optional trace identifier of the API request accepting this message",
     toRecipients: "JSON array of primary recipients with email and optional name; sensitive messages retain only addresses in plaintext",
     ccRecipients: "JSON array of carbon-copy recipients with email and optional name; sensitive messages retain only addresses in plaintext",
@@ -164,12 +163,12 @@ export const schemaDocumentation = {
     messageId: "Outbound message being retried", idempotencyKey: "Caller retry operation key, unique within the message", payloadHash: "Retry request digest detecting different requests reusing the same idempotency key",
     result: "Initial retry operation result JSON returned unchanged for repeated requests", createdAt: created,
   } },
-  inboundRoutes: { table: "Inbound routes from provider endpoints to services, matching envelope domains and preserving product ownership", columns: {
+  inboundRoutes: { table: "Inbound routes from provider endpoints to services, matching envelope domains and preserving service ownership", columns: {
     id: "Unique inbound route identifier", providerWebhookEndpointId: "Provider webhook endpoint receiving inbound notifications", sendingDomainId: "Email domain matched by this route",
-    productId: "Product receiving inbound mail", serviceId: "Service receiving inbound mail; must belong to the specified product", status: "Route status: active (enabled) or disabled", createdAt: created,
+    serviceId: "Service receiving inbound mail", status: "Route status: active (enabled) or disabled", createdAt: created,
   } },
   inboundMessages: { table: "Inbound messages and service-isolated copies; quarantined mail has no service owner and business reads require completed scanning", columns: {
-    contentPurgedAt: purged, id: "Unique inbound message identifier", inboundRouteId: "Matched inbound route; null if unmatched or after route deletion", productId: "Owning product; null for quarantined mail or after product deletion",
+    contentPurgedAt: purged, id: "Unique inbound message identifier", inboundRouteId: "Matched inbound route; null if unmatched or after route deletion",
     serviceId: "Owning service; null for quarantined mail or after service deletion", providerAccountId: "Provider account receiving the message", rawProviderEventId: "Source raw webhook event; null after source event deletion",
     externalMessageId: "Provider inbound message identifier, deduplicated with account and delivery scope", messageId: "RFC Message-ID from email headers; not an outbound messages primary key",
     deliveryScope: "Ownership scope key for isolated copies; quarantine for unassigned mail, service-specific for routed copies; used for provider message deduplication",
@@ -192,7 +191,7 @@ export const schemaDocumentation = {
   } },
   inboundReceipts: { table: "Idempotent receipts freezing initial provider inbound routing results; retries reuse the first receipt time and ownership snapshot", columns: {
     providerAccountId: "Receiving provider account; composite primary key with external_message_id", externalMessageId: "Provider inbound message identifier, unique within the account",
-    routes: "Initial route JSON array containing route id, product_id, service_id and matched recipients; retries must not reassign ownership",
+    routes: "Initial route JSON array containing route id, service_id and matched recipients; retries must not reassign ownership",
     terminatedAt: "Inbound receipt processing termination time (timestamptz); non-null forbids further processing", ingressReceivedAt: "Initial webhook receipt time (timestamptz), reused unchanged on retries",
   } },
   inboundChanges: { table: "Per-service ordered inbound change facts; triggers write atomically with message availability or content purge", columns: {
@@ -247,9 +246,9 @@ export const schemaDocumentation = {
     nextAttemptAt: "Earliest next retry time (timestamptz)", deliveredAt: "Successful callback delivery time (timestamptz)", terminatedAt: "Termination time stopping further deliveries (timestamptz)",
     createdAt: created, updatedAt: updated,
   } },
-  suppressions: { table: "Email sending suppression rules at global, product and product-specific list scopes", columns: {
-    id: "Unique suppression rule identifier", scopeType: "Scope type: global, product or list; determines required and forbidden product/list identifiers",
-    productId: "Owning product; must be null for global scope and present for product/list scopes", listId: "Product-specific business list identifier; required only for list scope and null otherwise",
+  suppressions: { table: "Email sending suppression rules at global, service and service-specific list scopes", columns: {
+    id: "Unique suppression rule identifier", scopeType: "Scope type: global, service or list; determines required and forbidden service/list identifiers",
+    serviceId: "Owning service; must be null for global scope and present for service/list scopes", listId: "Service-specific business list identifier; required only for list scope and null otherwise",
     emailNormalized: "Lowercase email address enforced by the database, unique within the active scope", reason: "Suppression reason, such as bounce, complaint, unsubscribe or manual action",
     source: "Suppression source identifier tracing provider events or manual actions", bounceCount: "Cumulative bounce count for this rule, used in bounce suppression decisions", active: "Whether the rule is enabled; at most one active rule per email and scope",
     expiresAt: "Rule expiration time (timestamptz); null means no time-based expiration", createdAt: created, updatedAt: updated,

@@ -8,12 +8,11 @@ export type RepositoryResult<Row> = {
 export interface MessageRepository {
     isRecipientSuppressed(input: {
         email: string;
-        productId: string;
+        serviceId: string;
         listId: string | null;
     }): Promise<RepositoryResult<Record<string, unknown>>>;
     findConfiguredProviderTypes(input: {
         sendingDomainId: string;
-        productId: string;
         serviceId: string;
         messageCategory: string;
     }): Promise<RepositoryResult<{
@@ -49,7 +48,7 @@ export interface MessageRepository {
         payload_hash: string;
         payload_hash_key_version: string | null;
         accepted_at: Date;
-        product: string;
+        service: string;
         message_category: string;
         recipient_count: number;
         reference_id: string | null;
@@ -229,8 +228,8 @@ export interface EventsRepository {
     }): Promise<RepositoryResult<Record<string, unknown>>>;
     insertUnsubscribeSuppression(input: {
         suppressionId: string;
-        scope: "list" | "product";
-        productId: string;
+        scope: "list" | "service";
+        serviceId: string;
         listId: string | null;
         recipientEmail: string;
     }): Promise<RepositoryResult<Record<string, unknown>>>;
@@ -330,12 +329,11 @@ export interface EventsRepository {
         id: string;
         message_id: string;
         service_id: string;
-        product_id: string;
         reference_id: string | null;
         request_id: string | null;
         recipient_email: string;
         recipient_role: string;
-        product: string;
+        service: string;
         category: string;
         lifecycle_status: string;
         engagement_status: string;
@@ -545,7 +543,6 @@ export interface RoutingRepository {
     }): Promise<RepositoryResult<Record<string, unknown>>>;
     listRoutingCandidates(input: {
         sendingDomainId: string;
-        productId: string;
         serviceId: string;
         messageCategory: string;
     }): Promise<RepositoryResult<Candidate>>;
@@ -717,7 +714,6 @@ export interface OutboundRepositories {
     events: EventsRepository;
     routing: RoutingRepository;
     authorizedDomain(identity: {
-        productId: string;
         serviceId: string;
     }, email: string): Promise<string | null>;
     resolveOutboundAttachments(serviceId: string, attachments: import("@/lib/contracts").CreateMessageInput["attachments"], domainId: string): Promise<import("../contracts").StoredAttachment[]>;
@@ -740,7 +736,7 @@ export interface EventOperations {
 }
 export interface MessageOperations {
     createSubmission(repositories: OutboundRepositories, messageId: string, deliveryIds: string[]): Promise<string | null>;
-    isSuppressed(repositories: OutboundRepositories, productId: string, email: string, listId?: string): Promise<boolean>;
+    isSuppressed(repositories: OutboundRepositories, serviceId: string, email: string, listId?: string): Promise<boolean>;
 }
 export interface OutboundDependencies {
     safeDiagnostic(value: unknown): string;
@@ -771,16 +767,8 @@ export interface ManagementRepository {
         resourceId: string | null;
         details: Record<string, unknown>;
     }): Promise<RepositoryResult<Record<string, unknown>>>;
-    findService(input: {
-        serviceId: string;
-    }): Promise<RepositoryResult<{
-        product_id: string;
-    }>>;
-    findProduct(input: {
-        productId: string;
-    }): Promise<RepositoryResult<{
-        id: string;
-    }>>;
+    findServices(input:{serviceIds:string[]}):Promise<RepositoryResult<{id:string}>>;
+    replacePolicyServices(input:{policyId:string;serviceIds:string[]}):Promise<void>;
     findDomain(input: {
         domainId: string;
     }): Promise<RepositoryResult<{
@@ -799,14 +787,14 @@ export interface ManagementRepository {
     lockPolicy(input: {
         policyId: string;
     }): Promise<RepositoryResult<Record<string, unknown>>>;
-    deleteTargets(input: {
+    deleteUnselectedTargets(input: {
         policyId: string;
+        identityIds: string[];
     }): Promise<RepositoryResult<Record<string, unknown>>>;
     updatePolicy(input: {
         id: string;
         name: string;
-        productId: string | null;
-        serviceId: string | null;
+        serviceScope: "all" | "selected";
         domainId: string;
         category: string | null;
         priority: number;
@@ -814,13 +802,12 @@ export interface ManagementRepository {
     insertPolicy(input: {
         id: string;
         name: string;
-        productId: string | null;
-        serviceId: string | null;
+        serviceScope: "all" | "selected";
         domainId: string;
         category: string | null;
         priority: number;
     }): Promise<RepositoryResult<Record<string, unknown>>>;
-    insertTarget(input: {
+    saveTarget(input: {
         id: string;
         policyId: string;
         accountId: string;
@@ -833,8 +820,7 @@ export interface ManagementRepository {
         actor: string;
         policyId: string;
         details: {
-            productId: string | null;
-            serviceId: string | null;
+            services: {mode:"all"|"selected";serviceIds:string[]};
             domainId: string;
             category: string | null;
             priority: number;
@@ -848,7 +834,6 @@ export interface ManagementRepository {
     }): Promise<RepositoryResult<Record<string, unknown>>>;
     listSimulationCandidates(input: {
         domainId: string;
-        productId: string | null;
         serviceId: string | null;
         category: string | null;
     }): Promise<RepositoryResult<SimulationRow>>;
@@ -857,7 +842,5 @@ export interface ManagementRepository {
     }): Promise<RepositoryResult<{
         service_id: string;
         service_name: string;
-        product_id: string;
-        product_name: string;
     }>>;
 }

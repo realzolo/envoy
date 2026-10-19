@@ -5,10 +5,10 @@ import { applyCanonicalEvent } from "@/modules/outbound/public";
 import { markAccepted, markUnknown, prepareSubmission } from "@/modules/outbound/public";
 import { db, query } from "@/platform/database";
 
-const identity = { serviceId: `svc_deferred_${crypto.randomUUID()}`, serviceName: "Deferred retry audit", productId: "prd_atlas", product: "Atlas", rateLimitPerMinute: 600 };
+const identity = { serviceId: `svc_deferred_${crypto.randomUUID()}`, serviceName: "Deferred retry audit", rateLimitPerMinute: 600 };
 const created: string[] = [];
 beforeAll(async () => {
-  await query("INSERT INTO services(id,product_id,name) VALUES ($1,'prd_atlas',$2)", [identity.serviceId, identity.serviceName]);
+  await query("INSERT INTO services(id,name) VALUES ($1,$2)", [identity.serviceId, identity.serviceName]);
   await query("INSERT INTO service_domain_grants(id,service_id,sending_domain_id,send_allowed,receive_allowed) VALUES ($1,$2,'sd_atlas',true,true)", [`grant_${identity.serviceId}`,identity.serviceId]);
 });
 afterAll(async () => {

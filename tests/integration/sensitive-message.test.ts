@@ -19,7 +19,7 @@ import { purgeContent } from "@/modules/identity/public";
 import { processDelivery } from "@/worker/delivery";
 import { db, query } from "@/platform/database";
 
-const identity = { serviceId: "svc_atlas_auth", serviceName: "Atlas Auth", productId: "prd_atlas", product: "Atlas", rateLimitPerMinute: 600 };
+const identity = { serviceId: "svc_atlas_auth", serviceName: "Atlas Auth", rateLimitPerMinute: 600 };
 const secret = "PRIVATE-CONTENT-728941";
 const ids: string[] = [];
 const raws: string[] = [];

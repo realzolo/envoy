@@ -86,14 +86,14 @@ export function createRoutingService(dependencies: OutboundDependencies) {
                 await routingFailure(client, submission, DEADLINE_CODE, DEADLINE_MESSAGE, false);
                 return null;
             }
-            if (message.content_purged_at || !await client.authorizedDomain({ productId: message.product_id, serviceId: message.service_id }, message.sender_snapshot.fromEmail)) {
+            if (message.content_purged_at || !await client.authorizedDomain({ serviceId: message.service_id }, message.sender_snapshot.fromEmail)) {
                 await routingFailure(client, submission, message.content_purged_at ? "CONTENT_EXPIRED" : "SENDER_NOT_AUTHORIZED", message.content_purged_at ? "The retained message content has expired." : "The sender authorization is no longer active.", false);
                 return null;
             }
             message = dependencies.sendingContent(message);
             const allowed: Recipient[] = [];
             for (const recipient of active) {
-                if (recipient.compliance_status !== "clean" || await isSuppressed(client, message.product_id, recipient.recipient_email, message.metadata.listId)) {
+                if (recipient.compliance_status !== "clean" || await isSuppressed(client, message.service_id, recipient.recipient_email, message.metadata.listId)) {
                     await applyDeliveryEvent(client, recipient.id, { id: createId("sup"), type: "suppressed", occurredAt: new Date(), metadata: {} }, `submission:${submissionId}:suppressed:${recipient.id}`);
                 }
                 else
@@ -111,7 +111,7 @@ export function createRoutingService(dependencies: OutboundDependencies) {
                 return null;
             }
             const envelope = subsetEnvelope(message, allowed.map(row => ({ email: row.recipient_email, name: row.recipient_name ?? undefined })));
-            const candidates = (await client.routing.listRoutingCandidates({ sendingDomainId: message.sending_domain_id, productId: message.product_id, serviceId: message.service_id, messageCategory: message.message_category })).rows;
+            const candidates = (await client.routing.listRoutingCandidates({ sendingDomainId: message.sending_domain_id, serviceId: message.service_id, messageCategory: message.message_category })).rows;
             const compatible = candidates.filter(row => !capabilityIssue(message, dependencies.providerCapabilities(row.provider_type), envelope));
             if (!compatible.length) {
                 await routingFailure(client, submission, "UNSUPPORTED_MESSAGE_CAPABILITY", "No configured provider can preserve the message fields and recipient envelope.", false);

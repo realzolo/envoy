@@ -11,11 +11,10 @@ export type StoredAttachment = {
 };
 export type MessageContent = {
     id: string;
-    product_id: string;
     service_id: string;
     sending_domain_id: string;
     sender_snapshot: {
-        product: string;
+        service: string;
         fromName?: string;
         fromEmail: string;
         domainId: string;
@@ -46,7 +45,7 @@ export type MessageRow = MessageContent & {
     accepted_at: Date;
     recipient_count: number;
     reference_id: string | null;
-    product: string;
+    service: string;
     category: string;
     counts: Record<string, number>;
     processing_state: "queued" | "processing" | "finished";

@@ -1,9 +1,7 @@
 export interface RepositoryResult<Row> { rows:Row[];rowCount:number|null; }
 export interface ManagementRepository {
+  setServiceStatus(input:{id:string;status:"active"|"suspended"}):Promise<RepositoryResult<never>>;
   recordAudit(input:{actor:string;action:string;resourceType:string;resourceId:null|string;details:unknown}):Promise<RepositoryResult<RecordAuditRow>>;
-  insertProduct(input:{id:string;name:string}):Promise<RepositoryResult<InsertProductRow>>;
-  recordProductCreation(input:{actor:string;resourceId:string;details:unknown}):Promise<RepositoryResult<RecordProductCreationRow>>;
-  setProductStatus(input:{id:string;status:string}):Promise<RepositoryResult<SetProductStatusRow>>;
   lockActiveServiceAndDomain(input:{id:string;idValue:null|string}):Promise<RepositoryResult<LockActiveServiceAndDomainRow>>;
   incrementGrantConfigurationRevision(input:{id:string}):Promise<RepositoryResult<IncrementGrantConfigurationRevisionRow>>;
   upsertDomainGrant(input:{id:string;serviceId:string;sendingDomainId:null|string;sendAllowed:boolean;receiveAllowed:boolean}, domainId:string|null):Promise<RepositoryResult<UpsertDomainGrantRow>>;
@@ -27,10 +25,9 @@ export interface ManagementRepository {
   insertServiceCallback(input:{id:string;serviceId:string;name:string;url:string;secretCiphertext:string;encryptedDek:string;keyVersion:string;subscribedEvents:string[]}):Promise<RepositoryResult<InsertServiceCallbackRow>>;
   insertServiceCredential(input:{id:string;serviceId:string;keyPrefix:string;keyHash:string}):Promise<RepositoryResult<InsertServiceCredentialRow>>;
   recordCredentialIssue(input:{actor:string;resourceId:string;details:unknown}):Promise<RepositoryResult<RecordCredentialIssueRow>>;
-  lockActiveProduct(input:{id:string}):Promise<RepositoryResult<LockActiveProductRow>>;
-  insertService(input:{id:string;productId:string;name:string;suppressionManagementAllowed:boolean}):Promise<RepositoryResult<InsertServiceRow>>;
+  insertService(input:{id:string;name:string;suppressionManagementAllowed:boolean}):Promise<RepositoryResult<InsertServiceRow>>;
   recordServiceCreation(input:{actor:string;resourceId:string;details:unknown}):Promise<RepositoryResult<RecordServiceCreationRow>>;
-  lockServiceConfiguration(input:{id:string;productId:string}):Promise<RepositoryResult<LockServiceConfigurationRow>>;
+  lockServiceConfiguration(input:{id:string}):Promise<RepositoryResult<LockServiceConfigurationRow>>;
   findServiceDomainPermissions(input:{serviceId:string}):Promise<RepositoryResult<FindServiceDomainPermissionsRow>>;
   findServiceCallback(input:{serviceId:string}):Promise<RepositoryResult<FindServiceCallbackRow>>;
   updateServiceConfiguration(input:{id:string;name:string;suppressionManagementAllowed:boolean}):Promise<RepositoryResult<UpdateServiceConfigurationRow>>;
@@ -41,9 +38,6 @@ export interface ManagementRepository {
 export interface ManagementUnitOfWork { run<T>(work:(repository:ManagementRepository)=>Promise<T>):Promise<T>; }
 
 export type RecordAuditRow=never;
-export type InsertProductRow=never;
-export type RecordProductCreationRow=never;
-export type SetProductStatusRow=never;
 export type LockActiveServiceAndDomainRow=never;
 export type IncrementGrantConfigurationRevisionRow=never;
 export type UpsertDomainGrantRow={id:string};
@@ -67,10 +61,9 @@ export type StopPendingCallbackDeliveriesRow=never;
 export type InsertServiceCallbackRow=never;
 export type InsertServiceCredentialRow=never;
 export type RecordCredentialIssueRow=never;
-export type LockActiveProductRow=never;
 export type InsertServiceRow=never;
 export type RecordServiceCreationRow=never;
-export type LockServiceConfigurationRow={id:string;product_id:string;name:string;suppression_management_allowed:boolean;configuration_revision:number;created_at:Date;updated_at:Date};
+export type LockServiceConfigurationRow={id:string;status:string;name:string;suppression_management_allowed:boolean;configuration_revision:number;created_at:Date;updated_at:Date};
 export type FindServiceDomainPermissionsRow={sending_domain_id:string|null;send_allowed:boolean;receive_allowed:boolean;status:string};
 export type FindServiceCallbackRow={url:string|null;status:string};
 export type UpdateServiceConfigurationRow=never;

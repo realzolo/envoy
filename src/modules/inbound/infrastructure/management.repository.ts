@@ -26,10 +26,10 @@ export function inboundManagementRepository(client: PoolClient): InboundManageme
       const row = (await client.query<{ type: ProviderType; status: string; security_configured: boolean }>("SELECT a.type,e.status,e.security_configured FROM provider_webhook_endpoints e JOIN provider_accounts a ON a.id=e.provider_account_id WHERE e.id=$1", [id])).rows[0];
       return row ? { type: row.type, status: row.status, securityConfigured: row.security_configured } : null;
     },
-    async receivingPermission(input) { return !!(await client.query(`SELECT s.id FROM services s WHERE s.id=$1 AND s.product_id=$2 AND ${domainPermission("s.id", "$3", "receive")}`, [input.serviceId, input.productId, input.domainId])).rowCount; },
+    async receivingPermission(input) { return !!(await client.query(`SELECT s.id FROM services s WHERE s.id=$1 AND ${domainPermission("s.id", "$2", "receive")}`, [input.serviceId, input.domainId])).rowCount; },
     async insertRoute(id, input) {
       try {
-        await orm.insert(inboundRoutes).values({ id, providerWebhookEndpointId: input.webhookEndpointId, sendingDomainId: input.domainId, productId: input.productId, serviceId: input.serviceId });
+        await orm.insert(inboundRoutes).values({ id, providerWebhookEndpointId: input.webhookEndpointId, sendingDomainId: input.domainId, serviceId: input.serviceId });
       } catch (error) {
         const cause = error instanceof Error ? error.cause : undefined;
         if (cause && typeof cause === "object" && "code" in cause && cause.code === "23505") throw new Error("A duplicate inbound route already exists", { cause: error });

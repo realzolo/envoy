@@ -58,8 +58,8 @@ const columns = (back: string): TableColumnProps<EmailRecord>[] => [
     ),
   },
   {
-    title: "Product", dataIndex: "product", width: 150,
-    render: (product: string) => <span className={styles.cellText} title={product}>{product}</span>,
+    title: "Service", dataIndex: "service", width: 150,
+    render: (service: string) => <span className={styles.cellText} title={service}>{service}</span>,
   },
   {
     title: "Status", dataIndex: "status", width: 130,
@@ -108,7 +108,7 @@ export function EmailTable({ records, compact = false, variant = "page", filters
         <Form className={styles.filters} layout="vertical" onSubmit={() => navigate({ q: query, status })}>
           <div className={styles.filterGrid}>
             <Form.Item label="Search messages">
-              <Input allowClear placeholder="ID, reference, recipient, subject, or product" prefix={<IconSearch />} value={query} onChange={setQuery} />
+              <Input allowClear placeholder="ID, reference, recipient, subject, or service" prefix={<IconSearch />} value={query} onChange={setQuery} />
             </Form.Item>
             <Form.Item label="Delivery status">
               <Select options={statusOptions} value={status} onChange={setStatus} />

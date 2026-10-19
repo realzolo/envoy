@@ -50,13 +50,13 @@ function ReplaceCallback({ callback }: { callback: Row }) {
 
 export function Callbacks({ data }: { data: Data }) {
   const action = useAction();
-  const services = rows(data.services).filter(service => service.product_status === "active");
+  const services = rows(data.services).filter(service => service.status === "active");
   const callbacks = rows(data.callbacks);
   const deliveries = rows(data.callbackDeliveries);
   const [selectedDeliveryId, setSelectedDeliveryId] = useState<string | null>(null);
   const [editing, setEditing] = useState<Row | null>(null);
   if (!services.length) {
-    return <Prerequisite title="Create an active service first" description="Callbacks are owned by a service so recipients can identify the product that emitted each event." href="/api-keys" action="Create a service" />;
+    return <Prerequisite title="Create an active service first" description="Callbacks are owned by a service and deliver events to its configured endpoint." href="/api-keys" action="Create a service" />;
   }
 
   return (
@@ -78,7 +78,7 @@ export function Callbacks({ data }: { data: Data }) {
           minWidth="980px"
           columns={[
             { title: "Endpoint", render: (_, callback) => <Space direction="vertical" size="mini"><Typography.Text>{value(callback, "name")}</Typography.Text><StatusTag>{value(callback, "status")}</StatusTag></Space> },
-            { title: "Service", render: (_, callback) => `${value(callback, "product")} / ${value(callback, "service")}` },
+            { title: "Service", render: (_, callback) => value(callback,"service") },
             { title: "Event callback URL", width: 260, render: (_, callback) => <Typography.Text ellipsis={{ showTooltip: true }}>{value(callback, "url")}</Typography.Text> },
             { title: "Events", width: 240, render: (_, callback) => Array.isArray(callback.subscribed_events) ? callback.subscribed_events.join(", ") : "" },
             { title: "DLQ", width: 72, render: (_, callback) => value(callback, "dead_letters") },

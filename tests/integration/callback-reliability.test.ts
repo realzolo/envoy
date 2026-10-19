@@ -68,7 +68,7 @@ describe("database-driven callback retry", () => {
   });
 
   it("rechecks frozen message domain permissions after callback DNS resolution",async()=>{
-    const message=(await acceptMessage({identity:{serviceId:"svc_atlas_auth",serviceName:"Atlas Auth",productId:"prd_atlas",product:"Atlas",rateLimitPerMinute:600},
+    const message=(await acceptMessage({identity:{serviceId:"svc_atlas_auth",serviceName:"Atlas Auth",rateLimitPerMinute:600},
       input:createMessageSchema.parse({from:{email:"help@mail.atlas.test"},to:[{email:"customer@example.net"}],category:"security",subject:"Domain permission race",text:"Body"}),idempotencyKey:crypto.randomUUID()})).message.id;
     const delivery=(await query<{id:string}>("SELECT id FROM deliveries WHERE message_id=$1",[message])).rows[0].id,event=createId("dev"),callback=await createCallback();
     await query("INSERT INTO delivery_events(id,delivery_id,event_type,occurred_at,canonical_payload,source_key) VALUES($1,$2,'failed',now(),'{}',$1)",[event,delivery]);
@@ -89,7 +89,7 @@ describe("database-driven callback retry", () => {
 
 it("replaces one callback secret only after pausing and draining in-flight requests",async()=>{
   const endpoint=createId("callback"),first=createId("cbx"),second=createId("cbx");
-  const service=createId("svc");await query("INSERT INTO services(id,product_id,name) VALUES($1,'prd_atlas',$1)",[service]);
+  const service=createId("svc");await query("INSERT INTO services(id,name) VALUES($1,$1)",[service]);
   const oldSecret="old-callback-test-key",newSecret="new-callback-test-key";
   const envelope=sealSecret({secret:oldSecret},endpoint,1);
   await query("INSERT INTO callback_endpoints(id,service_id,name,url,secret_ciphertext,encrypted_dek,key_version,subscribed_events) VALUES($1,$5,'single secret','https://callback.test/events',$2,$3,$4,ARRAY['email.failed'])",[endpoint,envelope.secretCiphertext,envelope.encryptedDek,envelope.keyVersion,service]);

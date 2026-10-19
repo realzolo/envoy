@@ -54,12 +54,12 @@ export function createEventsRepository(client: Pick<PoolClient, "query">): Event
         },
         insertUnsubscribeSuppression(input: {
             suppressionId: string;
-            scope: "list" | "product";
-            productId: string;
+            scope: "list" | "service";
+            serviceId: string;
             listId: string | null;
             recipientEmail: string;
         }) {
-            return client.query<Record<string, unknown>>("INSERT INTO suppressions(id,scope_type,product_id,list_id,email_normalized,reason,source) VALUES ($1,$2,$3,$4,lower($5),'unsubscribe','provider_event') ON CONFLICT DO NOTHING", [input.suppressionId, input.scope, input.productId, input.listId, input.recipientEmail]);
+            return client.query<Record<string, unknown>>("INSERT INTO suppressions(id,scope_type,service_id,list_id,email_normalized,reason,source) VALUES ($1,$2,$3,$4,lower($5),'unsubscribe','provider_event') ON CONFLICT DO NOTHING", [input.suppressionId, input.scope, input.serviceId, input.listId, input.recipientEmail]);
         },
         countRecentSoftBounces(input: {
             recipientEmail: string;
@@ -188,17 +188,16 @@ export function createEventsRepository(client: Pick<PoolClient, "query">): Event
                 id: string;
                 message_id: string;
                 service_id: string;
-                product_id: string;
                 reference_id: string | null;
                 request_id: string | null;
                 recipient_email: string;
                 recipient_role: string;
-                product: string;
+                service: string;
                 category: string;
                 lifecycle_status: string;
                 engagement_status: string;
                 compliance_status: string;
-            }>("SELECT d.id,d.message_id,m.service_id,m.product_id,m.reference_id,m.request_id,d.recipient_email,d.recipient_role,p.name AS product,m.message_category AS category,d.lifecycle_status,d.engagement_status,d.compliance_status FROM deliveries d JOIN messages m ON m.id=d.message_id JOIN products p ON p.id=m.product_id WHERE d.id=$1", [input.deliveryId]);
+            }>("SELECT d.id,d.message_id,m.service_id,m.reference_id,m.request_id,d.recipient_email,d.recipient_role,s.name AS service,m.message_category AS category,d.lifecycle_status,d.engagement_status,d.compliance_status FROM deliveries d JOIN messages m ON m.id=d.message_id JOIN services s ON s.id=m.service_id WHERE d.id=$1", [input.deliveryId]);
         },
         findSubmissionContentPolicy(input: {
             submissionId: string;

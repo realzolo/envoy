@@ -5,7 +5,7 @@ import { Alert,Button,Card,Divider,Form,Input,Select,Space,Tabs,Tooltip,Typograp
 import { IconCode,IconDesktop,IconMobile,IconSend } from "@arco-design/web-react/icon";
 import { useRef,useState } from "react";
 
-type Service = { id: string; name: string; product: string; product_id: string };
+type Service = { id: string; name: string };
 type MessageFormValues = {
   serviceId: string;
   fromEmail: string;
@@ -114,7 +114,7 @@ export function MessageComposer({ services }: { services: Service[] }) {
         >
           <div className={styles.formFields}>
             <Form.Item field="serviceId" label="Service" rules={[{ required: true, message: "Select a service." }]}>
-              <Select options={services.map((item) => ({ label: `${item.product} / ${item.name}`, value: item.id }))} onChange={handleServiceChange} />
+              <Select options={services.map((item) => ({ label: item.name, value: item.id }))} onChange={handleServiceChange} />
             </Form.Item>
             <Form.Item field="fromEmail" label="From address" rules={[{ required: true, type: "email", message: "Enter an authorized sender address." }]}><Input type="email" placeholder="orders@mail.company.com" /></Form.Item>
             <Form.Item field="fromName" label="From name"><Input placeholder="Order service" /></Form.Item>

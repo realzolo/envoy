@@ -10,16 +10,11 @@ export function createManagementRepository(client: Pick<PoolClient, "query">): M
             resourceId: string | null;
             details: Record<string, unknown>;
         }) { return client.query<Record<string, unknown>>("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES ($1,$2,$3,$4,$5)", [input.actor, input.action, input.resourceType, input.resourceId, input.details]); },
-        findService(input: {
-            serviceId: string;
-        }) { return client.query<{
-            product_id: string;
-        }>("SELECT product_id FROM services WHERE id=$1", [input.serviceId]); },
-        findProduct(input: {
-            productId: string;
-        }) { return client.query<{
-            id: string;
-        }>("SELECT id FROM products WHERE id=$1", [input.productId]); },
+        findServices(input) { return client.query<{id:string}>("SELECT id FROM services WHERE id=ANY($1::text[]) FOR SHARE", [input.serviceIds]); },
+        async replacePolicyServices(input) {
+            await client.query("DELETE FROM routing_policy_services WHERE policy_id=$1", [input.policyId]);
+            if (input.serviceIds.length) await client.query("INSERT INTO routing_policy_services(policy_id,service_id) SELECT $1,unnest($2::text[])", [input.policyId,input.serviceIds]);
+        },
         findDomain(input: {
             domainId: string;
         }) { return client.query<{
@@ -42,28 +37,27 @@ export function createManagementRepository(client: Pick<PoolClient, "query">): M
         lockPolicy(input: {
             policyId: string;
         }) { return client.query<Record<string, unknown>>("SELECT id FROM routing_policies WHERE id=$1 FOR UPDATE", [input.policyId]); },
-        deleteTargets(input: {
+        deleteUnselectedTargets(input: {
             policyId: string;
-        }) { return client.query<Record<string, unknown>>("DELETE FROM routing_targets WHERE policy_id=$1", [input.policyId]); },
+            identityIds: string[];
+        }) { return client.query<Record<string, unknown>>("DELETE FROM routing_targets WHERE policy_id=$1 AND NOT(provider_identity_id=ANY($2::text[]))", [input.policyId, input.identityIds]); },
         updatePolicy(input: {
             id: string;
             name: string;
-            productId: string | null;
-            serviceId: string | null;
+            serviceScope: "all" | "selected";
             domainId: string;
             category: string | null;
             priority: number;
-        }) { return client.query<Record<string, unknown>>("UPDATE routing_policies SET name=$2,product_id=$3,service_id=$4,sending_domain_id=$5,message_category=$6,priority=$7,updated_at=now() WHERE id=$1", [input.id, input.name, input.productId, input.serviceId, input.domainId, input.category, input.priority]); },
+        }) { return client.query<Record<string, unknown>>("UPDATE routing_policies SET name=$2,service_scope=$3,sending_domain_id=$4,message_category=$5,priority=$6,updated_at=now() WHERE id=$1", [input.id, input.name, input.serviceScope, input.domainId, input.category, input.priority]); },
         insertPolicy(input: {
             id: string;
             name: string;
-            productId: string | null;
-            serviceId: string | null;
+            serviceScope: "all" | "selected";
             domainId: string;
             category: string | null;
             priority: number;
-        }) { return client.query<Record<string, unknown>>("INSERT INTO routing_policies(id,name,product_id,service_id,sending_domain_id,message_category,priority) VALUES ($1,$2,$3,$4,$5,$6,$7)", [input.id, input.name, input.productId, input.serviceId, input.domainId, input.category, input.priority]); },
-        insertTarget(input: {
+        }) { return client.query<Record<string, unknown>>("INSERT INTO routing_policies(id,name,service_scope,sending_domain_id,message_category,priority) VALUES ($1,$2,$3,$4,$5,$6)", [input.id, input.name, input.serviceScope, input.domainId, input.category, input.priority]); },
+        saveTarget(input: {
             id: string;
             policyId: string;
             accountId: string;
@@ -71,13 +65,12 @@ export function createManagementRepository(client: Pick<PoolClient, "query">): M
             priority: number;
             weight: number;
             rateLimit: number;
-        }) { return client.query<Record<string, unknown>>("INSERT INTO routing_targets(id,policy_id,provider_account_id,provider_identity_id,priority,weight,rate_limit_per_minute) VALUES ($1,$2,$3,$4,$5,$6,$7)", [input.id, input.policyId, input.accountId, input.identityId, input.priority, input.weight, input.rateLimit]); },
+        }) { return client.query<Record<string, unknown>>("INSERT INTO routing_targets(id,policy_id,provider_account_id,provider_identity_id,priority,weight,rate_limit_per_minute) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(policy_id,provider_identity_id) DO UPDATE SET priority=EXCLUDED.priority,weight=EXCLUDED.weight,rate_limit_per_minute=EXCLUDED.rate_limit_per_minute,updated_at=now()", [input.id, input.policyId, input.accountId, input.identityId, input.priority, input.weight, input.rateLimit]); },
         recordPolicyAudit(input: {
             actor: string;
             policyId: string;
             details: {
-                productId: string | null;
-                serviceId: string | null;
+                services: {mode:"all"|"selected";serviceIds:string[]};
                 domainId: string;
                 category: string | null;
                 priority: number;
@@ -91,7 +84,6 @@ export function createManagementRepository(client: Pick<PoolClient, "query">): M
         }) { return client.query<Record<string, unknown>>("UPDATE routing_policies SET status=$2,updated_at=now() WHERE id=$1", [input.policyId, input.status]); },
         listSimulationCandidates(input: {
             domainId: string;
-            productId: string | null;
             serviceId: string | null;
             category: string | null;
         }) {
@@ -101,7 +93,7 @@ export function createManagementRepository(client: Pick<PoolClient, "query">): M
     FROM routing_policies rp JOIN routing_targets rt ON rt.policy_id=rp.id JOIN provider_accounts pa ON pa.id=rt.provider_account_id
     JOIN provider_identities pi ON pi.id=rt.provider_identity_id AND pi.provider_account_id=pa.id JOIN sending_domains sd ON sd.id=pi.sending_domain_id
     CROSS JOIN LATERAL(SELECT count(*)FILTER(WHERE da.started_at>=date_trunc('month',now())AND da.status IN('submitting','accepted','reconciled','unknown','reconciling'))monthly_usage,count(*)FILTER(WHERE da.started_at>=date_trunc('day',now())AND da.status IN('submitting','accepted','reconciled','unknown','reconciling'))daily_usage FROM submission_attempts da JOIN submission_deliveries sm ON sm.submission_id=da.submission_id WHERE da.provider_account_id=pa.id)usage
-    WHERE rp.status='active' AND rp.sending_domain_id=$1 AND pi.sending_domain_id=$1 AND (rp.product_id IS NULL OR rp.product_id=$2) AND (rp.service_id IS NULL OR rp.service_id=$3) AND (rp.message_category IS NULL OR rp.message_category=$4) ORDER BY rp.priority,rt.priority,rt.id`, [input.domainId, input.productId, input.serviceId, input.category]);
+    WHERE rp.status='active' AND rp.sending_domain_id=$1 AND pi.sending_domain_id=$1 AND (rp.service_scope='all' OR EXISTS(SELECT 1 FROM routing_policy_services rs WHERE rs.policy_id=rp.id AND rs.service_id=$2)) AND (rp.message_category IS NULL OR rp.message_category=$3) ORDER BY rp.priority,rt.priority,rt.id`, [input.domainId, input.serviceId, input.category]);
         },
         findTestService(input: {
             serviceId: string;
@@ -109,11 +101,9 @@ export function createManagementRepository(client: Pick<PoolClient, "query">): M
             return client.query<{
                 service_id: string;
                 service_name: string;
-                product_id: string;
-                product_name: string;
-            }>(`SELECT s.id AS service_id,s.name AS service_name,p.id AS product_id,p.name AS product_name
-      FROM services s JOIN products p ON p.id=s.product_id
-      WHERE s.id=$1 AND p.status='active'`, [input.serviceId]);
+            }>(`SELECT s.id AS service_id,s.name AS service_name
+      FROM services s
+      WHERE s.id=$1 AND s.status='active'`, [input.serviceId]);
         },
     };
 }

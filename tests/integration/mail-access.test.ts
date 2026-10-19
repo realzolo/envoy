@@ -20,11 +20,11 @@ import { retryAttachmentScan } from "@/modules/attachments/public";
 import { deliverCallback } from "@/modules/callbacks/public";
 import { objectStore } from "@/platform/storage/object-store";
 import {GET as suppressionsGET} from '@/app/api/v1/suppressions/route';
-const tag=crypto.randomUUID(),product=`prd_${tag}`,a=`svc_a_${tag}`,b=`svc_b_${tag}`,c=`svc_c_${tag}`;
+const tag=crypto.randomUUID(),a=`svc_a_${tag}`,b=`svc_b_${tag}`,c=`svc_c_${tag}`;
 const domain=`access-${tag}.test`,otherDomain=`other-${tag}.test`;
 let domainId:string,otherId:string;
 const key=(id:string)=>`fixture_key_${id}`;
-const identity={serviceId:a,serviceName:'Business A',productId:product,product,rateLimitPerMinute:600};
+const identity={serviceId:a,serviceName:'Business A',rateLimitPerMinute:600};
 const ownGrant=`grant_${a}`;
 const request=(id=a)=>new Request('https://envoy.test/api/v1/capabilities',{headers:{authorization:`Bearer ${key(id)}`}});
 const input=(from=`help@${domain}`)=>createMessageSchema.parse({from:{email:from},to:[{email:'customer@example.net'}],subject:'Private subject',text:'Private body'});
@@ -35,28 +35,27 @@ const persist=async()=>{
  return (await query<{id:string}>('SELECT id FROM inbound_messages WHERE provider_account_id=$1 AND external_message_id=$2 AND service_id=$3',['pa_mock',message.externalMessageId,a])).rows[0].id;
 };
 beforeAll(async()=>{
- await query('INSERT INTO products(id,name) VALUES($1,$1)',[product]);
  domainId=(await createDomain({domain,accountIds:[]},'test')).domainId;otherId=(await createDomain({domain:otherDomain,accountIds:[]},'test')).domainId;
  for(const id of [a,b,c]){
-  await query('INSERT INTO services(id,product_id,name) VALUES($1,$2,$1)',[id,product]);
+  await query('INSERT INTO services(id,name) VALUES($1,$1)',[id]);
   await query("INSERT INTO service_credentials(id,service_id,key_prefix,key_hash) VALUES($1,$2,'fixture',$3)",[`cred_${id}`,id,hashApiKey(key(id))]);
   const env=sealSecret({secret:'fixture_callback_secret'},`cb_${id}`,1);
   await query("INSERT INTO callback_endpoints(id,service_id,name,url,secret_ciphertext,encrypted_dek,key_version,subscribed_events) VALUES($1,$2,$2,'https://callback.test/events',$3,$4,$5,ARRAY['inbound.received','service.permissions_changed'])",[`cb_${id}`,id,env.secretCiphertext,env.encryptedDek,env.keyVersion]);
   const did=id===c?otherId:domainId;
   await query('INSERT INTO service_domain_grants(id,service_id,sending_domain_id,send_allowed,receive_allowed) VALUES($1,$2,$3,$4,true)',[`grant_${id}`,id,did,id===a]);
-  await createInboundRoute({webhookEndpointId:'pwe_mock',domainId:did,productId:product,serviceId:id},'test');
+  await createInboundRoute({webhookEndpointId:'pwe_mock',domainId:did,serviceId:id},'test');
  }
  await query("INSERT INTO provider_identities(id,sending_domain_id,provider_account_id,status) VALUES($1,$2,'pa_mock','verified')",[`pi_${tag}`,domainId]);
- await query('INSERT INTO routing_policies(id,name,product_id,sending_domain_id) VALUES($1,$1,$2,$3)',[`rp_${tag}`,product,domainId]);
+ await query('INSERT INTO routing_policies(id,name,sending_domain_id) VALUES($1,$1,$2)',[`rp_${tag}`,domainId]);
  await query("INSERT INTO routing_targets(id,policy_id,provider_account_id,provider_identity_id) VALUES($1,$2,'pa_mock',$3)",[`rt_${tag}`,`rp_${tag}`,`pi_${tag}`]);
 });
 afterAll(async()=>{
- const objects=(await query<{object_key:string}>(`SELECT a.object_key FROM inbound_attachments a JOIN inbound_messages i ON i.id=a.inbound_message_id WHERE i.product_id=$1 UNION ALL SELECT object_key FROM outbound_files WHERE service_id=ANY($2)`,[product,[a,b,c]])).rows;
+ const objects=(await query<{object_key:string}>(`SELECT a.object_key FROM inbound_attachments a JOIN inbound_messages i ON i.id=a.inbound_message_id WHERE i.service_id=ANY($1) UNION ALL SELECT object_key FROM outbound_files WHERE service_id=ANY($1)`,[[a,b,c]])).rows;
  for(const o of objects)await objectStore().delete(o.object_key);
  await query('DELETE FROM callback_deliveries WHERE endpoint_id IN (SELECT id FROM callback_endpoints WHERE service_id=ANY($1))',[[a,b,c]]);
- await query('DELETE FROM messages WHERE product_id=$1',[product]);await query('DELETE FROM outbound_files WHERE service_id=ANY($1)',[[a,b,c]]);
- await query('DELETE FROM inbound_messages WHERE product_id=$1',[product]);await query('DELETE FROM routing_policies WHERE product_id=$1',[product]);
- await query('DELETE FROM products WHERE id=$1',[product]);await query('DELETE FROM sending_domains WHERE id=ANY($1)',[[domainId,otherId]]);await db().end();
+ await query('DELETE FROM messages WHERE service_id=ANY($1)',[[a,b,c]]);await query('DELETE FROM outbound_files WHERE service_id=ANY($1)',[[a,b,c]]);
+ await query('DELETE FROM inbound_messages WHERE service_id=ANY($1)',[[a,b,c]]);await query('DELETE FROM routing_policies WHERE id=$1',[`rp_${tag}`]);
+ await query('DELETE FROM services WHERE id=ANY($1)',[[a,b,c]]);await query('DELETE FROM sending_domains WHERE id=ANY($1)',[[domainId,otherId]]);await db().end();
 });
 describe('business domain permissions',()=>{
  it('discovers domain permissions and independent readiness without mailbox entities',async()=>{
@@ -100,7 +99,7 @@ describe('business domain permissions',()=>{
  });
  it('keeps the same business identity across rotation and commits minimal permission notifications',async()=>{
   const rotated=await rotateServiceCredential(`cred_${a}`,'test'),next=await authenticateService(new Request('https://envoy.test',{headers:{authorization:`Bearer ${rotated.key}`}}));expect(next?.serviceId).toBe(a);expect((await authenticateService(request()))?.serviceId).toBe(a);
-  await setDomainGrant({serviceId:a,domainId,send:true,receive:true},'test');const e=(await query("SELECT id,payload FROM callback_deliveries WHERE endpoint_id=$1 AND event_type='service.permissions_changed' ORDER BY created_at DESC LIMIT 1",[`cb_${a}`])).rows[0];expect(e.payload).toMatchObject({type:'service.permissions_changed',data:{serviceId:a,productId:product}});expect((await query("SELECT id FROM outbox_events WHERE payload->>'callbackDeliveryId'=$1",[e.id])).rowCount).toBe(1);
+  await setDomainGrant({serviceId:a,domainId,send:true,receive:true},'test');const e=(await query("SELECT id,payload FROM callback_deliveries WHERE endpoint_id=$1 AND event_type='service.permissions_changed' ORDER BY created_at DESC LIMIT 1",[`cb_${a}`])).rows[0];expect(e.payload).toMatchObject({type:'service.permissions_changed',data:{serviceId:a}});expect((await query("SELECT id FROM outbox_events WHERE payload->>'callbackDeliveryId'=$1",[e.id])).rowCount).toBe(1);
  });
  it('keeps suppression management independently denied to ordinary business keys',async()=>{expect((await suppressionsGET(request())).status).toBe(403);});
  it('rechecks domain authorization before queued inbound callbacks leave Envoy',async()=>{

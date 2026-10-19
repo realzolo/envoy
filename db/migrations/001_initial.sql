@@ -3,16 +3,6 @@
 -- ALTER statements below declare final foreign keys, including circular references.
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
-CREATE TABLE "products" (
-	"id" text PRIMARY KEY NOT NULL,
-	"name" text NOT NULL,
-	"status" text DEFAULT 'active' NOT NULL,
-	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
-	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
-	CONSTRAINT "products_name_key" UNIQUE("name"),
-	CONSTRAINT "products_status_check" CHECK (status = ANY (ARRAY['active'::text, 'suspended'::text]))
-);
-
 CREATE TABLE "service_credentials" (
 	"id" text PRIMARY KEY NOT NULL,
 	"service_id" text NOT NULL,
@@ -44,14 +34,13 @@ CREATE TABLE "service_domain_grants" (
 
 CREATE TABLE "services" (
 	"id" text PRIMARY KEY NOT NULL,
-	"product_id" text NOT NULL,
 	"name" text NOT NULL,
+	"status" text DEFAULT 'active' NOT NULL,
 	"suppression_management_allowed" boolean DEFAULT false NOT NULL,
 	"configuration_revision" integer DEFAULT 1 NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
-	CONSTRAINT "services_id_product_id_key" UNIQUE("id","product_id"),
-	CONSTRAINT "services_product_id_name_key" UNIQUE("product_id","name"),
+	CONSTRAINT "services_status_check" CHECK (status IN ('active', 'suspended')),
 	CONSTRAINT "services_configuration_revision_check" CHECK (configuration_revision > 0)
 );
 
@@ -179,7 +168,6 @@ CREATE TABLE "message_retries" (
 CREATE TABLE "messages" (
 	"content_purged_at" timestamp with time zone,
 	"id" text PRIMARY KEY NOT NULL,
-	"product_id" text NOT NULL,
 	"service_id" text NOT NULL,
 	"sending_domain_id" text NOT NULL,
 	"request_id" text,
@@ -247,8 +235,7 @@ CREATE TABLE "raw_provider_events" (
 CREATE TABLE "routing_policies" (
 	"id" text PRIMARY KEY NOT NULL,
 	"name" text NOT NULL,
-	"product_id" text,
-	"service_id" text,
+	"service_scope" text DEFAULT 'all' NOT NULL,
 	"sending_domain_id" text NOT NULL,
 	"message_category" text,
 	"priority" integer DEFAULT 100 NOT NULL,
@@ -256,7 +243,13 @@ CREATE TABLE "routing_policies" (
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "routing_policies_status_check" CHECK (status = ANY (ARRAY['active'::text, 'disabled'::text])),
-	CONSTRAINT "routing_policies_check" CHECK ((service_id IS NULL) OR (product_id IS NOT NULL))
+	CONSTRAINT "routing_policies_service_scope_check" CHECK (service_scope IN ('all', 'selected'))
+);
+
+CREATE TABLE "routing_policy_services" (
+	"policy_id" text NOT NULL,
+	"service_id" text NOT NULL,
+	CONSTRAINT "routing_policy_services_policy_id_service_id_pk" PRIMARY KEY("policy_id","service_id")
 );
 
 CREATE TABLE "routing_targets" (
@@ -356,7 +349,6 @@ CREATE TABLE "inbound_messages" (
 	"content_purged_at" timestamp with time zone,
 	"id" text PRIMARY KEY NOT NULL,
 	"inbound_route_id" text,
-	"product_id" text,
 	"service_id" text,
 	"provider_account_id" text NOT NULL,
 	"raw_provider_event_id" text,
@@ -401,7 +393,6 @@ CREATE TABLE "inbound_routes" (
 	"id" text PRIMARY KEY NOT NULL,
 	"provider_webhook_endpoint_id" text NOT NULL,
 	"sending_domain_id" text NOT NULL,
-	"product_id" text NOT NULL,
 	"service_id" text NOT NULL,
 	"status" text DEFAULT 'active' NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
@@ -520,7 +511,7 @@ CREATE TABLE "callback_endpoints" (
 CREATE TABLE "suppressions" (
 	"id" text PRIMARY KEY NOT NULL,
 	"scope_type" text NOT NULL,
-	"product_id" text,
+	"service_id" text,
 	"list_id" text,
 	"email_normalized" text NOT NULL,
 	"reason" text NOT NULL,
@@ -530,8 +521,8 @@ CREATE TABLE "suppressions" (
 	"expires_at" timestamp with time zone,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
-	CONSTRAINT "suppressions_scope_type_check" CHECK (scope_type = ANY (ARRAY['global'::text, 'product'::text, 'list'::text])),
-	CONSTRAINT "suppressions_check" CHECK (((scope_type = 'global'::text) AND (product_id IS NULL) AND (list_id IS NULL)) OR ((scope_type = 'product'::text) AND (product_id IS NOT NULL) AND (list_id IS NULL)) OR ((scope_type = 'list'::text) AND (product_id IS NOT NULL) AND (list_id IS NOT NULL))),
+	CONSTRAINT "suppressions_scope_type_check" CHECK (scope_type = ANY (ARRAY['global'::text, 'service'::text, 'list'::text])),
+	CONSTRAINT "suppressions_check" CHECK (((scope_type = 'global'::text) AND (service_id IS NULL) AND (list_id IS NULL)) OR ((scope_type = 'service'::text) AND (service_id IS NOT NULL) AND (list_id IS NULL)) OR ((scope_type = 'list'::text) AND (service_id IS NOT NULL) AND (list_id IS NOT NULL))),
 	CONSTRAINT "suppressions_email_normalized_check" CHECK (email_normalized = lower(email_normalized))
 );
 
@@ -592,7 +583,6 @@ CREATE TABLE "worker_heartbeats" (
 ALTER TABLE "service_credentials" ADD CONSTRAINT "service_credentials_service_id_fkey" FOREIGN KEY ("service_id") REFERENCES "public"."services"("id") ON DELETE cascade ON UPDATE no action;
 ALTER TABLE "service_domain_grants" ADD CONSTRAINT "service_domain_grants_service_id_fkey" FOREIGN KEY ("service_id") REFERENCES "public"."services"("id") ON DELETE cascade ON UPDATE no action;
 ALTER TABLE "service_domain_grants" ADD CONSTRAINT "service_domain_grants_sending_domain_id_fkey" FOREIGN KEY ("sending_domain_id") REFERENCES "public"."sending_domains"("id") ON DELETE cascade ON UPDATE no action;
-ALTER TABLE "services" ADD CONSTRAINT "services_product_id_fkey" FOREIGN KEY ("product_id") REFERENCES "public"."products"("id") ON DELETE cascade ON UPDATE no action;
 ALTER TABLE "provider_credentials" ADD CONSTRAINT "provider_credentials_provider_account_id_fkey" FOREIGN KEY ("provider_account_id") REFERENCES "public"."provider_accounts"("id") ON DELETE cascade ON UPDATE no action;
 ALTER TABLE "provider_identities" ADD CONSTRAINT "provider_identities_sending_domain_id_fkey" FOREIGN KEY ("sending_domain_id") REFERENCES "public"."sending_domains"("id") ON DELETE cascade ON UPDATE no action;
 ALTER TABLE "provider_identities" ADD CONSTRAINT "provider_identities_provider_account_id_fkey" FOREIGN KEY ("provider_account_id") REFERENCES "public"."provider_accounts"("id") ON DELETE cascade ON UPDATE no action;
@@ -603,14 +593,13 @@ ALTER TABLE "deliveries" ADD CONSTRAINT "deliveries_current_attempt_fk" FOREIGN 
 ALTER TABLE "delivery_events" ADD CONSTRAINT "delivery_events_delivery_id_fkey" FOREIGN KEY ("delivery_id") REFERENCES "public"."deliveries"("id") ON DELETE cascade ON UPDATE no action;
 ALTER TABLE "delivery_events" ADD CONSTRAINT "delivery_events_raw_provider_event_id_fkey" FOREIGN KEY ("raw_provider_event_id") REFERENCES "public"."raw_provider_events"("id") ON DELETE set null ON UPDATE no action;
 ALTER TABLE "message_retries" ADD CONSTRAINT "message_retries_message_id_fkey" FOREIGN KEY ("message_id") REFERENCES "public"."messages"("id") ON DELETE cascade ON UPDATE no action;
-ALTER TABLE "messages" ADD CONSTRAINT "messages_product_id_fkey" FOREIGN KEY ("product_id") REFERENCES "public"."products"("id") ON DELETE restrict ON UPDATE no action;
 ALTER TABLE "messages" ADD CONSTRAINT "messages_service_id_fkey" FOREIGN KEY ("service_id") REFERENCES "public"."services"("id") ON DELETE restrict ON UPDATE no action;
 ALTER TABLE "messages" ADD CONSTRAINT "messages_sending_domain_id_fkey" FOREIGN KEY ("sending_domain_id") REFERENCES "public"."sending_domains"("id") ON DELETE restrict ON UPDATE no action;
 ALTER TABLE "raw_provider_events" ADD CONSTRAINT "raw_provider_events_provider_account_id_fkey" FOREIGN KEY ("provider_account_id") REFERENCES "public"."provider_accounts"("id") ON DELETE restrict ON UPDATE no action;
 ALTER TABLE "raw_provider_events" ADD CONSTRAINT "raw_provider_events_webhook_endpoint_id_fkey" FOREIGN KEY ("webhook_endpoint_id") REFERENCES "public"."provider_webhook_endpoints"("id") ON DELETE restrict ON UPDATE no action;
-ALTER TABLE "routing_policies" ADD CONSTRAINT "routing_policies_service_id_product_id_fkey" FOREIGN KEY ("service_id","product_id") REFERENCES "public"."services"("id","product_id") ON DELETE cascade ON UPDATE no action;
-ALTER TABLE "routing_policies" ADD CONSTRAINT "routing_policies_product_id_fkey" FOREIGN KEY ("product_id") REFERENCES "public"."products"("id") ON DELETE cascade ON UPDATE no action;
 ALTER TABLE "routing_policies" ADD CONSTRAINT "routing_policies_sending_domain_id_fkey" FOREIGN KEY ("sending_domain_id") REFERENCES "public"."sending_domains"("id") ON DELETE restrict ON UPDATE no action;
+ALTER TABLE "routing_policy_services" ADD CONSTRAINT "routing_policy_services_policy_id_routing_policies_id_fk" FOREIGN KEY ("policy_id") REFERENCES "public"."routing_policies"("id") ON DELETE cascade ON UPDATE no action;
+ALTER TABLE "routing_policy_services" ADD CONSTRAINT "routing_policy_services_service_id_services_id_fk" FOREIGN KEY ("service_id") REFERENCES "public"."services"("id") ON DELETE cascade ON UPDATE no action;
 ALTER TABLE "routing_targets" ADD CONSTRAINT "routing_targets_policy_id_fkey" FOREIGN KEY ("policy_id") REFERENCES "public"."routing_policies"("id") ON DELETE cascade ON UPDATE no action;
 ALTER TABLE "routing_targets" ADD CONSTRAINT "routing_targets_provider_account_id_fkey" FOREIGN KEY ("provider_account_id") REFERENCES "public"."provider_accounts"("id") ON DELETE cascade ON UPDATE no action;
 ALTER TABLE "routing_targets" ADD CONSTRAINT "routing_targets_provider_identity_id_fkey" FOREIGN KEY ("provider_identity_id") REFERENCES "public"."provider_identities"("id") ON DELETE restrict ON UPDATE no action;
@@ -628,16 +617,13 @@ ALTER TABLE "submissions" ADD CONSTRAINT "submissions_current_attempt_fk" FOREIG
 ALTER TABLE "inbound_changes" ADD CONSTRAINT "inbound_changes_service_id_fkey" FOREIGN KEY ("service_id") REFERENCES "public"."services"("id") ON DELETE cascade ON UPDATE no action;
 ALTER TABLE "inbound_changes" ADD CONSTRAINT "inbound_changes_inbound_message_id_fkey" FOREIGN KEY ("inbound_message_id") REFERENCES "public"."inbound_messages"("id") ON DELETE cascade ON UPDATE no action;
 ALTER TABLE "inbound_messages" ADD CONSTRAINT "inbound_messages_inbound_route_id_fkey" FOREIGN KEY ("inbound_route_id") REFERENCES "public"."inbound_routes"("id") ON DELETE set null ON UPDATE no action;
-ALTER TABLE "inbound_messages" ADD CONSTRAINT "inbound_messages_product_id_fkey" FOREIGN KEY ("product_id") REFERENCES "public"."products"("id") ON DELETE set null ON UPDATE no action;
 ALTER TABLE "inbound_messages" ADD CONSTRAINT "inbound_messages_service_id_fkey" FOREIGN KEY ("service_id") REFERENCES "public"."services"("id") ON DELETE set null ON UPDATE no action;
 ALTER TABLE "inbound_messages" ADD CONSTRAINT "inbound_messages_provider_account_id_fkey" FOREIGN KEY ("provider_account_id") REFERENCES "public"."provider_accounts"("id") ON DELETE restrict ON UPDATE no action;
 ALTER TABLE "inbound_messages" ADD CONSTRAINT "inbound_messages_raw_provider_event_id_fkey" FOREIGN KEY ("raw_provider_event_id") REFERENCES "public"."raw_provider_events"("id") ON DELETE set null ON UPDATE no action;
 ALTER TABLE "inbound_receipts" ADD CONSTRAINT "inbound_receipts_provider_account_id_fkey" FOREIGN KEY ("provider_account_id") REFERENCES "public"."provider_accounts"("id") ON DELETE no action ON UPDATE no action;
 ALTER TABLE "inbound_routes" ADD CONSTRAINT "inbound_routes_provider_webhook_endpoint_id_fkey" FOREIGN KEY ("provider_webhook_endpoint_id") REFERENCES "public"."provider_webhook_endpoints"("id") ON DELETE cascade ON UPDATE no action;
 ALTER TABLE "inbound_routes" ADD CONSTRAINT "inbound_routes_sending_domain_id_fkey" FOREIGN KEY ("sending_domain_id") REFERENCES "public"."sending_domains"("id") ON DELETE cascade ON UPDATE no action;
-ALTER TABLE "inbound_routes" ADD CONSTRAINT "inbound_routes_product_id_fkey" FOREIGN KEY ("product_id") REFERENCES "public"."products"("id") ON DELETE cascade ON UPDATE no action;
 ALTER TABLE "inbound_routes" ADD CONSTRAINT "inbound_routes_service_id_fkey" FOREIGN KEY ("service_id") REFERENCES "public"."services"("id") ON DELETE cascade ON UPDATE no action;
-ALTER TABLE "inbound_routes" ADD CONSTRAINT "inbound_routes_service_id_product_id_fkey" FOREIGN KEY ("service_id","product_id") REFERENCES "public"."services"("id","product_id") ON DELETE cascade ON UPDATE no action;
 ALTER TABLE "inbound_streams" ADD CONSTRAINT "inbound_streams_service_id_fkey" FOREIGN KEY ("service_id") REFERENCES "public"."services"("id") ON DELETE cascade ON UPDATE no action;
 ALTER TABLE "attachment_safety" ADD CONSTRAINT "attachment_safety_service_id_fkey" FOREIGN KEY ("service_id") REFERENCES "public"."services"("id") ON DELETE cascade ON UPDATE no action;
 ALTER TABLE "attachment_safety" ADD CONSTRAINT "attachment_safety_scope_fkey" FOREIGN KEY ("scope") REFERENCES "public"."attachment_scan_scopes"("scope") ON DELETE no action ON UPDATE no action;
@@ -649,10 +635,11 @@ ALTER TABLE "callback_deliveries" ADD CONSTRAINT "callback_deliveries_delivery_e
 ALTER TABLE "callback_deliveries" ADD CONSTRAINT "callback_deliveries_submission_event_id_fkey" FOREIGN KEY ("submission_event_id") REFERENCES "public"."submission_events"("id") ON DELETE set null ON UPDATE no action;
 ALTER TABLE "callback_deliveries" ADD CONSTRAINT "callback_deliveries_inbound_message_id_fkey" FOREIGN KEY ("inbound_message_id") REFERENCES "public"."inbound_messages"("id") ON DELETE set null ON UPDATE no action;
 ALTER TABLE "callback_endpoints" ADD CONSTRAINT "callback_endpoints_service_id_fkey" FOREIGN KEY ("service_id") REFERENCES "public"."services"("id") ON DELETE cascade ON UPDATE no action;
-ALTER TABLE "suppressions" ADD CONSTRAINT "suppressions_product_id_fkey" FOREIGN KEY ("product_id") REFERENCES "public"."products"("id") ON DELETE cascade ON UPDATE no action;
+ALTER TABLE "suppressions" ADD CONSTRAINT "suppressions_service_id_fkey" FOREIGN KEY ("service_id") REFERENCES "public"."services"("id") ON DELETE cascade ON UPDATE no action;
 ALTER TABLE "request_logs" ADD CONSTRAINT "request_logs_service_id_fkey" FOREIGN KEY ("service_id") REFERENCES "public"."services"("id") ON DELETE set null ON UPDATE no action;
 ALTER TABLE "request_logs" ADD CONSTRAINT "request_logs_message_id_fkey" FOREIGN KEY ("message_id") REFERENCES "public"."messages"("id") ON DELETE set null ON UPDATE no action;
 CREATE UNIQUE INDEX "service_domain_grants_one_all_per_service" ON "service_domain_grants" USING btree ("service_id") WHERE (sending_domain_id IS NULL);
+CREATE UNIQUE INDEX "services_name_key" ON "services" USING btree (lower("name"));
 CREATE UNIQUE INDEX "provider_credentials_one_active" ON "provider_credentials" USING btree ("provider_account_id") WHERE (status = 'active'::text);
 CREATE INDEX "deliveries_lifecycle_idx" ON "deliveries" USING btree ("lifecycle_status","queued_at" DESC NULLS FIRST);
 CREATE INDEX "deliveries_message_status" ON "deliveries" USING btree ("message_id","lifecycle_status");
@@ -662,6 +649,7 @@ CREATE INDEX "messages_sensitive_expiry_idx" ON "messages" USING btree ("send_be
 CREATE INDEX "messages_service_accepted_cursor" ON "messages" USING btree ("service_id","accepted_at" DESC NULLS FIRST,"id" DESC NULLS FIRST);
 CREATE INDEX "raw_events_retry_due" ON "raw_provider_events" USING btree ("next_attempt_at") WHERE (processed_at IS NULL);
 CREATE INDEX "raw_provider_events_pending_idx" ON "raw_provider_events" USING btree ("processed_at","received_at");
+CREATE INDEX "routing_policy_services_service_idx" ON "routing_policy_services" USING btree ("service_id");
 CREATE INDEX "attempts_external_idx" ON "submission_attempts" USING btree ("provider_account_id","external_message_id");
 CREATE INDEX "attempts_reconcile_due" ON "submission_attempts" USING btree ("reconcile_after") WHERE (status = ANY (ARRAY['unknown'::text, 'reconciling'::text]));
 CREATE INDEX "provider_attempt_usage" ON "submission_attempts" USING btree ("provider_account_id","started_at");
@@ -684,7 +672,7 @@ CREATE UNIQUE INDEX "callback_delivery_event_once" ON "callback_deliveries" USIN
 CREATE UNIQUE INDEX "callback_inbound_event_once" ON "callback_deliveries" USING btree ("endpoint_id","inbound_message_id","event_type") WHERE (inbound_message_id IS NOT NULL);
 CREATE UNIQUE INDEX "callback_submission_event_once" ON "callback_deliveries" USING btree ("endpoint_id","submission_event_id") WHERE (submission_event_id IS NOT NULL);
 CREATE UNIQUE INDEX "callback_one_per_service" ON "callback_endpoints" USING btree ("service_id");
-CREATE UNIQUE INDEX "suppressions_active_scope" ON "suppressions" USING btree (scope_type,COALESCE(product_id, '*'::text),COALESCE(list_id, '*'::text),email_normalized) WHERE (active = true);
+CREATE UNIQUE INDEX "suppressions_active_scope" ON "suppressions" USING btree (scope_type,COALESCE(service_id, '*'::text),COALESCE(list_id, '*'::text),email_normalized) WHERE (active = true);
 CREATE INDEX "outbox_pending_idx" ON "outbox_events" USING btree ("status","available_at","created_at");
 CREATE INDEX "rate_limit_expiry" ON "rate_limit_counters" USING btree ("expires_at");
 CREATE INDEX "request_logs_created_idx" ON "request_logs" USING btree ("created_at" DESC NULLS FIRST);
@@ -832,7 +820,6 @@ COMMENT ON TABLE "inbound_messages" IS 'Inbound messages and service-isolated co
 COMMENT ON COLUMN "inbound_messages"."content_purged_at" IS 'Irreversible content purge time (timestamptz); a non-null value prevents content reads while retaining business metadata';
 COMMENT ON COLUMN "inbound_messages"."id" IS 'Unique inbound message identifier';
 COMMENT ON COLUMN "inbound_messages"."inbound_route_id" IS 'Matched inbound route; null if unmatched or after route deletion';
-COMMENT ON COLUMN "inbound_messages"."product_id" IS 'Owning product; null for quarantined mail or after product deletion';
 COMMENT ON COLUMN "inbound_messages"."service_id" IS 'Owning service; null for quarantined mail or after service deletion';
 COMMENT ON COLUMN "inbound_messages"."provider_account_id" IS 'Provider account receiving the message';
 COMMENT ON COLUMN "inbound_messages"."raw_provider_event_id" IS 'Source raw webhook event; null after source event deletion';
@@ -863,15 +850,14 @@ COMMENT ON COLUMN "inbound_messages"."created_at" IS 'Record creation time (time
 COMMENT ON TABLE "inbound_receipts" IS 'Idempotent receipts freezing initial provider inbound routing results; retries reuse the first receipt time and ownership snapshot';
 COMMENT ON COLUMN "inbound_receipts"."provider_account_id" IS 'Receiving provider account; composite primary key with external_message_id';
 COMMENT ON COLUMN "inbound_receipts"."external_message_id" IS 'Provider inbound message identifier, unique within the account';
-COMMENT ON COLUMN "inbound_receipts"."routes" IS 'Initial route JSON array containing route id, product_id, service_id and matched recipients; retries must not reassign ownership';
+COMMENT ON COLUMN "inbound_receipts"."routes" IS 'Initial route JSON array containing route id, service_id and matched recipients; retries must not reassign ownership';
 COMMENT ON COLUMN "inbound_receipts"."terminated_at" IS 'Inbound receipt processing termination time (timestamptz); non-null forbids further processing';
 COMMENT ON COLUMN "inbound_receipts"."ingress_received_at" IS 'Initial webhook receipt time (timestamptz), reused unchanged on retries';
-COMMENT ON TABLE "inbound_routes" IS 'Inbound routes from provider endpoints to services, matching envelope domains and preserving product ownership';
+COMMENT ON TABLE "inbound_routes" IS 'Inbound routes from provider endpoints to services, matching envelope domains and preserving service ownership';
 COMMENT ON COLUMN "inbound_routes"."id" IS 'Unique inbound route identifier';
 COMMENT ON COLUMN "inbound_routes"."provider_webhook_endpoint_id" IS 'Provider webhook endpoint receiving inbound notifications';
 COMMENT ON COLUMN "inbound_routes"."sending_domain_id" IS 'Email domain matched by this route';
-COMMENT ON COLUMN "inbound_routes"."product_id" IS 'Product receiving inbound mail';
-COMMENT ON COLUMN "inbound_routes"."service_id" IS 'Service receiving inbound mail; must belong to the specified product';
+COMMENT ON COLUMN "inbound_routes"."service_id" IS 'Service receiving inbound mail';
 COMMENT ON COLUMN "inbound_routes"."status" IS 'Route status: active (enabled) or disabled';
 COMMENT ON COLUMN "inbound_routes"."created_at" IS 'Record creation time (timestamptz); defaults to the database transaction start time, now()';
 COMMENT ON TABLE "inbound_streams" IS 'Per-service inbound change stream cursors; row locks keep positions monotonically ordered within each service';
@@ -888,7 +874,6 @@ COMMENT ON COLUMN "message_retries"."created_at" IS 'Record creation time (times
 COMMENT ON TABLE "messages" IS 'Outbound message requests and immutable sending snapshots; deduplicated by service and idempotency key, with sensitive content envelope-encrypted';
 COMMENT ON COLUMN "messages"."content_purged_at" IS 'Irreversible content purge time (timestamptz); a non-null value prevents content reads while retaining business metadata';
 COMMENT ON COLUMN "messages"."id" IS 'Unique outbound message identifier';
-COMMENT ON COLUMN "messages"."product_id" IS 'Product that owns this message';
 COMMENT ON COLUMN "messages"."service_id" IS 'Service that submitted this message';
 COMMENT ON COLUMN "messages"."sending_domain_id" IS 'Sending domain used by this message';
 COMMENT ON COLUMN "messages"."request_id" IS 'Optional trace identifier of the API request accepting this message';
@@ -946,12 +931,6 @@ COMMENT ON COLUMN "pending_object_deletions"."available_at" IS 'Earliest deletio
 COMMENT ON COLUMN "pending_object_deletions"."created_at" IS 'Record creation time (timestamptz); defaults to the database transaction start time, now()';
 COMMENT ON COLUMN "pending_object_deletions"."last_error" IS 'Latest redacted object deletion failure description';
 COMMENT ON COLUMN "pending_object_deletions"."attempt_count" IS 'Non-negative deletion attempt count';
-COMMENT ON TABLE "products" IS 'Product tenants grouping services, domain grants and product-level suppression rules';
-COMMENT ON COLUMN "products"."id" IS 'Unique product identifier';
-COMMENT ON COLUMN "products"."name" IS 'Globally unique product name';
-COMMENT ON COLUMN "products"."status" IS 'Product status: active (available) or suspended (paused)';
-COMMENT ON COLUMN "products"."created_at" IS 'Record creation time (timestamptz); defaults to the database transaction start time, now()';
-COMMENT ON COLUMN "products"."updated_at" IS 'Last update time (timestamptz); explicitly maintained by business writes, defaults to now()';
 COMMENT ON TABLE "provider_accounts" IS 'Email provider accounts and non-secret configuration; authentication secrets are encrypted in a separate credentials table';
 COMMENT ON COLUMN "provider_accounts"."id" IS 'Unique provider account identifier';
 COMMENT ON COLUMN "provider_accounts"."type" IS 'Provider type: resend, ses, sendgrid, mailgun, postmark or mock';
@@ -1040,17 +1019,19 @@ COMMENT ON COLUMN "request_logs"."duration_ms" IS 'Request processing duration i
 COMMENT ON COLUMN "request_logs"."actor" IS 'Request actor identifier; null when unknown';
 COMMENT ON COLUMN "request_logs"."details" IS 'Request diagnostic JSON containing only permitted redacted information; Authorization, credentials and sensitive bodies are forbidden';
 COMMENT ON COLUMN "request_logs"."created_at" IS 'Record creation time (timestamptz); defaults to the database transaction start time, now()';
-COMMENT ON TABLE "routing_policies" IS 'Outbound routing policies selecting provider targets by product, service, sending domain and message category';
+COMMENT ON TABLE "routing_policies" IS 'Outbound routing policies selecting provider targets by service scope, sending domain and message category';
 COMMENT ON COLUMN "routing_policies"."id" IS 'Unique routing policy identifier';
 COMMENT ON COLUMN "routing_policies"."name" IS 'Routing policy display name';
-COMMENT ON COLUMN "routing_policies"."product_id" IS 'Product filter; null matches any product';
-COMMENT ON COLUMN "routing_policies"."service_id" IS 'Service filter; requires the owning product to be specified';
+COMMENT ON COLUMN "routing_policies"."service_scope" IS 'Service scope: all (current and future services) or selected (explicit membership)';
 COMMENT ON COLUMN "routing_policies"."sending_domain_id" IS 'Sending domain matched by this policy';
 COMMENT ON COLUMN "routing_policies"."message_category" IS 'Message category filter; null matches any category';
 COMMENT ON COLUMN "routing_policies"."priority" IS 'Policy priority; lower values take precedence';
 COMMENT ON COLUMN "routing_policies"."status" IS 'Policy status: active (enabled) or disabled';
 COMMENT ON COLUMN "routing_policies"."created_at" IS 'Record creation time (timestamptz); defaults to the database transaction start time, now()';
 COMMENT ON COLUMN "routing_policies"."updated_at" IS 'Last update time (timestamptz); explicitly maintained by business writes, defaults to now()';
+COMMENT ON TABLE "routing_policy_services" IS 'Explicit service membership of routing policies with selected service scope; provider targets remain shared by the policy';
+COMMENT ON COLUMN "routing_policy_services"."policy_id" IS 'Routing policy selecting this service';
+COMMENT ON COLUMN "routing_policy_services"."service_id" IS 'Service matched by the policy; composite primary key with policy_id';
 COMMENT ON TABLE "routing_targets" IS 'Provider sending targets within routing policies, including priority, weight, rate limits and circuit breaker state';
 COMMENT ON COLUMN "routing_targets"."id" IS 'Unique routing target identifier';
 COMMENT ON COLUMN "routing_targets"."policy_id" IS 'Owning routing policy identifier';
@@ -1089,11 +1070,11 @@ COMMENT ON COLUMN "service_domain_grants"."status" IS 'Grant status: active (eff
 COMMENT ON COLUMN "service_domain_grants"."revision" IS 'Grant revision used for permission update concurrency control';
 COMMENT ON COLUMN "service_domain_grants"."created_at" IS 'Record creation time (timestamptz); defaults to the database transaction start time, now()';
 COMMENT ON COLUMN "service_domain_grants"."updated_at" IS 'Last update time (timestamptz); explicitly maintained by business writes, defaults to now()';
-COMMENT ON TABLE "services" IS 'Calling services within a product; isolation boundary for API credentials, messages and send/receive permissions';
+COMMENT ON TABLE "services" IS 'Calling services; isolation boundary for API credentials, messages and send/receive permissions';
 COMMENT ON COLUMN "services"."id" IS 'Unique service identifier';
-COMMENT ON COLUMN "services"."product_id" IS 'Owning product identifier; each service belongs to exactly one product';
-COMMENT ON COLUMN "services"."name" IS 'Service name, unique within its product';
-COMMENT ON COLUMN "services"."suppression_management_allowed" IS 'Whether the service API may manage its product suppression rules; denied by default';
+COMMENT ON COLUMN "services"."name" IS 'Globally unique service name, compared case-insensitively';
+COMMENT ON COLUMN "services"."status" IS 'Service status: active (available) or suspended (paused)';
+COMMENT ON COLUMN "services"."suppression_management_allowed" IS 'Whether the service API may manage its own suppression rules; denied by default';
 COMMENT ON COLUMN "services"."configuration_revision" IS 'Positive configuration revision used for optimistic concurrency checks';
 COMMENT ON COLUMN "services"."created_at" IS 'Record creation time (timestamptz); defaults to the database transaction start time, now()';
 COMMENT ON COLUMN "services"."updated_at" IS 'Last update time (timestamptz); explicitly maintained by business writes, defaults to now()';
@@ -1143,11 +1124,11 @@ COMMENT ON COLUMN "submissions"."current_attempt_id" IS 'Current provider submis
 COMMENT ON COLUMN "submissions"."defer_count" IS 'Non-negative cumulative number of submission deferrals';
 COMMENT ON COLUMN "submissions"."created_at" IS 'Record creation time (timestamptz); defaults to the database transaction start time, now()';
 COMMENT ON COLUMN "submissions"."updated_at" IS 'Last update time (timestamptz); explicitly maintained by business writes, defaults to now()';
-COMMENT ON TABLE "suppressions" IS 'Email sending suppression rules at global, product and product-specific list scopes';
+COMMENT ON TABLE "suppressions" IS 'Email sending suppression rules at global, service and service-specific list scopes';
 COMMENT ON COLUMN "suppressions"."id" IS 'Unique suppression rule identifier';
-COMMENT ON COLUMN "suppressions"."scope_type" IS 'Scope type: global, product or list; determines required and forbidden product/list identifiers';
-COMMENT ON COLUMN "suppressions"."product_id" IS 'Owning product; must be null for global scope and present for product/list scopes';
-COMMENT ON COLUMN "suppressions"."list_id" IS 'Product-specific business list identifier; required only for list scope and null otherwise';
+COMMENT ON COLUMN "suppressions"."scope_type" IS 'Scope type: global, service or list; determines required and forbidden service/list identifiers';
+COMMENT ON COLUMN "suppressions"."service_id" IS 'Owning service; must be null for global scope and present for service/list scopes';
+COMMENT ON COLUMN "suppressions"."list_id" IS 'Service-specific business list identifier; required only for list scope and null otherwise';
 COMMENT ON COLUMN "suppressions"."email_normalized" IS 'Lowercase email address enforced by the database, unique within the active scope';
 COMMENT ON COLUMN "suppressions"."reason" IS 'Suppression reason, such as bounce, complaint, unsubscribe or manual action';
 COMMENT ON COLUMN "suppressions"."source" IS 'Suppression source identifier tracing provider events or manual actions';

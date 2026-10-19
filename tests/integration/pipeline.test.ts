@@ -25,8 +25,6 @@ import { db, query, transaction } from "@/platform/database";
 const identity = {
   serviceId: "svc_atlas_auth",
   serviceName: "Atlas Auth",
-  productId: "prd_atlas",
-  product: "Atlas",
   rateLimitPerMinute: 600
 };
 const request = createMessageSchema.parse({
@@ -248,16 +246,16 @@ describe("durable message pipeline", () => {
     } finally { release(); put.mockRestore(); }
   });
 
-  it("does not widen a local product suppression to global scope", async () => {
-    const email = `product-suppression-${crypto.randomUUID()}@example.net`;
+  it("does not widen a local service suppression to global scope", async () => {
+    const email = `service-suppression-${crypto.randomUUID()}@example.net`;
     suppressionEmails.push(email);
-    const suppressions = await Promise.all(Array.from({ length: 20 }, () => createSuppression({ productId: identity.productId, scope: "product", email, reason: "manual" })));
+    const suppressions = await Promise.all(Array.from({ length: 20 }, () => createSuppression({ serviceId: identity.serviceId, scope: "service", email, reason: "manual" })));
     expect(new Set(suppressions.map(item => item.id)).size).toBe(1);
     const accepted = await acceptMessage({ identity, idempotencyKey: crypto.randomUUID(), input: { ...request, to: [{ email }] } });
     messageIds.push(accepted.message.id);
     const delivery = (await query<{ id: string }>("SELECT id FROM deliveries WHERE message_id=$1", [accepted.message.id])).rows[0];
     await transaction(client => applyDeliveryEvent(transactionContext(client), delivery.id, { id: crypto.randomUUID(), type: "suppressed", occurredAt: new Date(), metadata: { source: "submission_policy" } }, `local-suppression:${crypto.randomUUID()}`));
-    expect((await query<{ scope_type: string }>("SELECT scope_type FROM suppressions WHERE email_normalized=$1", [email])).rows.map(row => row.scope_type)).toEqual(["product"]);
+    expect((await query<{ scope_type: string }>("SELECT scope_type FROM suppressions WHERE email_normalized=$1", [email])).rows.map(row => row.scope_type)).toEqual(["service"]);
   });
 
   it("stores large verified multipart receipts outside PostgreSQL and restores their binary values without verifying again", async () => {
@@ -335,7 +333,7 @@ describe("durable message pipeline", () => {
     }).success).toBe(false);
     expect(createSuppressionSchema.safeParse({
       email: "person@example.test",
-      scope: "product",
+      scope: "service",
       listId: "newsletter",
       reason: "manual"
     }).success).toBe(false);
@@ -343,14 +341,13 @@ describe("durable message pipeline", () => {
 
   it("applies routing defaults and rejects invalid admin resource relationships before configuration is stored", async () => {
     const suffix = crypto.randomUUID().replaceAll("-", "").slice(0, 12);
-    const foreignProductId = `prd_integrity_${suffix}`;
     const foreignServiceId = `svc_integrity_${suffix}`;
     const manualAccountId = `pa_manual_${suffix}`;
     const mailgunAccountId = `pa_mailgun_${suffix}`;
     let manualDomainId: string | undefined;
     const policyId = await createRoutingPolicy({
       name: `Integrity policy ${suffix}`,
-      serviceId: "svc_atlas_auth",
+      services: { mode: "selected", serviceIds: ["svc_atlas_auth"] },
       domainId: "sd_atlas",
       category: `integrity-${suffix}`,
       targets: [{ accountId: "pa_mock", identityId: "pi_atlas_mock" }]
@@ -358,18 +355,16 @@ describe("durable message pipeline", () => {
     let inboundRouteId: string | undefined;
     try {
       expect((await query<{
-        product_id: string;
-        service_id: string;
+        service_scope: string;
         sending_domain_id: string;
         policy_priority: number;
         target_priority: number;
         weight: number;
         rate_limit_per_minute: number
-      }>(`SELECT rp.product_id,rp.service_id,rp.sending_domain_id,rp.priority AS policy_priority,
+      }>(`SELECT rp.service_scope,rp.sending_domain_id,rp.priority AS policy_priority,
         rt.priority AS target_priority,rt.weight,rt.rate_limit_per_minute
         FROM routing_policies rp JOIN routing_targets rt ON rt.policy_id=rp.id WHERE rp.id=$1`, [policyId])).rows[0]).toEqual({
-        product_id: "prd_atlas",
-        service_id: "svc_atlas_auth",
+        service_scope: "selected",
         sending_domain_id: "sd_atlas",
         policy_priority: 100,
         target_priority: 100,
@@ -378,13 +373,11 @@ describe("durable message pipeline", () => {
       });
       await expect(createRoutingPolicy({
         name: `No targets ${suffix}`,
-        productId: "prd_atlas",
         domainId: "sd_atlas",
         targets: []
       }, "test-suite")).rejects.toThrow(/At least one routing target/);
       await expect(createRoutingPolicy({
         name: `Wrong account ${suffix}`,
-        productId: "prd_atlas",
         domainId: "sd_atlas",
         targets: [{ accountId: "pa_other", identityId: "pi_atlas_mock" }]
       }, "test-suite")).rejects.toThrow(/identity owned by its provider account/);
@@ -409,11 +402,10 @@ describe("durable message pipeline", () => {
       });
       await expect(createRoutingPolicy({
         name: `Cross-domain target ${suffix}`,
-        productId: "prd_atlas",
         domainId: "sd_atlas",
         targets: [{ accountId: manualAccountId, identityId: manualIdentity.id }]
       }, "test-suite")).rejects.toThrow(/selected sending domain/);
-      expect((await simulateRouting({ domainId: manualDomainId, productId: "prd_atlas", category: "security" })).candidates).toEqual([]);
+      expect((await simulateRouting({ domainId: manualDomainId, serviceId: "svc_atlas_auth", category: "security" })).candidates).toEqual([]);
       const mailgunCredential = sealSecret({ type: "mailgun", apiKey: "key-mailgun-test" }, mailgunAccountId, 1);
       await query("INSERT INTO provider_accounts(id,type,name,status,public_config) VALUES ($1,'mailgun',$2,'active',$3)", [mailgunAccountId, `Mailgun provider ${suffix}`, {
         region: "us",
@@ -434,24 +426,20 @@ describe("durable message pipeline", () => {
       await expect(addSuppression({
         email: `global-${suffix}@example.test`,
         scope: "global",
-        productId: "prd_atlas",
+        serviceId: "svc_atlas_auth",
         reason: "manual"
       }, "test-suite")).rejects.toThrow(/Global suppressions cannot target/);
 
-      await query("INSERT INTO products(id,name) VALUES ($1,$2)", [foreignProductId, "Integrity product"]);
-      await query("INSERT INTO services(id,product_id,name) VALUES ($1,$2,$3)", [foreignServiceId, foreignProductId, "Integrity service"]);
+      await query("INSERT INTO services(id,name) VALUES ($1,$2)", [foreignServiceId, "Integrity service"]);
       await expect(createInboundRoute({
         webhookEndpointId: "pwe_mock",
         domainId: "sd_atlas",
-        productId: "prd_atlas",
         serviceId: foreignServiceId,
       }, "test-suite")).rejects.toThrow(/receiving permission/);
-      await expect(createInboundRoute({webhookEndpointId:"pwe_mock",domainId:"sd_atlas",productId:"prd_atlas",serviceId:"svc_atlas_auth"},"test-suite")).rejects.toThrow(/duplicate/);
-      await expect(query("INSERT INTO routing_policies(id,name,product_id,service_id,sending_domain_id) VALUES ($1,$2,$3,$4,$5)", [
-        `rp_cross_${suffix}`, "Cross-product route", "prd_atlas", foreignServiceId, "sd_atlas"
-      ])).rejects.toThrow();
-      await expect(query("INSERT INTO suppressions(id,scope_type,product_id,email_normalized,reason,source) VALUES ($1,'global',$2,$3,'manual','test')", [
-        `sup_cross_${suffix}`, "prd_atlas", `scope-${suffix}@example.test`
+      await expect(createInboundRoute({webhookEndpointId:"pwe_mock",domainId:"sd_atlas",serviceId:"svc_atlas_auth"},"test-suite")).rejects.toThrow(/duplicate/);
+      await expect(query("INSERT INTO routing_policy_services(policy_id,service_id) VALUES ($1,$2)", [policyId, `svc_missing_${suffix}`])).rejects.toThrow();
+      await expect(query("INSERT INTO suppressions(id,scope_type,service_id,email_normalized,reason,source) VALUES ($1,'global',$2,$3,'manual','test')", [
+        `sup_cross_${suffix}`, "svc_atlas_auth", `scope-${suffix}@example.test`
       ])).rejects.toThrow();
     } finally {
       if (inboundRouteId) await query("DELETE FROM inbound_routes WHERE id=$1", [inboundRouteId]);
@@ -459,7 +447,7 @@ describe("durable message pipeline", () => {
       await query("DELETE FROM provider_accounts WHERE id=$1", [mailgunAccountId]);
       await query("DELETE FROM provider_accounts WHERE id=$1", [manualAccountId]);
       await query("DELETE FROM routing_policies WHERE id=$1", [policyId]);
-      await query("DELETE FROM products WHERE id=$1", [foreignProductId]);
+      await query("DELETE FROM services WHERE id=$1", [foreignServiceId]);
     }
   });
 
@@ -556,26 +544,26 @@ describe("durable message pipeline", () => {
     expect(attempt.status).toBe("unknown");
     expect(attempt.authorized).toBeTruthy()
   });
-  it("manages product-scoped suppressions", async () => {
+  it("manages service-scoped suppressions", async () => {
     const email = `suppression-${crypto.randomUUID()}@example.net`;
     suppressionEmails.push(email);
     const created = await createSuppression({
-      productId: identity.productId,
+      serviceId: identity.serviceId,
       email,
-      scope: "product",
+      scope: "service",
       reason: "integration_test"
     });
     expect(created.duplicate).toBe(false);
     expect((await createSuppression({
-      productId: identity.productId,
+      serviceId: identity.serviceId,
       email,
-      scope: "product",
+      scope: "service",
       reason: "integration_test"
     })).duplicate).toBe(true);
-    expect(await listSuppressions("prd_nova", email)).toHaveLength(0);
-    expect(await listSuppressions(identity.productId, email)).toHaveLength(1);
-    expect(await removeSuppression(created.id, "prd_nova")).toBeNull();
-    expect(await removeSuppression(created.id, identity.productId)).toEqual({ id: created.id });
+    expect(await listSuppressions("svc_missing", email)).toHaveLength(0);
+    expect(await listSuppressions(identity.serviceId, email)).toHaveLength(1);
+    expect(await removeSuppression(created.id, "svc_missing")).toBeNull();
+    expect(await removeSuppression(created.id, identity.serviceId)).toEqual({ id: created.id });
   });
   it("is safe under duplicate worker consumption", async () => {
     const accepted = await acceptMessage({
@@ -761,10 +749,10 @@ describe("durable message pipeline", () => {
       expect((await query<{
         status: string
       }>(`SELECT rt.status FROM routing_targets rt JOIN routing_policies rp ON rp.id=rt.policy_id
-          WHERE rp.product_id='prd_atlas' ORDER BY rp.priority,rt.priority LIMIT 1`)).rows[0].status).toBe("circuit_open")
+          WHERE rp.id='rp_atlas_security' ORDER BY rp.priority,rt.priority LIMIT 1`)).rows[0].status).toBe("circuit_open")
     } finally {
       await query(`UPDATE routing_targets SET status='active',circuit_open_until=NULL
-        WHERE policy_id IN (SELECT id FROM routing_policies WHERE product_id='prd_atlas')`)
+        WHERE policy_id IN (SELECT id FROM routing_policies WHERE id='rp_atlas_security')`)
     }
   });
   it("accepts, sanitizes, deduplicates, and routes inbound mail while outbound is disabled", async () => {

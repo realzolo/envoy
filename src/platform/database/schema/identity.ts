@@ -2,34 +2,17 @@ import { type PgTableExtraConfigValue, pgTable, unique, check, text, integer, ti
 import { sql } from "drizzle-orm";
 import { sendingDomains } from "./channels";
 
-export const products = pgTable("products", {
+export const services = pgTable("services", {
 	id: text().primaryKey().notNull(),
 	name: text().notNull(),
 	status: text().default('active').notNull(),
-	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
-	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
-}, (table): PgTableExtraConfigValue[] => [
-	unique("products_name_key").on(table.name),
-	check("products_status_check", sql`status = ANY (ARRAY['active'::text, 'suspended'::text])`),
-]);
-
-
-export const services = pgTable("services", {
-	id: text().primaryKey().notNull(),
-	productId: text("product_id").notNull(),
-	name: text().notNull(),
 	suppressionManagementAllowed: boolean("suppression_management_allowed").default(false).notNull(),
 	configurationRevision: integer("configuration_revision").default(1).notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table): PgTableExtraConfigValue[] => [
-	foreignKey({
-			columns: [table.productId],
-			foreignColumns: [products.id],
-			name: "services_product_id_fkey"
-		}).onDelete("cascade"),
-	unique("services_id_product_id_key").on(table.id, table.productId),
-	unique("services_product_id_name_key").on(table.productId, table.name),
+	check("services_status_check", sql`status IN ('active', 'suspended')`),
+	uniqueIndex("services_name_key").on(sql`lower(${table.name})`),
 	check("services_configuration_revision_check", sql`configuration_revision > 0`),
 ]);
 

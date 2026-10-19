@@ -4,9 +4,9 @@ import type { PoolClient } from "pg";
 /** SQL expressions passed here come from internal queries, never request input. */
 export function domainPermission(serviceId: string, domainId: string, permission: "send" | "receive") {
   return `EXISTS(SELECT 1 FROM service_domain_grants dg JOIN sending_domains dd ON dd.id=${domainId}
-    JOIN services ds ON ds.id=dg.service_id JOIN products dp ON dp.id=ds.product_id
+    JOIN services ds ON ds.id=dg.service_id
     WHERE dg.service_id=${serviceId} AND (dg.sending_domain_id=dd.id OR dg.sending_domain_id IS NULL)
-      AND dg.status='active' AND dg.${permission}_allowed AND dd.status='active' AND dp.status='active')`;
+      AND dg.status='active' AND dg.${permission}_allowed AND dd.status='active' AND ds.status='active')`;
 }
 
 /** Merge additive exact-domain and ALL grants into one discovery row per domain. */

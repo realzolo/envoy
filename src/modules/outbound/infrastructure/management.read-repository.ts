@@ -19,7 +19,7 @@ export function createManagementReadRepository(getRetryEligibility: typeof impor
         reference_id: string | null;
         subject: string;
         category: string;
-        product_name: string;
+        service_name: string;
         sender_snapshot: {
             fromName?: string;
             fromEmail: string;
@@ -27,12 +27,12 @@ export function createManagementReadRepository(getRetryEligibility: typeof impor
         external_message_id: string | null;
         current_attempt_id: string | null;
     };
-    const emailSelect = `SELECT d.id AS delivery_id,d.recipient_email,d.recipient_name,d.recipient_role,d.last_error,d.lifecycle_status,d.compliance_status,d.engagement_status,d.message_id,d.current_attempt_id,d.updated_at,m.accepted_at,to_char(m.accepted_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_at,m.reference_id,m.subject,m.message_category AS category,m.sender_snapshot,p.name AS product_name,da.external_message_id FROM deliveries d JOIN messages m ON m.id=d.message_id JOIN products p ON p.id=m.product_id LEFT JOIN submission_attempts da ON da.id=d.current_attempt_id`;
+    const emailSelect = `SELECT d.id AS delivery_id,d.recipient_email,d.recipient_name,d.recipient_role,d.last_error,d.lifecycle_status,d.compliance_status,d.engagement_status,d.message_id,d.current_attempt_id,d.updated_at,m.accepted_at,to_char(m.accepted_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_at,m.reference_id,m.subject,m.message_category AS category,m.sender_snapshot,s.name AS service_name,da.external_message_id FROM deliveries d JOIN messages m ON m.id=d.message_id JOIN services s ON s.id=m.service_id LEFT JOIN submission_attempts da ON da.id=d.current_attempt_id`;
     function mapEmail(row: EmailRow): EmailRecord {
         return {
             id: row.delivery_id, messageId: row.message_id, recipient: row.recipient_email,
             recipientName: row.recipient_name ?? undefined, recipientRole: row.recipient_role, lastError: row.last_error, subject: row.subject, category: row.category,
-            product: row.product_name, from: row.sender_snapshot.fromName ? `${row.sender_snapshot.fromName} <${row.sender_snapshot.fromEmail}>` : row.sender_snapshot.fromEmail,
+            service: row.service_name, from: row.sender_snapshot.fromName ? `${row.sender_snapshot.fromName} <${row.sender_snapshot.fromEmail}>` : row.sender_snapshot.fromEmail,
             status: (row.compliance_status === "suppressed" ? "suppressed" : row.lifecycle_status) as DeliveryStatus,
             createdAt: row.accepted_at.toISOString(), relativeTime: row.accepted_at.toISOString(),
             providerId: row.external_message_id ?? undefined, referenceId: row.reference_id ?? undefined
@@ -44,7 +44,7 @@ export function createManagementReadRepository(getRetryEligibility: typeof impor
         const bind = (value: unknown) => { values.push(value); return `$${values.length}`; };
         if (filters.q) {
             const key = bind(`%${filters.q.replace(/[\\%_]/g, "\\$&")}%`);
-            conditions.push(`(d.id ILIKE ${key} OR m.id ILIKE ${key} OR m.reference_id ILIKE ${key} OR d.recipient_email ILIKE ${key} OR m.subject ILIKE ${key} OR p.name ILIKE ${key})`);
+            conditions.push(`(d.id ILIKE ${key} OR m.id ILIKE ${key} OR m.reference_id ILIKE ${key} OR d.recipient_email ILIKE ${key} OR m.subject ILIKE ${key} OR s.name ILIKE ${key})`);
         }
         if (filters.status === "suppressed")
             conditions.push("d.compliance_status='suppressed'");

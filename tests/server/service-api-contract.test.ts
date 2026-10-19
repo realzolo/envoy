@@ -21,7 +21,7 @@ vi.mock("@/platform/database", async importOriginal => {
   };
 });
 vi.mock("@/platform/storage/object-store", () => ({ objectStore: () => ({ get: vi.fn().mockResolvedValue(Buffer.from("safe-attachment")) }) }));
-const identity = { serviceId: "svc", serviceName: "Test", productId: "prd", product: "Test", rateLimitPerMinute: 600 };
+const identity = { serviceId: "svc", serviceName: "Test", rateLimitPerMinute: 600 };
 beforeEach(() => {
   vi.mocked(transaction).mockImplementation(async work=>work({query} as never));
   vi.mocked(authenticateService).mockResolvedValue(identity);
@@ -116,7 +116,7 @@ describe("public API boundary", () => {
   });
   it.each([null, new Date("2026-10-17T08:00:00+08:00")])("distinguishes retained and purged content with UTC markers (%s)", async contentPurgedAt => {
     const at = new Date("2026-10-16T00:00:00Z");
-    vi.mocked(query).mockResolvedValueOnce({ rows: [{ id: "msg", content_policy: "normal", send_before: null, processing_state: "finished", outcome: "succeeded", counts: Object.fromEntries(["queued", "submitting", "accepted", "deferred", "delivered", "bounced", "failed", "unknown", "canceled", "suppressed"].map(key => [key,key === "delivered" ? 1 : 0])), request_id: "req", sender_snapshot: { fromEmail: "sender@example.net", fromName: "Sender" }, to_recipients: [{ email: "customer@example.net" }], cc_recipients: [], bcc_recipients: [], headers: {}, in_reply_to: null, references_ids: [], attachment_snapshot: [], product: "Test", category: "transactional", subject: contentPurgedAt ? "" : "Hello", html_body: null, text_body: contentPurgedAt ? null : "Hello", reply_to: [], metadata: {}, provider_tags: {}, recipient_count: 1, accepted_at: at, reference_id: null, content_purged_at: contentPurgedAt }] } as never)
+    vi.mocked(query).mockResolvedValueOnce({ rows: [{ id: "msg", content_policy: "normal", send_before: null, processing_state: "finished", outcome: "succeeded", counts: Object.fromEntries(["queued", "submitting", "accepted", "deferred", "delivered", "bounced", "failed", "unknown", "canceled", "suppressed"].map(key => [key,key === "delivered" ? 1 : 0])), request_id: "req", sender_snapshot: { fromEmail: "sender@example.net", fromName: "Sender" }, to_recipients: [{ email: "customer@example.net" }], cc_recipients: [], bcc_recipients: [], headers: {}, in_reply_to: null, references_ids: [], attachment_snapshot: [], service: "Test", category: "transactional", subject: contentPurgedAt ? "" : "Hello", html_body: null, text_body: contentPurgedAt ? null : "Hello", reply_to: [], metadata: {}, provider_tags: {}, recipient_count: 1, accepted_at: at, reference_id: null, content_purged_at: contentPurgedAt }] } as never)
       .mockResolvedValueOnce({ rows: [] } as never);
     const response = await getMessage(new Request("https://envoy.test/api/v1/messages/msg"), { params: Promise.resolve({ id: "msg" }) });
     const message = messageDetailSchema.parse(await response.json());

@@ -7,8 +7,7 @@ const parameters=await context.params;
 return adminMutation(request,async (body,actor)=>{
     const result = { id: await createRoutingPolicy({
       name:text(body,"name"),
-      productId:typeof body.productId==="string"?body.productId:undefined,
-      serviceId:typeof body.serviceId==="string"?body.serviceId:undefined,
+      services: body.services as {mode:"all"|"selected";serviceIds:string[]}|undefined,
       domainId:text(body,"domainId"),
       category:typeof body.category==="string"?body.category:undefined,
       priority:Number(body.priority??100),

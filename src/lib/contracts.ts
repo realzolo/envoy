@@ -64,14 +64,14 @@ export const retryMessageSchema = z.object({
 
 export const createSuppressionSchema = z.object({
   email: z.string().email(),
-  scope: z.enum(["product", "list"]).default("product"),
+  scope: z.enum(["service", "list"]).default("service"),
   listId: z.string().trim().min(1).max(160).optional(),
   reason: z.string().trim().min(1).max(240),
   expiresAt: z.string().datetime({ offset: true }).optional(),
 }).strict().refine(input => input.scope !== "list" || Boolean(input.listId), {
   message: "listId is required for list suppressions",
   path: ["listId"],
-}).refine(input => input.scope !== "product" || !input.listId, {
+}).refine(input => input.scope !== "service" || !input.listId, {
   message: "listId is allowed only for list suppressions",
   path: ["listId"],
 });
@@ -80,7 +80,7 @@ export type AcceptedMessage = {
   id: string;
   processingState: "queued";
   outcome: "pending";
-  product: string;
+  service: string;
   category: string;
   recipientCount: number;
   acceptedAt: string;
@@ -137,7 +137,7 @@ export const outboundFileSchema = z.object({ id: z.string(), fileName: z.string(
 export const outboundAttachmentSchema = z.object({ fileId: z.string(), fileName: z.string(), contentType: z.string(), size: z.number(), sha256: z.string(), disposition: z.enum(["attachment", "inline"]), contentId: nullableText });
 export const inboundSummarySchema = z.object({ id: z.string(), from: z.string(), to: z.array(z.string()), subject: z.string(), status: z.enum(["scanning", "ready", "rejected"]), attachmentCount: z.number(), authorDate: iso.nullable(), ingressReceivedAt: iso.nullable(), readyAt: iso.nullable(), receivedAt: iso });
 export const inboundDetailSchema = inboundSummarySchema.omit({ attachmentCount: true }).extend({ messageId: nullableText, envelopeRecipients: z.array(z.string()), replyTo: z.array(z.string()), inReplyTo: nullableText, references: z.array(z.string()), cc: z.array(z.string()), bcc: z.array(z.string()), html: nullableText, text: nullableText, contentPurgedAt: iso.nullable(), rejectionReason: nullableText, attachments: z.array(attachmentSchema) });
-export const acceptedMessageSchema = z.object({ id: z.string(), processingState: z.literal("queued"), outcome: z.literal("pending"), product: z.string(), category: z.string(), recipientCount: z.number(), acceptedAt: iso, referenceId: z.string().optional() });
+export const acceptedMessageSchema = z.object({ id: z.string(), processingState: z.literal("queued"), outcome: z.literal("pending"), service: z.string(), category: z.string(), recipientCount: z.number(), acceptedAt: iso, referenceId: z.string().optional() });
 export const messageCountsSchema = z.object(Object.fromEntries([...deliveryStatuses, "suppressed"].map(key => [key, z.number().int().nonnegative()])));
 export const messageSummarySchema = acceptedMessageSchema.extend({ contentPolicy: z.enum(["normal", "sensitive"]), sendBefore: iso.nullable(), processingState: z.enum(processingStates), outcome: z.enum(messageOutcomes), from: emailAddressSchema, subject: z.string(), referenceId: nullableText, counts: messageCountsSchema });
 export const messageDetailSchema = messageSummarySchema.extend({
@@ -150,7 +150,7 @@ export const messageDetailSchema = messageSummarySchema.extend({
 export const deliveryDetailSchema = deliverySummarySchema.extend({ referenceId: nullableText, acceptedAt: iso.nullable(), deliveredAt: iso.nullable(), attempts: z.array(submissionAttemptSchema), events: z.array(publicEventSchema) });
 export const problemDetailsSchema = z.object({ type: z.string(), title: z.string(), status: z.number(), detail: z.string(), code: z.string(), requestId: z.string(), errors: z.record(z.string(), z.array(z.string())).optional() });
 export const requestDiagnosticSchema = z.object({ requestId: z.string(), method: z.string(), path: z.string(), statusCode: z.number(), durationMs: z.number(), messageId: nullableText, createdAt: iso, problem: problemDetailsSchema.nullable() });
-export const suppressionSchema = z.object({ id: z.string(), scope: z.enum(["global", "product", "list"]), listId: nullableText, email: z.string(), reason: z.string(), source: z.string(), expiresAt: iso.nullable(), createdAt: iso });
+export const suppressionSchema = z.object({ id: z.string(), scope: z.enum(["global", "service", "list"]), listId: nullableText, email: z.string(), reason: z.string(), source: z.string(), expiresAt: iso.nullable(), createdAt: iso });
 
 // Public discovery contains configuration facts separately from transport evidence.
 const mailStateSchema=z.object({state:z.enum(["configured","unavailable"]),reasonCodes:z.array(z.string())});
@@ -166,7 +166,7 @@ export const mailDiscoverySchema=z.object({
 
 export const inboundReceivedEventSchema = z.object({
   id: z.string(), apiVersion: z.literal("2026-09-01"), type: z.literal("inbound.received"), occurredAt: iso,
-  data: z.object({ authorDate: iso.nullable(), ingressReceivedAt: iso.nullable(), readyAt: iso.nullable(), inboundMessageId: z.string(), productId: z.string(), serviceId: z.string(),
+  data: z.object({ authorDate: iso.nullable(), ingressReceivedAt: iso.nullable(), readyAt: iso.nullable(), inboundMessageId: z.string(), serviceId: z.string(),
     envelopeRecipients: z.array(z.string()), messageId: nullableText, replyTo: z.array(z.string()), inReplyTo: nullableText, references: z.array(z.string()),
     from: z.string(), to: z.array(z.string()), cc: z.array(z.string()), subject: z.string(),
     attachments: z.array(z.object({ fileName: z.string(), contentType: z.string(), size: z.number() })),

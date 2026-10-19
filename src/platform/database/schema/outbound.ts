@@ -1,14 +1,13 @@
 import { type PgTableExtraConfigValue, pgTable, unique, check, text, jsonb, integer, timestamp, foreignKey, boolean, index, primaryKey } from "drizzle-orm/pg-core"
 import { sql } from "drizzle-orm";
-import { products, services } from "./identity";
+import { services } from "./identity";
 import { providerAccounts, providerIdentities, providerWebhookEndpoints, sendingDomains } from "./channels";
 import { bytea } from "./types";
 
 export const routingPolicies = pgTable("routing_policies", {
 	id: text().primaryKey().notNull(),
 	name: text().notNull(),
-	productId: text("product_id"),
-	serviceId: text("service_id"),
+	serviceScope: text("service_scope").default('all').notNull(),
 	sendingDomainId: text("sending_domain_id").notNull(),
 	messageCategory: text("message_category"),
 	priority: integer().default(100).notNull(),
@@ -17,24 +16,22 @@ export const routingPolicies = pgTable("routing_policies", {
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table): PgTableExtraConfigValue[] => [
 	foreignKey({
-			columns: [table.serviceId, table.productId],
-			foreignColumns: [services.id, services.productId],
-			name: "routing_policies_service_id_product_id_fkey"
-		}).onDelete("cascade"),
-	foreignKey({
-			columns: [table.productId],
-			foreignColumns: [products.id],
-			name: "routing_policies_product_id_fkey"
-		}).onDelete("cascade"),
-	foreignKey({
 			columns: [table.sendingDomainId],
 			foreignColumns: [sendingDomains.id],
 			name: "routing_policies_sending_domain_id_fkey"
 		}).onDelete("restrict"),
 	check("routing_policies_status_check", sql`status = ANY (ARRAY['active'::text, 'disabled'::text])`),
-	check("routing_policies_check", sql`(service_id IS NULL) OR (product_id IS NOT NULL)`),
+	check("routing_policies_service_scope_check", sql`service_scope IN ('all', 'selected')`),
 ]);
 
+
+export const routingPolicyServices = pgTable("routing_policy_services", {
+ policyId: text("policy_id").notNull().references(() => routingPolicies.id, { onDelete: "cascade" }),
+ serviceId: text("service_id").notNull().references(() => services.id, { onDelete: "cascade" }),
+}, table => [
+ primaryKey({ columns: [table.policyId, table.serviceId] }),
+ index("routing_policy_services_service_idx").on(table.serviceId),
+]);
 
 export const routingTargets = pgTable("routing_targets", {
 	id: text().primaryKey().notNull(),
@@ -121,7 +118,6 @@ export const deliveries = pgTable("deliveries", {
 export const messages = pgTable("messages", {
 	contentPurgedAt: timestamp("content_purged_at", { withTimezone: true, mode: 'string' }),
 	id: text().primaryKey().notNull(),
-	productId: text("product_id").notNull(),
 	serviceId: text("service_id").notNull(),
 	sendingDomainId: text("sending_domain_id").notNull(),
 	requestId: text("request_id"),
@@ -154,11 +150,6 @@ export const messages = pgTable("messages", {
 }, (table): PgTableExtraConfigValue[] => [
 	index("messages_sensitive_expiry_idx").using("btree", table.sendBefore.asc().nullsLast()).where(sql`(sensitive_content IS NOT NULL)`),
 	index("messages_service_accepted_cursor").using("btree", table.serviceId.asc().nullsLast(), table.acceptedAt.desc().nullsFirst(), table.id.desc().nullsFirst()),
-	foreignKey({
-			columns: [table.productId],
-			foreignColumns: [products.id],
-			name: "messages_product_id_fkey"
-		}).onDelete("restrict"),
 	foreignKey({
 			columns: [table.serviceId],
 			foreignColumns: [services.id],

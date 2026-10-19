@@ -26,7 +26,7 @@ export const GET = serviceRoute(async (request, identity, context: { params: Pro
     inReplyTo: message.in_reply_to,
     references: message.references_ids,
     attachments: (message.content_policy === "sensitive" ? [] : message.attachment_snapshot).map(attachment => ({ fileId: attachment.fileId, fileName: attachment.fileName, contentType: attachment.contentType, size: attachment.size, sha256: attachment.sha256, disposition: attachment.disposition, contentId: attachment.contentId })),
-    product: message.product,
+    service: message.service,
     category: message.category,
     subject: message.subject,
     html: message.html_body,

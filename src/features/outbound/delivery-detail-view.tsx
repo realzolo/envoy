@@ -20,7 +20,7 @@ const statusColors: Record<DeliveryStatus, string> = {
 const retryReasons: Record<string, string> = {
   content_expired: "The saved message content has expired.",
   suppressed: "This recipient is suppressed or has a compliance restriction.",
-  configuration_disabled: "The product, sender authorization, or sending domain is unavailable.",
+  configuration_disabled: "The service, sender authorization, or sending domain is unavailable.",
   status_not_retryable: "The current delivery status does not allow a manual retry.",
   not_found: "This delivery is no longer available.",
 };
@@ -71,7 +71,7 @@ export function DeliveryDetailView({ detail, back = "/emails" }: { detail: Deliv
         <Descriptions className={styles.descriptions} column={{ xs: 1, md: 2, xl: 3 }} layout="vertical" tableLayout="fixed" data={[
           { label: "Recipient", value: `${detail.recipient} (${detail.recipientRole ?? "to"})` },
           { label: "From", value: detail.from },
-          { label: "Product / category", value: `${detail.product} / ${detail.category}` },
+          { label: "Service / category", value: `${detail.service} / ${detail.category}` },
           { label: "Accepted at", value: <LocalTime value={detail.createdAt} /> },
           { label: "Last updated", value: <LocalTime value={detail.updatedAt} /> },
           { label: "Lifecycle / engagement / compliance", value: `${labelForStatus(detail.lifecycle)} / ${labelForStatus(detail.engagement)} / ${labelForStatus(detail.compliance)}` },

@@ -45,14 +45,14 @@ export function createEventsService(dependencies: Omit<OutboundDependencies, "ev
     }
     async function applySuppression(client: OutboundRepositories, delivery: {
         recipient_email: string;
-        product_id: string;
+        service_id: string;
     }, event: DeliveryStateEvent, providerEvent: boolean) {
         if (event.type === "complained" || (event.type === "suppressed" && providerEvent) || (event.type === "bounced" && event.bounce?.classification === "hard")) {
             await client.events.insertGlobalSuppression({ suppressionId: createId("sup"), recipientEmail: delivery.recipient_email, reason: event.type === "bounced" ? "hard_bounce" : event.type });
         }
         else if (event.type === "unsubscribed") {
             const listId = typeof event.metadata.listId === "string" ? event.metadata.listId : null;
-            await client.events.insertUnsubscribeSuppression({ suppressionId: createId("sup"), scope: listId ? "list" : "product", productId: delivery.product_id, listId: listId, recipientEmail: delivery.recipient_email });
+            await client.events.insertUnsubscribeSuppression({ suppressionId: createId("sup"), scope: listId ? "list" : "service", serviceId: delivery.service_id, listId: listId, recipientEmail: delivery.recipient_email });
         }
         else if (event.type === "bounced" && event.bounce?.classification === "soft") {
             const count = await client.events.countRecentSoftBounces({ recipientEmail: delivery.recipient_email });
@@ -113,7 +113,7 @@ export function createEventsService(dependencies: Omit<OutboundDependencies, "ev
         await applySuppression(client, delivery, event, options.providerEvent ?? false);
         await enqueueCallbacks(client, delivery.service_id, eventId, event, {
             messageId: delivery.message_id, deliveryId: delivery.id, requestId: delivery.request_id, referenceId: delivery.reference_id,
-            recipient: delivery.recipient_email, recipientRole: delivery.recipient_role, product: delivery.product, category: delivery.category,
+            recipient: delivery.recipient_email, recipientRole: delivery.recipient_role, service: delivery.service, category: delivery.category,
             lifecycle: lifecycleTypes.includes(event.type) ? event.type : delivery.lifecycle_status, currentLifecycle: delivery.lifecycle_status, ...(options.attemptId ? { attemptId: options.attemptId } : {}),
             engagement: delivery.engagement_status, compliance: delivery.compliance_status, ...(error ? { diagnostic: error } : {}),
             ...(event.bounce ? { bounce: { ...event.bounce, message: event.bounce.message ? dependencies.safeDiagnostic(event.bounce.message) : undefined } } : {}),

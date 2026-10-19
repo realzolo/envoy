@@ -8,7 +8,7 @@ export const metadata: Metadata = {
     default: "Envoy",
     template: "%s · Envoy",
   },
-  description: "A unified email delivery control plane for every product.",
+  description: "A unified email delivery control plane for every service.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

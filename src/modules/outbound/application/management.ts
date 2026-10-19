@@ -14,8 +14,7 @@ export function createManagementService(dependencies: Omit<OutboundDependencies,
     }
     async function createRoutingPolicy(input: {
         name: string;
-        productId?: string;
-        serviceId?: string;
+        services?: { mode: "all" | "selected"; serviceIds?: string[] };
         domainId: string;
         category?: string;
         priority?: number;
@@ -30,20 +29,8 @@ export function createManagementService(dependencies: Omit<OutboundDependencies,
         const validated = routingPolicyInputSchema.parse(input);
         const id = existingId ?? createId("rp");
         await dependencies.unitOfWork.run(async (client) => {
-            let productId = validated.productId;
-            if (validated.serviceId) {
-                const service = (await client.management.findService({ serviceId: validated.serviceId })).rows[0];
-                if (!service)
-                    throw new Error("Service not found");
-                if (productId && productId !== service.product_id)
-                    throw new Error("The selected service does not belong to the selected product");
-                productId = service.product_id;
-            }
-            if (productId) {
-                const product = await client.management.findProduct({ productId: productId });
-                if (!product.rows[0])
-                    throw new Error("Product not found");
-            }
+            const services = await client.management.findServices({ serviceIds: validated.services.serviceIds });
+            if (services.rows.length !== validated.services.serviceIds.length) throw new Error("Selected services must exist");
             const domain = await client.management.findDomain({ domainId: validated.domainId });
             if (!domain.rows[0])
                 throw new Error("Sending domain not found");
@@ -64,17 +51,17 @@ export function createManagementService(dependencies: Omit<OutboundDependencies,
                 const current = await client.management.lockPolicy({ policyId: id });
                 if (!current.rowCount)
                     throw new Error("Routing policy not found");
-                await client.management.deleteTargets({ policyId: id });
-                await client.management.updatePolicy({ id: id, name: validated.name, productId: productId ?? null, serviceId: validated.serviceId ?? null, domainId: validated.domainId, category: validated.category ?? null, priority: validated.priority });
+                await client.management.deleteUnselectedTargets({ policyId: id, identityIds: validated.targets.map(target => target.identityId) });
+                await client.management.updatePolicy({ id: id, name: validated.name, serviceScope: validated.services.mode, domainId: validated.domainId, category: validated.category ?? null, priority: validated.priority });
             }
             else {
-                await client.management.insertPolicy({ id: id, name: validated.name, productId: productId ?? null, serviceId: validated.serviceId ?? null, domainId: validated.domainId, category: validated.category ?? null, priority: validated.priority });
+                await client.management.insertPolicy({ id: id, name: validated.name, serviceScope: validated.services.mode, domainId: validated.domainId, category: validated.category ?? null, priority: validated.priority });
             }
+            await client.management.replacePolicyServices({ policyId: id, serviceIds: validated.services.serviceIds });
             for (const target of validated.targets)
-                await client.management.insertTarget({ id: createId("rt"), policyId: id, accountId: target.accountId, identityId: target.identityId, priority: target.priority, weight: target.weight, rateLimit: target.rateLimit });
+                await client.management.saveTarget({ id: createId("rt"), policyId: id, accountId: target.accountId, identityId: target.identityId, priority: target.priority, weight: target.weight, rateLimit: target.rateLimit });
             await client.management.recordPolicyAudit({ actor: actor, policyId: id, details: {
-                    productId: productId ?? null,
-                    serviceId: validated.serviceId ?? null,
+                    services: validated.services,
                     domainId: validated.domainId,
                     category: validated.category ?? null,
                     priority: validated.priority,
@@ -89,12 +76,11 @@ export function createManagementService(dependencies: Omit<OutboundDependencies,
     }
     async function simulateRouting(input: {
         domainId: string;
-        productId?: string;
         serviceId?: string;
         category?: string;
     }) {
         const domainId = identifierSchema.parse(input.domainId);
-        const result = await dependencies.repositories.management.listSimulationCandidates({ domainId: domainId, productId: input.productId || null, serviceId: input.serviceId || null, category: input.category || null });
+        const result = await dependencies.repositories.management.listSimulationCandidates({ domainId: domainId, serviceId: input.serviceId || null, category: input.category || null });
         const candidates = result.rows.map(row => {
             const reasons = evaluateCandidate(row);
             return {
@@ -123,7 +109,6 @@ export function createManagementService(dependencies: Omit<OutboundDependencies,
         const result = await dependencies.messages.acceptMessage({
             identity: {
                 serviceId: row.service_id, serviceName: row.service_name,
-                productId: row.product_id, product: row.product_name,
                 rateLimitPerMinute: SERVICE_REQUESTS_PER_MINUTE,
             },
             idempotencyKey: `admin-test-${z.string().uuid().parse(input.idempotencyKey)}`,

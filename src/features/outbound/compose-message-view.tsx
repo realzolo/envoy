@@ -7,7 +7,7 @@ import { Button,Card,Result } from "@arco-design/web-react";
 import { IconArrowRight } from "@arco-design/web-react/icon";
 import { useRouter } from "next/navigation";
 
-type Service = { id: string; name: string; product: string; product_id: string };
+type Service = { id: string; name: string };
 
 export function ComposeMessageView({ services }: { services: Service[] }) {
   const router = useRouter();
@@ -18,7 +18,7 @@ export function ComposeMessageView({ services }: { services: Service[] }) {
         <Result
           extra={<Button href="/api-keys" icon={<IconArrowRight />} type="primary">Configure services</Button>}
           status="warning"
-          subTitle="Create a product and issue a service credential before sending a test message."
+          subTitle="Create a service and issue an API key before sending a test message."
           title="No active services"
         />
       </Card>}

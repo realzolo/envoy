@@ -1,6 +1,6 @@
 # Envoy
 
-Envoy is a provider-neutral email control plane and delivery data plane for internal products and services. Business
+Envoy is a provider-neutral email control plane and delivery data plane for internal services. Business
 services submit native From, To, Cc, Bcc, Reply-To, subject, final HTML/plain text, headers, and attachments. Envoy enforces sender authorization and owns provider
 routing, credentials, delivery state, inbound mail, suppressions, and canonical callbacks. Business content definitions,
 localization, and rendering remain in the calling service.
@@ -52,7 +52,7 @@ pnpm dev:all
 Open [http://localhost:6178](http://localhost:6178) and sign in with the `ENVOY_ADMIN_EMAIL` and
 `ENVOY_ADMIN_PASSWORD` values from `.env.local`.
 
-The database starts with no products, services, domains, providers, messages, or inbound mail. Create the first product
+The database starts with no services, domains, providers, messages, or inbound mail. Create the first service
 under **Services**, then configure real provider accounts and their write-only credentials under **Provider
 Accounts**. No provider key belongs in an environment file.
 
@@ -97,12 +97,12 @@ The service API is self-describing at `GET /api/v1` and `GET /api/v1/openapi.jso
 | `/inbound-changes` | Recover service-scoped inbound availability and content-purge events with a durable cursor |
 | `/{messages,inbound-messages,files}/{id}/content` | Idempotently clear owned content subject to active/shared-work guards |
 | `/inbound-messages`     | List and inspect sanitized inbound mail; download eligible private attachments     |
-| `/suppressions`         | Check, create, and remove product-owned suppressions                             |
+| `/suppressions`         | Check, create, and remove service-owned suppressions                             |
 | `/requests/{requestId}` | Query request outcomes, including validation and authorization failures before message creation |
 | `/files` | Receive private files, query asynchronous safety, retry recoverable processing and download approved bytes |
 | `/messages/{id}/events` | Inspect the complete delivery timeline |
 | `/messages/{id}/attempts` | Inspect submission attempts and structured diagnostics |
-| `/capabilities`         | Discover product/service, domain sending/receiving permissions, limits, configuration status and evidence                            |
+| `/capabilities`         | Discover service, domain sending/receiving permissions, limits, configuration status and evidence                            |
 
 Create a Service under **Services** with its sending/receiving permissions, optional Event callback URL, and advanced permissions. Creation issues the first API key; **Edit configuration** changes the same configuration for every key of that Service. **Manage credentials** handles key issuance, replacement, and revocation. A Service can use several domains; keys rotate without changing its identity or grants. Envoy does not configure business APPs or their mailbox purposes. The caller selects its complete From/Reply-To addresses within authorized domains and performs internal APP routing from trustworthy envelope recipients.
 
@@ -169,7 +169,7 @@ the advertised fixed-minute rate limit and return request IDs and rate-limit hea
 
 A live submission has a deadline. Duplicate work does not interrupt it; ambiguous outcomes stay unknown and never
 fail over automatically. Manual retry records explicit risk authorization without rewriting the original uncertainty,
-and cannot bypass current suppression or revoked sender-authorization or disabled product/domain checks. Deferred routing stops after 60
+and cannot bypass current suppression or revoked sender-authorization or suspended service or disabled domain checks. Deferred routing stops after 60
 cycles; reconciliation stops after 12 checks and leaves unknown outcomes for operator review.
 
 The console searches the full delivery history with URL filters and cursor pagination. CSV applies the same filters

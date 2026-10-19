@@ -1,6 +1,6 @@
 import type { ServiceIdentity } from '../contracts';
 
-export type AuthenticatedCredential = {credentialId:string;serviceId:string;serviceName:string;productId:string;productName:string;suppressionManagement:boolean};
+export type AuthenticatedCredential = {credentialId:string;serviceId:string;serviceName:string;suppressionManagement:boolean};
 export interface CredentialRepository {
   findActiveCredential(keyHash:string):Promise<AuthenticatedCredential|null>;
   recordUsage(credentialId:string):Promise<void>;
@@ -11,6 +11,6 @@ export function createServiceAuthenticator(repository:CredentialRepository,depen
     const credential=await repository.findActiveCredential(dependencies.hashKey(key));
     if(!credential)return null;
     void repository.recordUsage(credential.credentialId).catch(dependencies.reportUsageFailure);
-    return {serviceId:credential.serviceId,serviceName:credential.serviceName,productId:credential.productId,product:credential.productName,suppressionManagement:credential.suppressionManagement,rateLimitPerMinute:dependencies.requestsPerMinute};
+    return {serviceId:credential.serviceId,serviceName:credential.serviceName,suppressionManagement:credential.suppressionManagement,rateLimitPerMinute:dependencies.requestsPerMinute};
   };
 }

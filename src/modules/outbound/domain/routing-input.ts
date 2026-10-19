@@ -1,7 +1,6 @@
 import { z } from "zod";
 export const identifierSchema = z.string().trim().min(1).max(160);
 const categorySchema = z.string().trim().min(2).max(80).regex(/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/, "category must be a stable lowercase key");
-const optionalIdentifierSchema = z.preprocess(value => typeof value === "string" && value.trim() === "" ? undefined : value, identifierSchema.optional());
 const routingTargetSchema = z.object({
     accountId: identifierSchema,
     identityId: identifierSchema,
@@ -11,8 +10,14 @@ const routingTargetSchema = z.object({
 }).strict();
 export const routingPolicyInputSchema = z.object({
     name: z.string().trim().min(2).max(120),
-    productId: optionalIdentifierSchema,
-    serviceId: optionalIdentifierSchema,
+    services: z.object({
+        mode: z.enum(["all", "selected"]),
+        serviceIds: z.array(identifierSchema).max(100).default([]),
+    }).strict().superRefine((scope, context) => {
+        if (scope.mode === "selected" && scope.serviceIds.length === 0) context.addIssue({ code: "custom", path: ["serviceIds"], message: "Select at least one service" });
+        if (scope.mode === "all" && scope.serviceIds.length) context.addIssue({ code: "custom", path: ["serviceIds"], message: "All-services scope cannot contain service IDs" });
+        if (new Set(scope.serviceIds).size !== scope.serviceIds.length) context.addIssue({ code: "custom", path: ["serviceIds"], message: "Duplicate service" });
+    }).default({ mode: "all", serviceIds: [] }),
     domainId: identifierSchema,
     category: z.preprocess(value => typeof value === "string" && value.trim() === "" ? undefined : value, categorySchema.optional()),
     priority: z.coerce.number().int().min(0).max(1000000).default(100),

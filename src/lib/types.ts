@@ -19,7 +19,7 @@ export type EmailRecord = {
   lastError?: Record<string, unknown> | null;
   subject: string;
   category: string;
-  product: string;
+  service: string;
   from: string;
   status: DeliveryStatus;
   createdAt: string;

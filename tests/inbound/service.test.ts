@@ -3,7 +3,7 @@ import { createInboundService } from "@/modules/inbound/application/service";
 import type { InboundDependencies, InboundRepository } from "@/modules/inbound/application/ports";
 import type { InboundRoute } from "@/modules/inbound/contracts";
 
-const route: InboundRoute = { id: "ir_test", product_id: "prd_test", service_id: "svc_test", recipients: ["support@example.test"] };
+const route: InboundRoute = { id: "ir_test", service_id: "svc_test", recipients: ["support@example.test"] };
 const now = new Date("2026-09-24T00:00:00.000Z");
 const result = () => Promise.resolve({ rows: [], rowCount: 1 });
 const repository: InboundRepository = {

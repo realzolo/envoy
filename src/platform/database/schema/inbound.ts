@@ -1,6 +1,6 @@
 import { type PgTableExtraConfigValue, pgTable, unique, check, text, jsonb, timestamp, uniqueIndex, foreignKey, bigint, index, uuid, primaryKey } from "drizzle-orm/pg-core"
 import { sql } from "drizzle-orm";
-import { products, services } from "./identity";
+import { services } from "./identity";
 import { providerAccounts, providerWebhookEndpoints, sendingDomains } from "./channels";
 import { rawProviderEvents } from "./outbound";
 
@@ -8,7 +8,6 @@ export const inboundRoutes = pgTable("inbound_routes", {
 	id: text().primaryKey().notNull(),
 	providerWebhookEndpointId: text("provider_webhook_endpoint_id").notNull(),
 	sendingDomainId: text("sending_domain_id").notNull(),
-	productId: text("product_id").notNull(),
 	serviceId: text("service_id").notNull(),
 	status: text().default('active').notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
@@ -25,19 +24,9 @@ export const inboundRoutes = pgTable("inbound_routes", {
 			name: "inbound_routes_sending_domain_id_fkey"
 		}).onDelete("cascade"),
 	foreignKey({
-			columns: [table.productId],
-			foreignColumns: [products.id],
-			name: "inbound_routes_product_id_fkey"
-		}).onDelete("cascade"),
-	foreignKey({
 			columns: [table.serviceId],
 			foreignColumns: [services.id],
 			name: "inbound_routes_service_id_fkey"
-		}).onDelete("cascade"),
-	foreignKey({
-			columns: [table.serviceId, table.productId],
-			foreignColumns: [services.id, services.productId],
-			name: "inbound_routes_service_id_product_id_fkey"
 		}).onDelete("cascade"),
 	check("inbound_routes_status_check", sql`status = ANY (ARRAY['active'::text, 'disabled'::text])`),
 ]);
@@ -47,7 +36,6 @@ export const inboundMessages = pgTable("inbound_messages", {
 	contentPurgedAt: timestamp("content_purged_at", { withTimezone: true, mode: 'string' }),
 	id: text().primaryKey().notNull(),
 	inboundRouteId: text("inbound_route_id"),
-	productId: text("product_id"),
 	serviceId: text("service_id"),
 	providerAccountId: text("provider_account_id").notNull(),
 	rawProviderEventId: text("raw_provider_event_id"),
@@ -85,11 +73,6 @@ export const inboundMessages = pgTable("inbound_messages", {
 			columns: [table.inboundRouteId],
 			foreignColumns: [inboundRoutes.id],
 			name: "inbound_messages_inbound_route_id_fkey"
-		}).onDelete("set null"),
-	foreignKey({
-			columns: [table.productId],
-			foreignColumns: [products.id],
-			name: "inbound_messages_product_id_fkey"
 		}).onDelete("set null"),
 	foreignKey({
 			columns: [table.serviceId],

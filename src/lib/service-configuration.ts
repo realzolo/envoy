@@ -18,7 +18,6 @@ export const domainPermissionSchema = z.object({
 });
 
 export const serviceConfigurationSchema = z.object({
-  productId: identifier,
   serviceName: z.string().trim().min(2).max(120),
   sending: domainPermissionSchema,
   receiving: domainPermissionSchema,

@@ -8,9 +8,9 @@ const iso = (value: Date | null) => value?.toISOString() ?? null;
 
 /** Discovery separates permission, configured transport and historical evidence. */
 export function createDiscoveryService(repository:DiscoveryRepository){return async function discoverMail(identity: ServiceIdentity) {
-  const grants = (await repository.listDomainCapabilities(identity.productId,identity.serviceId)).rows;
-  const routes = (await repository.listInboundRoutes(identity.productId,identity.serviceId)).rows;
-  const callback = (await repository.findServiceCallback(identity.productId,identity.serviceId)).rows[0];
+  const grants = (await repository.listDomainCapabilities(identity.serviceId)).rows;
+  const routes = (await repository.listInboundRoutes(identity.serviceId)).rows;
+  const callback = (await repository.findServiceCallback(identity.serviceId)).rows[0];
   return {
     kind:"domain_permissions" as const,
     domains:grants.map(row=>{

@@ -6,29 +6,9 @@ import { createId } from "@/platform/ids";
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
 
-
-
 const identifierSchema = z.string().trim().min(1).max(160);
 
-
-
-
-
-
-
-
-
-
-
 const domainGrantInputSchema=z.object({serviceId:identifierSchema,domainId:identifierSchema.nullable(),send:z.boolean(),receive:z.boolean()}).strict().refine(v=>v.send||v.receive,{message:"Select sending or receiving"});
-
-
-
-
-
-
-
-
 
 import { ServiceConfigurationConflictError } from '../contracts';
 import type { ManagementRepository,ManagementUnitOfWork } from './ports';
@@ -37,20 +17,13 @@ export function createManagementService(repository:ManagementRepository,unitOfWo
 async function audit(actor: string, action: string, type: string, id: string | null, details: Record<string, unknown> = {}) {
   await repository.recordAudit({actor:actor,action:action,resourceType:type,resourceId:id,details:details})
 }
-async function createProduct(input: { name: string }, actor: string) {
-  const validated = z.object({
-    name: z.string().trim().min(2).max(120)
-  }).parse(input);
-  const id = createId("prd");
-  await unitOfWork.run(async client => {
-    await client.insertProduct({id:id,name:validated.name});
-    await client.recordProductCreation({actor:actor,resourceId:id,details:validated})
+async function toggleService(id: string, enabled: boolean, actor: string) {
+  return unitOfWork.run(async client => {
+    if (!(await client.lockServiceConfiguration({ id })).rowCount) throw new Error("Service not found");
+    await client.setServiceStatus({ id, status: enabled ? "active" : "suspended" });
+    await client.recordAudit({ actor, action: "service.toggle", resourceType: "service", resourceId: id, details: { enabled } });
+    await client.queuePermissionsChanged(id);
   });
-  return id
-}
-async function toggleProduct(id: string, enabled: boolean, actor: string) {
-  await repository.setProductStatus({id:id,status:enabled ? "active" : "suspended"});
-  await audit(actor, "product.toggle", "product", id, { enabled })
 }
 async function setDomainGrant(input:z.input<typeof domainGrantInputSchema>,actor:string){
   const v=domainGrantInputSchema.parse(input);
@@ -131,9 +104,8 @@ async function createService(input: unknown, actor: string) {
   const config = serviceConfigurationSchema.parse(input);
   const target = config.callbackUrl ? await validateCallbackUrl(config.callbackUrl) : null;
   return unitOfWork.run(async client => {
-    if (!(await client.lockActiveProduct({id:config.productId})).rowCount) throw new Error("Active product required");
     const serviceId = createId("svc");
-    await client.insertService({id:serviceId,productId:config.productId,name:config.serviceName,suppressionManagementAllowed:config.suppressionManagement});
+    await client.insertService({id:serviceId,name:config.serviceName,suppressionManagementAllowed:config.suppressionManagement});
     await replacePermissions(client, serviceId, config);
     const callback = await saveCallback(client, serviceId, config.serviceName, target ?? "");
     const credential = await issueKey(client, serviceId, actor);
@@ -148,8 +120,8 @@ async function updateService(serviceId: string, input: unknown, expectedRevision
   const callbackUrl = config.callbackUrl && config.callbackUrl !== callbackBefore?.url
     ? await validateCallbackUrl(config.callbackUrl) : config.callbackUrl;
   return unitOfWork.run(async client => {
-    const before = (await client.lockServiceConfiguration({id:serviceId,productId:config.productId})).rows[0];
-    if (!before) throw new Error("Active service not found in the selected product");
+    const before = (await client.lockServiceConfiguration({id:serviceId})).rows[0];
+    if (!before) throw new Error("Service not found");
     if (before.configuration_revision !== expectedRevision) throw new ServiceConfigurationConflictError();
     const previousGrants = (await client.findServiceDomainPermissions({serviceId:serviceId})).rows;
     const previousCallback = (await client.findServiceCallback({serviceId:serviceId})).rows[0] ?? null;
@@ -169,5 +141,5 @@ async function issueServiceCredential(serviceId: string, actor: string) {
   });
 }
 
-return {createProduct,toggleProduct,setDomainGrant,toggleDomainGrant,rotateServiceCredential,revokeServiceCredential,createService,updateService,issueServiceCredential};
+return {toggleService,setDomainGrant,toggleDomainGrant,rotateServiceCredential,revokeServiceCredential,createService,updateService,issueServiceCredential};
 }

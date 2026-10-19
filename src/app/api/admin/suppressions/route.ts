@@ -7,8 +7,8 @@ return adminMutation(request,async (body,actor)=>{let result:unknown=null;let st
         result = {
           id: await addSuppression({
             email: text(body, "email"),
-            scope: text(body, "scope") as "global" | "product" | "list",
-            productId: typeof body.productId === "string" ? body.productId : undefined,
+            scope: text(body, "scope") as "global" | "service" | "list",
+            serviceId: typeof body.serviceId === "string" ? body.serviceId : undefined,
             listId: typeof body.listId === "string" ? body.listId : undefined,
             reason: text(body, "reason"),
             expiresAt: typeof body.expiresAt === "string" ? body.expiresAt : undefined

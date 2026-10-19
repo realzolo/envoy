@@ -115,7 +115,6 @@ export function createRoutingRepository(client: Pick<PoolClient, "query">): Rout
         },
         listRoutingCandidates(input: {
             sendingDomainId: string;
-            productId: string;
             serviceId: string;
             messageCategory: string;
         }) {
@@ -130,9 +129,9 @@ export function createRoutingRepository(client: Pick<PoolClient, "query">): Rout
         FROM submission_attempts a JOIN submission_deliveries sm ON sm.submission_id=a.submission_id
         WHERE a.provider_account_id=pa.id AND a.status IN ('submitting','accepted','reconciled','unknown','reconciling')) usage
       WHERE rp.status='active' AND rp.sending_domain_id=$1 AND pi.sending_domain_id=$1 AND pi.provider_account_id=pa.id
-        AND (rp.product_id IS NULL OR rp.product_id=$2) AND (rp.service_id IS NULL OR rp.service_id=$3)
-        AND (rp.message_category IS NULL OR rp.message_category=$4)
-      ORDER BY rp.priority,rt.priority,rt.id`, [input.sendingDomainId, input.productId, input.serviceId, input.messageCategory]);
+        AND (rp.service_scope='all' OR EXISTS(SELECT 1 FROM routing_policy_services rs WHERE rs.policy_id=rp.id AND rs.service_id=$2))
+        AND (rp.message_category IS NULL OR rp.message_category=$3)
+      ORDER BY rp.priority,rt.priority,rt.id`, [input.sendingDomainId, input.serviceId, input.messageCategory]);
         },
         listFailedAccounts(input: {
             submissionId: string;

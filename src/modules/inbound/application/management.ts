@@ -3,7 +3,7 @@ import type { UnitOfWork } from "@/platform/transactions";
 import type { ProviderType } from "@/integrations/providers/contracts";
 
 const identifier = z.string().trim().min(1).max(160);
-const routeInput = z.object({ webhookEndpointId: identifier, domainId: identifier, productId: identifier, serviceId: identifier }).strict();
+const routeInput = z.object({ webhookEndpointId: identifier, domainId: identifier, serviceId: identifier }).strict();
 type RouteInput = z.input<typeof routeInput>;
 export interface InboundManagementRepository {
   resetRaw(id: string): Promise<boolean>;

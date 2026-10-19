@@ -11,7 +11,7 @@ export function csvCell(value: unknown) {
 export async function GET(request: Request) {
   if (!await getAdminSession()) return Response.json({ error: "Unauthorized" }, { status: 401 });
   const { records, nextCursor } = await listEmailPage({ ...messageFilters(new URL(request.url).searchParams), cursor: undefined }, 10_000);
-  const lines = [["Delivery ID", "Message ID", "Recipient", "Subject", "Product", "Category", "From", "Status", "Accepted at", "Provider message ID", "Reference ID"].map(csvCell).join(","), ...records.map(item => [item.id, item.messageId, item.recipient, item.subject, item.product, item.category, item.from, item.status, item.createdAt, item.providerId, item.referenceId].map(csvCell).join(","))];
+  const lines = [["Delivery ID", "Message ID", "Recipient", "Subject", "Service", "Category", "From", "Status", "Accepted at", "Provider message ID", "Reference ID"].map(csvCell).join(","), ...records.map(item => [item.id, item.messageId, item.recipient, item.subject, item.service, item.category, item.from, item.status, item.createdAt, item.providerId, item.referenceId].map(csvCell).join(","))];
   return new Response(lines.join("\n"), {
     headers: {
       "content-type": "text/csv; charset=utf-8",

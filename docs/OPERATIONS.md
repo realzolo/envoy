@@ -64,7 +64,7 @@ Envoy; inspect the dry-run before applying.
 
 Configure these resources in Envoy, not in each business system:
 
-1. **Services**: create a Product and Service per required isolation boundary. Configure mail permissions and the optional Event callback URL in the same form; creation issues the first key. Give the
+1. **Services**: create a Service per required isolation boundary. Configure mail permissions and the optional Event callback URL in the same form; creation issues the first key. Give the
    caller the Envoy URL and service key; do not share an administrator session or provider credentials.
 2. **Provider Accounts / Domains**: associate provider identities and retrieve/present available DNS records.
    The domain administrator publishes them on the actual DNS platform. Refresh the result in Envoy. Provider-specific

@@ -11,7 +11,6 @@ describe("admin data queries", () => {
       expect.objectContaining({
         id: "cb_atlas_local",
         service_id: "svc_atlas_auth",
-        product_id: "prd_atlas"
       })
     ]));
   });
@@ -24,8 +23,8 @@ describe("historical delivery search", () => {
   it("searches beyond the old 200-row limit and pages tied timestamps without duplicates", async () => {
     const prefix=`history_${crypto.randomUUID()}`;
     try {
-      await query(`INSERT INTO messages(id,product_id,service_id,sending_domain_id,sender_snapshot,idempotency_key,payload_hash,reference_id,recipient_count,subject,text_body,message_category)
-        SELECT $1||'_'||n,'prd_atlas','svc_atlas_auth','sd_atlas',$2,$1||'_'||n,'hash',$1,1,'Historical search','body','security' FROM generate_series(1,225) n`, [prefix,{fromName:"Original sender",fromEmail:"original@mail.atlas.test",domainId:"sd_atlas"}]);
+      await query(`INSERT INTO messages(id,service_id,sending_domain_id,sender_snapshot,idempotency_key,payload_hash,reference_id,recipient_count,subject,text_body,message_category)
+        SELECT $1||'_'||n,'svc_atlas_auth','sd_atlas',$2,$1||'_'||n,'hash',$1,1,'Historical search','body','security' FROM generate_series(1,225) n`, [prefix,{fromName:"Original sender",fromEmail:"original@mail.atlas.test",domainId:"sd_atlas"}]);
       await query(`INSERT INTO deliveries(id,message_id,recipient_email,recipient_role,lifecycle_status) SELECT id||'_d',id,'history@example.test','to',CASE WHEN id=$1||'_1' THEN 'failed' ELSE 'delivered' END FROM messages WHERE reference_id=$1`,[prefix]);
       const ids=new Set<string>();
       let cursor: string | undefined;
@@ -87,13 +86,13 @@ describe("native admin mail", () => {
   it("loads active services for composition and sending permissions for credential management", async () => {
     const composer = await messageComposerData();
     expect(composer.services).toEqual(expect.arrayContaining([expect.objectContaining({
-      id: "svc_atlas_auth", product_id: "prd_atlas",
+      id: "svc_atlas_auth",
     })]));
     const access = await adminData("api-keys");
     expect(access.services).toEqual(expect.arrayContaining([expect.objectContaining({ id: "svc_atlas_auth" })]));
     expect(access.domains).toEqual(expect.arrayContaining([expect.objectContaining({ id: "sd_atlas" })]));
     expect(access.grants).toEqual(expect.arrayContaining([expect.objectContaining({
-      product_id: "prd_atlas", service_id: "svc_atlas_auth", domain: "mail.atlas.test",
+      service_id: "svc_atlas_auth", domain: "mail.atlas.test",
     })]));
   });
 });

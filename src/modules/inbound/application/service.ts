@@ -60,7 +60,7 @@ async function persistRoutedInbound(input: InboundInput, scope: string, routes: 
   if (duplicate && duplicate.status !== "scanning") return duplicate.id;
   let id = duplicate?.id ?? dependencies.id("inb");
   const recipients = message.to.map(address);
-  const inserted = duplicate ? null : await dependencies.repository.insertCopy({ id: id, routeId: route.id, productId: route.product_id, serviceId: route.service_id, accountId: input.providerAccountId, rawEventId: input.rawEventId, externalId: message.externalMessageId, messageId: message.messageId ?? null, from: address(message.from), to: recipients, cc: message.cc.map(address), bcc: message.bcc.map(address), subject: message.subject, html: message.html ? dependencies.sanitizeHtml(message.html) : null, text: message.text ?? null, receivedAt: input.ingressReceivedAt, scope: scope, envelope: message.envelopeRecipients, replyTo: message.replyTo??[], inReplyTo: message.inReplyTo??null, references: message.references??[] });
+  const inserted = duplicate ? null : await dependencies.repository.insertCopy({ id: id, routeId: route.id, serviceId: route.service_id, accountId: input.providerAccountId, rawEventId: input.rawEventId, externalId: message.externalMessageId, messageId: message.messageId ?? null, from: address(message.from), to: recipients, cc: message.cc.map(address), bcc: message.bcc.map(address), subject: message.subject, html: message.html ? dependencies.sanitizeHtml(message.html) : null, text: message.text ?? null, receivedAt: input.ingressReceivedAt, scope: scope, envelope: message.envelopeRecipients, replyTo: message.replyTo??[], inReplyTo: message.inReplyTo??null, references: message.references??[] });
   if (inserted && !inserted.rowCount) {
     const existing = (await dependencies.repository.findConcurrentCopy({ accountId: input.providerAccountId, externalId: message.externalMessageId, scope: scope })).rows[0];
     if (!existing) throw new Error("Inbound message was not persisted");
@@ -130,7 +130,7 @@ async function persistRoutedInbound(input: InboundInput, scope: string, routes: 
             authorDate: authorDate(message.authorDate),
             ingressReceivedAt: receivedAt.toISOString(),
             readyAt: completed.rows[0].ready_at.toISOString(),
-            productId: route.product_id,
+
             serviceId: route.service_id,
             envelopeRecipients: message.envelopeRecipients,
             messageId: message.messageId ?? null,
