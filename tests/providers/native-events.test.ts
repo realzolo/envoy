@@ -38,7 +38,7 @@ describe("native provider protocol facts", () => {
   it("uses SES event time and enumerates bounced recipients with individual diagnostics", async () => {
     const events = await providerRegistry("ses").webhook.normalize(verified({ Type: "Notification", Message: JSON.stringify({ eventType: "Bounce", mail: { messageId: "m", timestamp: "2026-10-17T08:00:00Z", destination: ["a@example.net", "b@example.net"] }, bounce: { bounceType: "Permanent", timestamp: "2026-10-17T08:00:02Z", bouncedRecipients: [{ emailAddress: "a@example.net", status: "5.1.1" }, { emailAddress: "b@example.net", status: "5.2.1" }] } }) }), contexts.ses);
     expect(events.map(event => event.recipient)).toEqual(["a@example.net", "b@example.net"]);
-    expect(events[0]).toMatchObject({ occurredAt: new Date("2026-10-17T08:00:02Z"), bounce: { classification: "hard", code: "5.1.1" } });
+    expect(events[0]).toMatchObject({ occurredAt: new Date("2026-10-17T08:00:02Z"), bounce: { classification: "HARD", code: "5.1.1" } });
     expect(events[0].id).not.toBe(events[1].id);
   });
   it.each([["Open", "open", "opened"], ["Click", "click", "clicked"]])("keeps SES %s message scoped when a group member is unidentified", async (eventType, detailsKey, type) => {
@@ -59,10 +59,10 @@ describe("native provider protocol facts", () => {
     const input = verified({ RecordType: "Bounce", ID: 1, MessageID: "m", Type: "HardBounce", TypeCode: 1, Email: "a@example.net", BouncedAt: "2026-10-17T08:00:02Z" });
     const adapter = providerRegistry("postmark");
     const events = await adapter.webhook.normalize(input, contexts.postmark);
-    expect(events[0]).toMatchObject({ recipient: "a@example.net", bounce: { classification: "hard" }, occurredAt: new Date("2026-10-17T08:00:02Z") });
+    expect(events[0]).toMatchObject({ recipient: "a@example.net", bounce: { classification: "HARD" }, occurredAt: new Date("2026-10-17T08:00:02Z") });
     expect(await adapter.webhook.normalize(input, contexts.postmark)).toEqual(events);
   });
-  it.each([["permanent", "bounced", "hard"], ["temporary", "deferred", "soft"]])("maps Mailgun %s delivery failure", async (severity, type, classification) => {
+  it.each([["permanent", "bounced", "HARD"], ["temporary", "deferred", "SOFT"]])("maps Mailgun %s delivery failure", async (severity, type, classification) => {
     const events = await providerRegistry("mailgun").webhook.normalize(verified({ "event-data": { id: "e", event: "failed", severity, timestamp: 1700000000, recipient: "a@example.net", message: { headers: { "message-id": "m" } }, "delivery-status": { code: 550, message: "Mailbox unavailable" } } }), contexts.mailgun);
     expect(events[0]).toMatchObject({ id: "e", type, recipient: "a@example.net", bounce: { classification, code: "550" } });
   });

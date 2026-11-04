@@ -286,7 +286,7 @@ describe("private attachment safety lifecycle",()=>{
   const send=vi.spyOn(providerRegistry("mock").sender,"send");
   try {
    await processDelivery(job(id));expect(send).not.toHaveBeenCalled();
-   expect((await query("SELECT status,outcome_determinate,error_code FROM submission_attempts WHERE submission_id=$1",[id])).rows[0])
+   expect((await query("SELECT status,outcome_determinate,diagnostic->>'code' AS error_code FROM submission_attempts WHERE submission_id=$1",[id])).rows[0])
     .toMatchObject({status:"failed",outcome_determinate:true,error_code:"LOCAL_PREPARATION_FAILED"});
   }finally{get.mockRestore();send.mockRestore();}
  });

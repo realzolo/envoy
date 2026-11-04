@@ -1,3 +1,4 @@
+import { projectDeliverySnapshot } from "@/modules/outbound/public";
 import { serviceRoute, apiProblem } from "@/server/service-api";
 import { getMessage } from "@/modules/outbound/public";
 
@@ -39,17 +40,9 @@ export const GET = serviceRoute(async (request, identity, context: { params: Pro
     acceptedAt: message.accepted_at.toISOString(),
     referenceId: message.reference_id,
     deliveries: message.deliveries.map(delivery => ({
-      id: delivery.id,
-      recipient: delivery.recipient_email,
-      recipientName: delivery.recipient_name,
-      recipientRole: delivery.recipient_role,
-      lastError: delivery.last_error,
-      lifecycle: delivery.lifecycle_status,
-      engagement: delivery.engagement_status,
-      compliance: delivery.compliance_status,
-      updatedAt: delivery.updated_at.toISOString(),
-      acceptedAt: delivery.accepted_at?.toISOString() ?? null,
-      deliveredAt: delivery.delivered_at?.toISOString() ?? null
+      ...projectDeliverySnapshot(delivery), recipient: delivery.recipient_email,
+      recipientName: delivery.recipient_name, recipientRole: delivery.recipient_role,
+      engagement: delivery.engagement_status, compliance: delivery.compliance_status,
     })),
   });
 });

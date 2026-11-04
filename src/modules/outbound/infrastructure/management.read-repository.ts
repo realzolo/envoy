@@ -1,3 +1,6 @@
+import { publicEvent } from "./delivery.read-repository";
+import { projectDeliverySnapshot } from "./diagnostic.projection";
+import { projectDiagnostic } from "@/contracts/mail-diagnostics";
 import type {DeliveryDetailDto,DeliveryAttemptDto,DeliveryEventDto,MessageContentDto} from '@/modules/admin/contracts';
 import type { DeliveryStatus, EmailRecord } from '@/lib/types';
 import type { MessageFilters } from '@/modules/admin/contracts';
@@ -9,7 +12,7 @@ export function createManagementReadRepository(getRetryEligibility: typeof impor
         recipient_email: string;
         recipient_name: string | null;
         recipient_role: "to" | "cc" | "bcc";
-        last_error: Record<string, unknown> | null;
+        diagnostic: Record<string, unknown> | null;
         lifecycle_status: string;
         compliance_status: string;
         engagement_status: string;
@@ -27,11 +30,11 @@ export function createManagementReadRepository(getRetryEligibility: typeof impor
         external_message_id: string | null;
         current_attempt_id: string | null;
     };
-    const emailSelect = `SELECT d.id AS delivery_id,d.recipient_email,d.recipient_name,d.recipient_role,d.last_error,d.lifecycle_status,d.compliance_status,d.engagement_status,d.message_id,d.current_attempt_id,d.updated_at,m.accepted_at,to_char(m.accepted_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_at,m.reference_id,m.subject,m.message_category AS category,m.sender_snapshot,s.name AS service_name,da.external_message_id FROM deliveries d JOIN messages m ON m.id=d.message_id JOIN services s ON s.id=m.service_id LEFT JOIN submission_attempts da ON da.id=d.current_attempt_id`;
+    const emailSelect = `SELECT d.*,d.accepted_at AS provider_accepted_at,d.id AS delivery_id,d.recipient_email,d.recipient_name,d.recipient_role,d.diagnostic,d.lifecycle_status,d.compliance_status,d.engagement_status,d.message_id,d.current_attempt_id,d.updated_at,m.accepted_at,to_char(m.accepted_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_at,m.reference_id,m.subject,m.message_category AS category,m.sender_snapshot,s.name AS service_name,da.external_message_id FROM deliveries d JOIN messages m ON m.id=d.message_id JOIN services s ON s.id=m.service_id LEFT JOIN submission_attempts da ON da.id=d.current_attempt_id`;
     function mapEmail(row: EmailRow): EmailRecord {
         return {
             id: row.delivery_id, messageId: row.message_id, recipient: row.recipient_email,
-            recipientName: row.recipient_name ?? undefined, recipientRole: row.recipient_role, lastError: row.last_error, subject: row.subject, category: row.category,
+            recipientName: row.recipient_name ?? undefined, recipientRole: row.recipient_role, diagnostic: projectDiagnostic(row.diagnostic), transport: projectDeliverySnapshot(row as unknown as Record<string,unknown>), subject: row.subject, category: row.category,
             service: row.service_name, from: row.sender_snapshot.fromName ? `${row.sender_snapshot.fromName} <${row.sender_snapshot.fromEmail}>` : row.sender_snapshot.fromEmail,
             status: (row.compliance_status === "suppressed" ? "suppressed" : row.lifecycle_status) as DeliveryStatus,
             createdAt: row.accepted_at.toISOString(), relativeTime: row.accepted_at.toISOString(),
@@ -76,7 +79,7 @@ export function createManagementReadRepository(getRetryEligibility: typeof impor
         if (!row)
             return null;
         const [attempts, events, content, eligibility] = await Promise.all([
-            query<DeliveryAttemptDto>(`SELECT da.id,da.submission_id,da.attempt_number,da.status,da.outcome_determinate,da.external_message_id,da.rfc_message_id,da.error_category,da.error_code,da.error_message,da.diagnostic,da.routing_snapshot,da.started_at,da.finished_at,da.retry_authorized_at,da.retry_authorized_by,da.reconciliation_count,da.reconcile_after,pa.name AS provider_account,pa.type AS provider_type FROM submission_attempts da JOIN submission_deliveries sd ON sd.submission_id=da.submission_id JOIN provider_accounts pa ON pa.id=da.provider_account_id WHERE sd.delivery_id=$1 ORDER BY da.attempt_number DESC`, [id]),
+            query<DeliveryAttemptDto>(`SELECT da.id,da.submission_id,da.attempt_number,da.status,da.outcome_determinate,da.external_message_id,da.rfc_message_id,da.diagnostic,da.routing_snapshot,da.started_at,da.finished_at,da.retry_authorized_at,da.retry_authorized_by,da.reconciliation_count,da.reconcile_after,pa.name AS provider_account,pa.type AS provider_type FROM submission_attempts da JOIN submission_deliveries sd ON sd.submission_id=da.submission_id JOIN provider_accounts pa ON pa.id=da.provider_account_id WHERE sd.delivery_id=$1 ORDER BY da.attempt_number DESC`, [id]),
             query<DeliveryEventDto>(`SELECT id,event_type,occurred_at,canonical_payload,scope FROM (
       SELECT id,event_type,occurred_at,canonical_payload,'recipient' AS scope FROM delivery_events WHERE delivery_id=$1
       UNION ALL SELECT e.id,e.event_type,e.occurred_at,e.canonical_payload,'submission' AS scope FROM submission_events e JOIN submission_deliveries sd ON sd.submission_id=e.submission_id WHERE sd.delivery_id=$1
@@ -95,7 +98,7 @@ export function createManagementReadRepository(getRetryEligibility: typeof impor
         return {
             ...mapEmail(row), lifecycle: row.lifecycle_status, engagement: row.engagement_status,
             compliance: row.compliance_status, updatedAt: row.updated_at.toISOString(),
-            attempts: attempts.rows, events: events.rows,
+            attempts: attempts.rows.map(attempt=>({...attempt,diagnostic:projectDiagnostic(attempt.diagnostic)})), events: events.rows.map(event=>({...event,canonical_payload:publicEvent({id:event.id,message_id:row.message_id,delivery_id:event.scope === "recipient" ? id : null,event_type:event.event_type,occurred_at:new Date(event.occurred_at),canonical_payload:event.canonical_payload as Record<string,unknown>}).data})),
             content:safeContent, retry: eligibility
         };
     }

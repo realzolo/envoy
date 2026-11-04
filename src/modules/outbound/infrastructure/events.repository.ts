@@ -66,7 +66,7 @@ export function createEventsRepository(client: Pick<PoolClient, "query">): Event
         }) {
             return client.query<{
                 count: string;
-            }>("SELECT count(*) FROM delivery_events de JOIN deliveries d ON d.id=de.delivery_id WHERE lower(d.recipient_email)=lower($1) AND de.event_type='bounced' AND de.canonical_payload#>>'{bounce,classification}'='soft' AND de.occurred_at>now()-interval '30 days'", [input.recipientEmail]);
+            }>("SELECT count(*) FROM delivery_events de JOIN deliveries d ON d.id=de.delivery_id WHERE lower(d.recipient_email)=lower($1) AND de.event_type='bounced' AND de.canonical_payload#>>'{bounce,classification}'='SOFT' AND de.occurred_at>now()-interval '30 days'", [input.recipientEmail]);
         },
         insertSoftBounceSuppression(input: {
             suppressionId: string;
@@ -108,7 +108,7 @@ export function createEventsRepository(client: Pick<PoolClient, "query">): Event
                 externalMessageId?: string | undefined;
                 recipient?: string | undefined;
                 bounce?: {
-                    classification: "hard" | "soft";
+                    classification: "HARD" | "SOFT" | "UNKNOWN";
                     code?: string;
                     message?: string;
                 } | undefined;
@@ -174,12 +174,15 @@ export function createEventsRepository(client: Pick<PoolClient, "query">): Event
             deliveryId: string;
             error: Diagnostic;
         }) {
-            return client.query<Record<string, unknown>>("UPDATE deliveries SET last_error=$2 WHERE id=$1", [input.deliveryId, input.error]);
+            return client.query<Record<string, unknown>>("UPDATE deliveries SET diagnostic=$2 WHERE id=$1", [input.deliveryId, input.error]);
+        },
+        recordRetryDisposition(input: { deliveryId: string; retry: import("@/contracts/mail-diagnostics").RetryDisposition }) {
+            return client.query<Record<string, unknown>>("UPDATE deliveries SET retry_disposition=$2 WHERE id=$1", [input.deliveryId, input.retry]);
         },
         clearDeliveryDiagnostic(input: {
             deliveryId: string;
         }) {
-            return client.query<Record<string, unknown>>("UPDATE deliveries SET last_error=NULL WHERE id=$1", [input.deliveryId]);
+            return client.query<Record<string, unknown>>("UPDATE deliveries SET diagnostic=NULL WHERE id=$1", [input.deliveryId]);
         },
         findDeliveryCallbackContext(input: {
             deliveryId: string;
@@ -224,7 +227,7 @@ export function createEventsRepository(client: Pick<PoolClient, "query">): Event
                 externalMessageId?: string | undefined;
                 recipient?: string | undefined;
                 bounce?: {
-                    classification: "hard" | "soft";
+                    classification: "HARD" | "SOFT" | "UNKNOWN";
                     code?: string;
                     message?: string;
                 } | undefined;
@@ -285,7 +288,7 @@ export function createEventsRepository(client: Pick<PoolClient, "query">): Event
             return client.query<{
                 started_at: Date;
             }>(`UPDATE submission_attempts SET status='accepted',outcome_determinate=true,
-        diagnostic=NULL,error_category=NULL,error_code=NULL,error_message=NULL,reconcile_after=NULL,finished_at=COALESCE(finished_at,now())
+        diagnostic=NULL,reconcile_after=NULL,finished_at=COALESCE(finished_at,now())
         WHERE id=$1 AND status IN ('submitting','unknown','reconciling') RETURNING started_at`, [input.id]);
         },
         acceptCurrentSubmission(input: {

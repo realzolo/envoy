@@ -1,0 +1,298 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "messageId": {
+      "type": "string"
+    },
+    "revision": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]*$"
+    },
+    "submissionId": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "attemptId": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "lifecycle": {
+      "type": "string",
+      "enum": [
+        "queued",
+        "submitting",
+        "accepted",
+        "deferred",
+        "delivered",
+        "bounced",
+        "failed",
+        "unknown",
+        "canceled"
+      ]
+    },
+    "outcome": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "succeeded",
+        "failed",
+        "canceled",
+        "unknown"
+      ]
+    },
+    "acceptedAt": {
+      "anyOf": [
+        {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "deliveredAt": {
+      "anyOf": [
+        {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "diagnostic": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "source": {
+              "type": "string",
+              "enum": [
+                "MORPH",
+                "ENVOY",
+                "PROVIDER"
+              ]
+            },
+            "code": {
+              "type": "string",
+              "enum": [
+                "MAILBOX_PERMANENTLY_REJECTED",
+                "MAILBOX_TEMPORARILY_REJECTED",
+                "DELIVERY_FAILED",
+                "DELIVERY_DEFERRED",
+                "RECIPIENT_SUPPRESSED",
+                "PROVIDER_AUTHENTICATION_FAILED",
+                "PROVIDER_RATE_LIMITED",
+                "INVALID_RECIPIENT",
+                "PROVIDER_POLICY_REJECTED",
+                "PROVIDER_REJECTED",
+                "PROVIDER_UNAVAILABLE",
+                "PROVIDER_CONNECTION_UNAVAILABLE",
+                "SUBMISSION_OUTCOME_UNKNOWN",
+                "SUBMISSION_GUARD_REJECTED",
+                "INTERRUPTED_SUBMISSION",
+                "SEND_DEADLINE_EXCEEDED",
+                "CONTENT_EXPIRED",
+                "SENDER_NOT_AUTHORIZED",
+                "NO_ELIGIBLE_ROUTE",
+                "UNSUPPORTED_MESSAGE_CAPABILITY",
+                "UNSUPPORTED_MAIL_FEATURE",
+                "ROUTE_TEMPORARILY_UNAVAILABLE",
+                "LOCAL_PREPARATION_FAILED",
+                "RECONCILIATION_EXHAUSTED",
+                "PROVIDER_NOT_ACCEPTED",
+                "WORKFLOW_EXHAUSTED",
+                "FILE_NOT_READY",
+                "FILE_UNAVAILABLE",
+                "UNCLASSIFIED_FAILURE",
+                "VALIDATION_FAILED"
+              ]
+            },
+            "reasonCode": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "enum": [
+                    "MAILBOX_NOT_FOUND",
+                    "DOMAIN_INVALID",
+                    "MAILBOX_DISABLED",
+                    "MAILBOX_FULL",
+                    "MESSAGE_TOO_LARGE",
+                    "CONTENT_REJECTED",
+                    "ATTACHMENT_REJECTED",
+                    "RECIPIENT_SUPPRESSED",
+                    "PROVIDER_QUOTA_EXCEEDED",
+                    "PROVIDER_RATE_LIMITED",
+                    "PROVIDER_AUTH_FAILED",
+                    "PROVIDER_PERMISSION_DENIED",
+                    "SENDER_NOT_VERIFIED",
+                    "INVALID_RECIPIENT",
+                    "PROVIDER_REQUEST_INVALID"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "stage": {
+              "type": "string",
+              "enum": [
+                "PREPARATION",
+                "AUTHORIZATION",
+                "ROUTING",
+                "SUBMISSION",
+                "RECIPIENT_DELIVERY",
+                "RECONCILIATION",
+                "QUEUE",
+                "POLICY",
+                "OBSERVATION"
+              ]
+            },
+            "detailAvailability": {
+              "type": "string",
+              "enum": [
+                "SPECIFIC",
+                "CATEGORY_ONLY",
+                "NOT_RECORDED",
+                "PROVIDER_NOT_SUPPLIED"
+              ]
+            },
+            "evidence": {
+              "type": "object",
+              "properties": {
+                "smtpReplyCode": {
+                  "type": "integer",
+                  "minimum": 400,
+                  "maximum": 599
+                },
+                "smtpStatus": {
+                  "type": "string",
+                  "pattern": "^[245]\\.(?:0|[1-9][0-9]{0,2})\\.(?:0|[1-9][0-9]{0,2})$"
+                },
+                "bounceClass": {
+                  "type": "string",
+                  "enum": [
+                    "HARD",
+                    "SOFT",
+                    "UNKNOWN"
+                  ]
+                },
+                "suppressionReason": {
+                  "type": "string",
+                  "enum": [
+                    "HARD_BOUNCE",
+                    "COMPLAINED",
+                    "PROVIDER_SUPPRESSED",
+                    "SOFT_BOUNCE_THRESHOLD",
+                    "UNSUBSCRIBE",
+                    "MANUAL"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            },
+            "occurredAt": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "source",
+            "code",
+            "reasonCode",
+            "stage",
+            "detailAvailability",
+            "evidence",
+            "occurredAt"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "retryDisposition": {
+      "type": "object",
+      "properties": {
+        "owner": {
+          "type": "string",
+          "enum": [
+            "ENVOY",
+            "PROVIDER",
+            "NONE",
+            "UNKNOWN"
+          ]
+        },
+        "action": {
+          "type": "string",
+          "enum": [
+            "SCHEDULED",
+            "WAITING_PROVIDER",
+            "STOPPED",
+            "MANUAL_REVIEW"
+          ]
+        },
+        "nextAttemptAt": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "owner",
+        "action",
+        "nextAttemptAt"
+      ],
+      "additionalProperties": false
+    },
+    "observedAt": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+    }
+  },
+  "required": [
+    "id",
+    "messageId",
+    "revision",
+    "submissionId",
+    "attemptId",
+    "lifecycle",
+    "outcome",
+    "acceptedAt",
+    "deliveredAt",
+    "diagnostic",
+    "retryDisposition",
+    "observedAt"
+  ],
+  "additionalProperties": false
+}

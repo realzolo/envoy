@@ -1,5 +1,6 @@
 "use client";
 
+import { diagnosticPresentation, retryPresentation } from "./diagnostic-presentation";
 import { LocalTime } from "@/components/local-time";
 import styles from "@/components/mail-views.module.css";
 import { PageHeader } from "@/components/page-header";
@@ -50,6 +51,7 @@ function JsonDetails({ value }: { value: unknown }) {
 
 export function DeliveryDetailView({ detail, back = "/emails" }: { detail: DeliveryDetail; back?: string }) {
   const router = useRouter();
+  const reason = detail.diagnostic ? diagnosticPresentation(detail.diagnostic) : null;
 
   return (
     <section className={styles.page}>
@@ -66,7 +68,14 @@ export function DeliveryDetailView({ detail, back = "/emails" }: { detail: Deliv
         title="Delivery outcome is unknown"
         type="warning"
       />}
-      {detail.lastError && <Alert type="error" showIcon title={String(detail.lastError.code ?? "Delivery failed")} content={String(detail.lastError.message ?? "Inspect activity and submission attempts for diagnostics.")} />}
+      {detail.diagnostic && reason && <Alert type={detail.lifecycle === "deferred" ? "warning" : "error"} showIcon title={reason.title} content={<Space direction="vertical"><span>{reason.detail}</span><span>{reason.advice}</span><Typography.Text type="secondary">{detail.diagnostic.code}{detail.diagnostic.reasonCode ? ` / ${detail.diagnostic.reasonCode}` : ""}</Typography.Text></Space>} />}
+      {detail.transport && <Card bordered={false} title="投递事实与处理责任"><Descriptions column={2} data={[
+        {label:"当前修订",value:detail.transport.revision}, {label:"后续处理",value:retryPresentation(detail.transport.retryDisposition)},
+        {label:"供应商受理",value:detail.transport.acceptedAt ? <LocalTime value={detail.transport.acceptedAt}/> : "尚无确认事实"},
+        {label:"实际送达",value:detail.transport.deliveredAt ? <LocalTime value={detail.transport.deliveredAt}/> : "尚无确认事实"},
+        {label:"SMTP 状态",value:detail.diagnostic?.evidence.smtpStatus ?? "未提供"}, {label:"SMTP 响应码",value:detail.diagnostic?.evidence.smtpReplyCode ?? "未提供"},
+        {label:"退信分类",value:detail.diagnostic?.evidence.bounceClass ?? "未提供"}, {label:"当前尝试",value:detail.transport.attemptId ?? "尚未提交"},
+      ]}/></Card>}
       <Card className={styles.card} bordered={false} title="Delivery overview" extra={<Tag color={statusColors[detail.status]} bordered={false}>{labelForStatus(detail.status)}</Tag>}>
         <Descriptions className={styles.descriptions} column={{ xs: 1, md: 2, xl: 3 }} layout="vertical" tableLayout="fixed" data={[
           { label: "Recipient", value: `${detail.recipient} (${detail.recipientRole ?? "to"})` },
@@ -136,7 +145,7 @@ export function DeliveryDetailView({ detail, back = "/emails" }: { detail: Deliv
                   <Tag color={colorForEvent(status)} bordered={false}>{labelForStatus(status)}</Tag>
                 </Space>}>
                   <div className={styles.tabPanel}>
-                    {Boolean(attempt.error_message) && <Alert showIcon type="error" content={displayValue(attempt.error_message)} />}
+                    {attempt.diagnostic && <Alert showIcon type="error" title={diagnosticPresentation(attempt.diagnostic).title} content={`${diagnosticPresentation(attempt.diagnostic).detail} ${diagnosticPresentation(attempt.diagnostic).advice}`} />}
                     <Descriptions className={styles.descriptions} layout="vertical" tableLayout="fixed" column={{ xs: 1, md: 2, xl: 3 }} data={[
                       { label: "Submission ID", value: displayValue(attempt.submission_id) },
                       { label: "Provider", value: displayValue(attempt.provider_type) },
@@ -145,7 +154,7 @@ export function DeliveryDetailView({ detail, back = "/emails" }: { detail: Deliv
                       { label: "Outcome confirmed", value: attempt.outcome_determinate === true ? "Yes" : attempt.outcome_determinate === false ? "No" : "Not reported" },
                       { label: "Started", value: attempt.started_at ? <LocalTime value={timestamp(attempt.started_at)} /> : "Not reported" },
                       { label: "Finished", value: attempt.finished_at ? <LocalTime value={timestamp(attempt.finished_at)} /> : "Not reported" },
-                      ...(attempt.error_category || attempt.error_code ? [{ label: "Error category / code", value: `${displayValue(attempt.error_category)} / ${displayValue(attempt.error_code)}` }] : []),
+                      ...(attempt.diagnostic ? [{ label: "诊断类别 / 原因", value: `${attempt.diagnostic.code} / ${attempt.diagnostic.reasonCode ?? "未记录"}` }] : []),
                       ...(attempt.retry_authorized_at ? [{ label: "Duplicate risk accepted", span: 3, value: <Space wrap>{displayValue(attempt.retry_authorized_by)}<LocalTime value={timestamp(attempt.retry_authorized_at)} /></Space> }] : []),
                     ]} />
                     <Collapse bordered={false}>

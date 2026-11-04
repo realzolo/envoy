@@ -117,7 +117,7 @@ export const postmarkModule: ProviderModule = {
                     occurredAt: eventDate(p.DeliveredAt ?? p.BouncedAt ?? p.ReceivedAt ?? p.Date ?? p.ChangedAt),
                     recipient: typeof p.Recipient === "string" ? p.Recipient : typeof p.Email === "string" ? p.Email : undefined,
                     bounce: type === "bounced" ? {
-                        classification: p.Type === "HardBounce" || p.TypeCode === 1 || p.Type === "BadEmailAddress" || p.TypeCode === 100000 ? "hard" : "soft",
+                        classification: p.Type === "HardBounce" || p.TypeCode === 1 || p.Type === "BadEmailAddress" || p.TypeCode === 100000 ? "HARD" : p.Type === "SoftBounce" ? "SOFT" : "UNKNOWN",
                         code: String(p.TypeCode ?? p.Type ?? ""),
                         message: String(p.Description ?? p.Details ?? "")
                     } : undefined

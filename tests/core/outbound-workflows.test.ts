@@ -28,9 +28,9 @@ describe("outbound submission workflow", () => {
     });
     it("treats rejected local preparation as a determinate non-retryable failure", async () => {
         const deps = dependencies();
-        deps.sender.send.mockRejectedValue(new SendPreparationError("ATTACHMENT_REVOKED", "not authorized"));
+        deps.sender.send.mockRejectedValue(new SendPreparationError("FILE_UNAVAILABLE", "not authorized"));
         await createDeliveryWorkflow(deps)("sub_1");
-        expect(deps.markDeterminateFailure).toHaveBeenCalledWith("att_1", expect.objectContaining({ code: "ATTACHMENT_REVOKED" }), false);
+        expect(deps.markDeterminateFailure).toHaveBeenCalledWith("att_1", expect.objectContaining({ code: "FILE_UNAVAILABLE" }), false);
         expect(deps.markUnknown).not.toHaveBeenCalled();
     });
     it("does not convert persistence failure after provider acceptance into failover", async () => {

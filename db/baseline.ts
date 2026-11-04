@@ -3,7 +3,7 @@ import { readFile, writeFile, rename } from "node:fs/promises";
 import { join } from "node:path";
 import { getTableColumns, getTableName, type Table } from "drizzle-orm";
 import * as schema from "../src/platform/database/schema";
-import { databaseBehaviors } from "../src/platform/database/schema/behaviors";
+import { databaseBehaviors, mailDiagnosticValidation } from "../src/platform/database/schema/behaviors";
 import { schemaCommentsSql } from "../src/platform/database/schema/documentation";
 import { loadApplicationMigrations } from "./migrations";
 
@@ -33,7 +33,7 @@ export async function baselineSql(root = process.cwd()) {
     cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
   });
   assertCompleteSchema(exported);
-  return header + exported.trim() + "\n\n" + databaseBehaviors + "\n" + schemaCommentsSql();
+  return header + mailDiagnosticValidation + "\n" + exported.trim() + "\n\n" + databaseBehaviors + "\n" + schemaCommentsSql();
 }
 
 export async function checkBaseline(root = process.cwd()) {

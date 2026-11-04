@@ -9,7 +9,7 @@ import { recordRequest } from "@/server/request-log";
 import { getDelivery, getRequestDiagnostic } from "@/modules/outbound/public";
 import { getInboundAttachment, getInboundMessage } from "@/modules/inbound/public";
 import { GET as openapi } from "@/app/api/v1/openapi.json/route";
-import { GET as getMessage } from "@/app/api/v1/messages/[id]/route";
+import { GET as getMessage } from "@/app/api/v2/messages/[id]/route";
 vi.mock("@/server/auth", () => ({ authenticateService: vi.fn() }));
 vi.mock("@/platform/runtime-store", () => ({ enforceRateLimit: vi.fn() }));
 vi.mock("@/platform/database", async importOriginal => {
@@ -85,14 +85,14 @@ describe("public API boundary", () => {
   });
   it("exposes actionable diagnostic fields without native identifiers or unrestricted metadata", async () => {
     const at = new Date("2026-10-17T00:00:00Z");
-    vi.mocked(query).mockResolvedValueOnce({ rows: [{ id: "d", message_id: "m", queued_at: at, updated_at: at }], rowCount: 1 } as never)
-      .mockResolvedValueOnce({ rows: [{ id: "a", attempt_number: 1, provider: "resend", provider_account: "private", external_message_id: "native-secret", diagnostic: { code: "PROVIDER_REJECTED", message: "Recipient rejected", stage: "submission", acceptance: "not_accepted", retryable: false, retryDecision: { action: "none" }, private: "secret" }, started_at: at }], rowCount: 1 } as never)
+    vi.mocked(query).mockResolvedValueOnce({ rows: [{ id: "d", message_id: "m", revision:"1", current_submission_id:null,current_attempt_id:null,lifecycle_status:"failed",diagnostic:null,retry_disposition:{owner:"NONE",action:"STOPPED",nextAttemptAt:null},queued_at: at, updated_at: at }], rowCount: 1 } as never)
+      .mockResolvedValueOnce({ rows: [{ id: "a", attempt_number: 1, provider: "resend", provider_account: "private", external_message_id: "native-secret", diagnostic: {source:"PROVIDER",code:"PROVIDER_REJECTED",reasonCode:null,stage:"SUBMISSION",detailAvailability:"CATEGORY_ONLY",evidence:{},occurredAt:null}, started_at: at }], rowCount: 1 } as never)
       .mockResolvedValueOnce({ rows: [{ id: "e", event_type: "delivered", occurred_at: at, canonical_payload: { externalMessageId: "native-secret", metadata: { private: "secret" }, recipient: "a@example.net" } }], rowCount: 1 } as never);
     const result = JSON.stringify(await getDelivery("d", "svc"));
     expect(result).not.toContain("native-secret");
     expect(result).not.toContain("private");
     expect(result).toContain("PROVIDER_REJECTED");
-    expect(result).toContain("Recipient rejected");
+    expect(result).not.toContain("Recipient rejected");
     expect(result).toContain("a@example.net");
   });
   it.each([true,false])("requires ready state, scan policy and current domain permission before returning attachment bytes (%s)", async authorized => {
@@ -116,8 +116,7 @@ describe("public API boundary", () => {
   });
   it.each([null, new Date("2026-10-17T08:00:00+08:00")])("distinguishes retained and purged content with UTC markers (%s)", async contentPurgedAt => {
     const at = new Date("2026-10-16T00:00:00Z");
-    vi.mocked(query).mockResolvedValueOnce({ rows: [{ id: "msg", content_policy: "normal", send_before: null, processing_state: "finished", outcome: "succeeded", counts: Object.fromEntries(["queued", "submitting", "accepted", "deferred", "delivered", "bounced", "failed", "unknown", "canceled", "suppressed"].map(key => [key,key === "delivered" ? 1 : 0])), request_id: "req", sender_snapshot: { fromEmail: "sender@example.net", fromName: "Sender" }, to_recipients: [{ email: "customer@example.net" }], cc_recipients: [], bcc_recipients: [], headers: {}, in_reply_to: null, references_ids: [], attachment_snapshot: [], service: "Test", category: "transactional", subject: contentPurgedAt ? "" : "Hello", html_body: null, text_body: contentPurgedAt ? null : "Hello", reply_to: [], metadata: {}, provider_tags: {}, recipient_count: 1, accepted_at: at, reference_id: null, content_purged_at: contentPurgedAt }] } as never)
-      .mockResolvedValueOnce({ rows: [] } as never);
+    vi.mocked(query).mockResolvedValueOnce({ rows: [{ id: "msg", snapshot_deliveries:[],content_policy: "normal", send_before: null, processing_state: "finished", outcome: "succeeded", counts: Object.fromEntries(["queued", "submitting", "accepted", "deferred", "delivered", "bounced", "failed", "unknown", "canceled", "suppressed"].map(key => [key,key === "delivered" ? 1 : 0])), request_id: "req", sender_snapshot: { fromEmail: "sender@example.net", fromName: "Sender" }, to_recipients: [{ email: "customer@example.net" }], cc_recipients: [], bcc_recipients: [], headers: {}, in_reply_to: null, references_ids: [], attachment_snapshot: [], service: "Test", category: "transactional", subject: contentPurgedAt ? "" : "Hello", html_body: null, text_body: contentPurgedAt ? null : "Hello", reply_to: [], metadata: {}, provider_tags: {}, recipient_count: 1, accepted_at: at, reference_id: null, content_purged_at: contentPurgedAt }] } as never);
     const response = await getMessage(new Request("https://envoy.test/api/v1/messages/msg"), { params: Promise.resolve({ id: "msg" }) });
     const message = messageDetailSchema.parse(await response.json());
     expect(message.contentPurgedAt).toBe(contentPurgedAt ? "2026-10-17T00:00:00.000Z" : null);

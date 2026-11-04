@@ -1,21 +1,9 @@
-export type Diagnostic = {
-    code: string;
-    message: string;
-    stage: string;
-    acceptance: "not_accepted" | "accepted" | "unknown";
-    retryable: boolean;
-    retryDecision: {
-        action: "scheduled" | "none" | "manual_review";
-        nextAttemptAt?: string;
-        reason?: string;
-    };
-    providerCode?: string;
-    smtpStatus?: string;
-    occurredAt: string;
-};
-export function diagnostic(code: string, message: string, stage: string, options: Partial<Omit<Diagnostic, "code" | "message" | "stage">> = {}): Diagnostic {
-    return {
-        code, message, stage, acceptance: "not_accepted", retryable: false,
-        retryDecision: { action: "none" }, occurredAt: new Date().toISOString(), ...options,
-    };
+import { diagnosticEvidenceSchema, type MailDiagnostic, type DiagnosticReason, type DiagnosticEvidence } from "@/contracts/mail-diagnostics";
+export type Diagnostic = MailDiagnostic;
+export function diagnostic(code: Diagnostic["code"], stage: Diagnostic["stage"], options: { source?: Diagnostic["source"]; reasonCode?: DiagnosticReason; evidence?: DiagnosticEvidence; occurredAt?: string | null; detailAvailability?: Diagnostic["detailAvailability"] } = {}): Diagnostic {
+    const evidence = diagnosticEvidenceSchema.parse(options.evidence ?? {});
+    const reasonCode = options.reasonCode ?? null;
+    return { source: options.source ?? "ENVOY", code, reasonCode, stage,
+        detailAvailability: reasonCode ? "SPECIFIC" : options.detailAvailability ?? "CATEGORY_ONLY", evidence,
+        occurredAt: options.occurredAt === undefined ? new Date().toISOString() : options.occurredAt };
 }

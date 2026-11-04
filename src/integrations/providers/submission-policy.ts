@@ -45,7 +45,7 @@ export async function boundedProviderRequest(url: URL, options: {
                     writing = true;
                     transport.end(options.body);
                 })().catch(error => transport.destroy(error instanceof SendDeadlineError ? error
-                    : new CanonicalProviderError("The final submission authorization/lease guard rejected the message.", "policy", "SUBMISSION_GUARD_REJECTED", "not_accepted", false, { stage: "authorization" })));
+                    : new CanonicalProviderError("The final submission authorization/lease guard rejected the message.", "policy", "SUBMISSION_GUARD_REJECTED", "not_accepted", false, { stage: "AUTHORIZATION" })));
             });
         });
     });

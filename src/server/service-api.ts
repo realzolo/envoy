@@ -1,3 +1,4 @@
+import { projectDiagnostic, type MailDiagnostic } from "@/contracts/mail-diagnostics";
 import { AttachmentUseError } from "@/modules/attachments/public";
 import { FileValidationError } from "@/modules/attachments/public";
 import type { ZodError } from "zod";
@@ -12,8 +13,8 @@ import { MAX_REQUEST_BYTES } from "@/lib/contracts";
 const requestIds = new WeakMap<Request, string>();
 export function getRequestId(request: Request) { return requestIds.get(request); }
 
-export function apiProblem(title: string, status: number, detail = title, errors?: unknown, code = title.toUpperCase().replace(/[^A-Z0-9]+/g, "_")) {
-  return Response.json({ type: `https://envoy.local/problems/${title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`, title, status, detail, code, ...(errors ? { errors } : {}) }, {
+export function apiProblem(title: string, status: number, detail = title, errors?: unknown, code = title.toUpperCase().replace(/[^A-Z0-9]+/g, "_"), diagnostic:MailDiagnostic|null = null) {
+  return Response.json({ type: `https://envoy.local/problems/${title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`, title, status, detail, code, diagnostic:projectDiagnostic(diagnostic), ...(errors ? { errors } : {}) }, {
     status, headers: { "content-type": "application/problem+json", ...(status === 401 ? { "www-authenticate": 'Bearer realm="Envoy"' } : {}) },
   });
 }
@@ -71,7 +72,7 @@ export function serviceRoute<T = unknown>(handler: (request: Request, identity: 
     }
     if (response.status >= 400) {
       const content = await response.json().catch(() => ({}));
-      const problem = { type: "about:blank", title: "Request failed", detail: content.title ?? "Request failed", code: "REQUEST_FAILED", ...content, status: response.status, requestId };
+      const problem = { type: "about:blank", title: "Request failed", detail: content.title ?? "Request failed", code: "REQUEST_FAILED", ...content, diagnostic:projectDiagnostic(content.diagnostic), status: response.status, requestId };
       details = { problem };
       response = Response.json(problem, { status: response.status, headers: { ...Object.fromEntries(response.headers), "content-type": "application/problem+json" } });
     }

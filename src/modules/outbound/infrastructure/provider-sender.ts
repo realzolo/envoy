@@ -24,7 +24,7 @@ export const providerSender = {
             if (result)
                 return result;
             if (error instanceof AttachmentUseError)
-                throw new SendPreparationError(error.reasonCode, error.reasonCode);
+                throw new SendPreparationError(error.reasonCode === "DOMAIN_SEND_NOT_AUTHORIZED" ? "SENDER_NOT_AUTHORIZED" : error.code, error.reasonCode);
             if (error instanceof SendDeadlineError)
                 throw new SendPreparationError(error.code, error.message);
             if (!started)

@@ -3,6 +3,45 @@
 -- ALTER statements below declare final foreign keys, including circular references.
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
+CREATE FUNCTION valid_mail_diagnostic(p jsonb) RETURNS boolean LANGUAGE plpgsql IMMUTABLE AS $$
+DECLARE k text; e jsonb;
+BEGIN
+ IF p IS NULL THEN RETURN true; END IF;
+ IF jsonb_typeof(p) IS DISTINCT FROM 'object' OR NOT p ?& ARRAY['source','code','reasonCode','stage','detailAvailability','evidence','occurredAt'] THEN RETURN false; END IF;
+ FOR k IN SELECT unnest(ARRAY['source','code','stage','detailAvailability']) LOOP IF jsonb_typeof(p->k) IS DISTINCT FROM 'string' THEN RETURN false; END IF; END LOOP;
+ FOR k IN SELECT jsonb_object_keys(p) LOOP IF k<>ALL(ARRAY['source','code','reasonCode','stage','detailAvailability','evidence','occurredAt']) THEN RETURN false; END IF; END LOOP;
+ IF p->>'source'<>ALL(ARRAY['MORPH','ENVOY','PROVIDER']) OR p->>'code'<>ALL(ARRAY['MAILBOX_PERMANENTLY_REJECTED','MAILBOX_TEMPORARILY_REJECTED','DELIVERY_FAILED','DELIVERY_DEFERRED','RECIPIENT_SUPPRESSED','PROVIDER_AUTHENTICATION_FAILED','PROVIDER_RATE_LIMITED','INVALID_RECIPIENT','PROVIDER_POLICY_REJECTED','PROVIDER_REJECTED','PROVIDER_UNAVAILABLE','PROVIDER_CONNECTION_UNAVAILABLE','SUBMISSION_OUTCOME_UNKNOWN','SUBMISSION_GUARD_REJECTED','INTERRUPTED_SUBMISSION','SEND_DEADLINE_EXCEEDED','CONTENT_EXPIRED','SENDER_NOT_AUTHORIZED','NO_ELIGIBLE_ROUTE','UNSUPPORTED_MESSAGE_CAPABILITY','UNSUPPORTED_MAIL_FEATURE','ROUTE_TEMPORARILY_UNAVAILABLE','LOCAL_PREPARATION_FAILED','RECONCILIATION_EXHAUSTED','PROVIDER_NOT_ACCEPTED','WORKFLOW_EXHAUSTED','FILE_NOT_READY','FILE_UNAVAILABLE','UNCLASSIFIED_FAILURE','VALIDATION_FAILED']) OR p->>'stage'<>ALL(ARRAY['PREPARATION','AUTHORIZATION','ROUTING','SUBMISSION','RECIPIENT_DELIVERY','RECONCILIATION','QUEUE','POLICY','OBSERVATION'])
+ OR p->>'detailAvailability'<>ALL(ARRAY['SPECIFIC','CATEGORY_ONLY','NOT_RECORDED','PROVIDER_NOT_SUPPLIED']) THEN RETURN false; END IF;
+ IF p->'reasonCode'<>'null'::jsonb AND (jsonb_typeof(p->'reasonCode')<>'string' OR p->>'reasonCode'<>ALL(ARRAY['MAILBOX_NOT_FOUND','DOMAIN_INVALID','MAILBOX_DISABLED','MAILBOX_FULL','MESSAGE_TOO_LARGE','CONTENT_REJECTED','ATTACHMENT_REJECTED','RECIPIENT_SUPPRESSED','PROVIDER_QUOTA_EXCEEDED','PROVIDER_RATE_LIMITED','PROVIDER_AUTH_FAILED','PROVIDER_PERMISSION_DENIED','SENDER_NOT_VERIFIED','INVALID_RECIPIENT','PROVIDER_REQUEST_INVALID'])) THEN RETURN false; END IF;
+ IF (p->>'detailAvailability'='SPECIFIC') IS DISTINCT FROM (p->'reasonCode'<>'null'::jsonb) THEN RETURN false; END IF;
+ IF p->'occurredAt'<>'null'::jsonb THEN
+  IF jsonb_typeof(p->'occurredAt') IS DISTINCT FROM 'string' OR p->>'occurredAt'!~'^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$' THEN RETURN false; END IF;
+  PERFORM (p->>'occurredAt')::timestamptz;
+ END IF;
+ e:=p->'evidence'; IF jsonb_typeof(e) IS DISTINCT FROM 'object' THEN RETURN false; END IF;
+ FOR k IN SELECT jsonb_object_keys(e) LOOP IF k<>ALL(ARRAY['smtpReplyCode','smtpStatus','bounceClass','suppressionReason']) THEN RETURN false; END IF; END LOOP;
+ IF e ? 'smtpStatus' AND (jsonb_typeof(e->'smtpStatus')<>'string' OR e->>'smtpStatus'!~'^[245]\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})$') THEN RETURN false; END IF;
+ IF e ? 'smtpReplyCode' AND (jsonb_typeof(e->'smtpReplyCode')<>'number' OR e->>'smtpReplyCode'!~'^[45][0-9]{2}$') THEN RETURN false; END IF;
+ IF e ? 'bounceClass' AND (jsonb_typeof(e->'bounceClass') IS DISTINCT FROM 'string' OR e->>'bounceClass'<>ALL(ARRAY['HARD','SOFT','UNKNOWN'])) THEN RETURN false; END IF;
+ IF e ? 'suppressionReason' AND (jsonb_typeof(e->'suppressionReason') IS DISTINCT FROM 'string' OR e->>'suppressionReason'<>ALL(ARRAY['HARD_BOUNCE','COMPLAINED','PROVIDER_SUPPRESSED','SOFT_BOUNCE_THRESHOLD','UNSUBSCRIBE','MANUAL'])) THEN RETURN false; END IF;
+ RETURN true;
+EXCEPTION WHEN OTHERS THEN RETURN false;
+END $$;
+
+CREATE FUNCTION valid_mail_retry(p jsonb) RETURNS boolean LANGUAGE plpgsql IMMUTABLE AS $$
+BEGIN
+ IF jsonb_typeof(p) IS DISTINCT FROM 'object' OR NOT p ?& ARRAY['owner','action','nextAttemptAt'] THEN RETURN false; END IF;
+ IF (SELECT count(*) FROM jsonb_object_keys(p))<>3 OR jsonb_typeof(p->'owner') IS DISTINCT FROM 'string' OR jsonb_typeof(p->'action') IS DISTINCT FROM 'string' THEN RETURN false; END IF;
+ IF NOT ((p->>'owner'='ENVOY' AND p->>'action' IN ('SCHEDULED','MANUAL_REVIEW')) OR (p->>'owner'='PROVIDER' AND p->>'action'='WAITING_PROVIDER') OR (p->>'owner'='NONE' AND p->>'action'='STOPPED') OR (p->>'owner'='UNKNOWN' AND p->>'action'='MANUAL_REVIEW')) THEN RETURN false; END IF;
+ IF p->'nextAttemptAt'<>'null'::jsonb THEN
+  IF p->>'action'<>'SCHEDULED' OR jsonb_typeof(p->'nextAttemptAt') IS DISTINCT FROM 'string' OR p->>'nextAttemptAt'!~'^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$' THEN RETURN false; END IF;
+  PERFORM (p->>'nextAttemptAt')::timestamptz;
+ END IF;
+ RETURN true;
+EXCEPTION WHEN OTHERS THEN RETURN false;
+END $$;
+
+
 CREATE TABLE "service_credentials" (
 	"id" text PRIMARY KEY NOT NULL,
 	"service_id" text NOT NULL,
@@ -130,7 +169,7 @@ CREATE TABLE "deliveries" (
 	"recipient_email" text NOT NULL,
 	"recipient_name" text,
 	"recipient_role" text NOT NULL,
-	"last_error" jsonb,
+	"diagnostic" jsonb,
 	"lifecycle_status" text DEFAULT 'queued' NOT NULL,
 	"engagement_status" text DEFAULT 'unopened' NOT NULL,
 	"compliance_status" text DEFAULT 'clean' NOT NULL,
@@ -140,7 +179,12 @@ CREATE TABLE "deliveries" (
 	"accepted_at" timestamp with time zone,
 	"delivered_at" timestamp with time zone,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"revision" bigint DEFAULT 1 NOT NULL,
+	"retry_disposition" jsonb DEFAULT '{"owner":"ENVOY","action":"SCHEDULED","nextAttemptAt":null}'::jsonb NOT NULL,
 	CONSTRAINT "deliveries_message_id_recipient_email_key" UNIQUE("message_id","recipient_email"),
+	CONSTRAINT "deliveries_revision_check" CHECK (revision > 0),
+	CONSTRAINT "deliveries_diagnostic_check" CHECK (valid_mail_diagnostic(diagnostic)),
+	CONSTRAINT "deliveries_retry_check" CHECK (valid_mail_retry(retry_disposition)),
 	CONSTRAINT "deliveries_recipient_role_check" CHECK (recipient_role = ANY (ARRAY['to'::text, 'cc'::text, 'bcc'::text])),
 	CONSTRAINT "deliveries_lifecycle_status_check" CHECK (lifecycle_status = ANY (ARRAY['queued'::text, 'submitting'::text, 'accepted'::text, 'deferred'::text, 'delivered'::text, 'bounced'::text, 'failed'::text, 'unknown'::text, 'canceled'::text])),
 	CONSTRAINT "deliveries_engagement_status_check" CHECK (engagement_status = ANY (ARRAY['unopened'::text, 'opened'::text, 'clicked'::text])),
@@ -266,9 +310,6 @@ CREATE TABLE "submission_attempts" (
 	"rfc_message_id" text,
 	"status" text NOT NULL,
 	"outcome_determinate" boolean DEFAULT false NOT NULL,
-	"error_category" text,
-	"error_code" text,
-	"error_message" text,
 	"diagnostic" jsonb,
 	"provider_response_ref" text,
 	"started_at" timestamp with time zone DEFAULT now() NOT NULL,
@@ -280,6 +321,7 @@ CREATE TABLE "submission_attempts" (
 	"reconcile_after" timestamp with time zone,
 	CONSTRAINT "submission_attempts_submission_id_attempt_number_key" UNIQUE("submission_id","attempt_number"),
 	CONSTRAINT "submission_attempts_provider_account_id_external_message_id_key" UNIQUE("provider_account_id","external_message_id"),
+	CONSTRAINT "submission_attempts_diagnostic_check" CHECK (valid_mail_diagnostic(diagnostic)),
 	CONSTRAINT "submission_attempts_attempt_number_check" CHECK (attempt_number > 0),
 	CONSTRAINT "submission_attempts_status_check" CHECK (status = ANY (ARRAY['submitting'::text, 'accepted'::text, 'failed'::text, 'unknown'::text, 'reconciling'::text, 'reconciled'::text])),
 	CONSTRAINT "submission_attempts_reconciliation_count_check" CHECK (reconciliation_count >= 0)
@@ -695,6 +737,16 @@ END $$;
 
 CREATE TRIGGER outbound_delivery_change AFTER INSERT ON delivery_events FOR EACH ROW EXECUTE FUNCTION record_outbound_change();
 CREATE TRIGGER outbound_submission_change AFTER INSERT ON submission_events FOR EACH ROW EXECUTE FUNCTION record_outbound_change();
+CREATE FUNCTION revise_delivery_snapshot() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF ROW(NEW.lifecycle_status,NEW.engagement_status,NEW.compliance_status,NEW.current_submission_id,NEW.current_attempt_id,NEW.diagnostic,NEW.retry_disposition,NEW.accepted_at,NEW.delivered_at)
+ IS DISTINCT FROM ROW(OLD.lifecycle_status,OLD.engagement_status,OLD.compliance_status,OLD.current_submission_id,OLD.current_attempt_id,OLD.diagnostic,OLD.retry_disposition,OLD.accepted_at,OLD.delivered_at) THEN
+  NEW.revision:=OLD.revision+1; NEW.updated_at:=clock_timestamp();
+ ELSE NEW.revision:=OLD.revision; END IF;
+ RETURN NEW;
+END $$;
+CREATE TRIGGER delivery_snapshot_revision BEFORE UPDATE ON deliveries FOR EACH ROW EXECUTE FUNCTION revise_delivery_snapshot();
+
 
 -- Business data dictionary maintained in schema/documentation.ts; do not add separate comment migrations.
 COMMENT ON TABLE "attachment_safety" IS 'Shared inbound/outbound attachment scan state and leases; content digests and policy versions determine whether scan results can be reused';
@@ -762,7 +814,7 @@ COMMENT ON COLUMN "deliveries"."message_id" IS 'Owning outbound message identifi
 COMMENT ON COLUMN "deliveries"."recipient_email" IS 'Recipient email address, unique within the message';
 COMMENT ON COLUMN "deliveries"."recipient_name" IS 'Optional recipient display name';
 COMMENT ON COLUMN "deliveries"."recipient_role" IS 'Recipient role: to (primary), cc (carbon copy) or bcc (blind copy)';
-COMMENT ON COLUMN "deliveries"."last_error" IS 'Latest delivery error JSON containing code, category and description; may be null after success or when no error exists';
+COMMENT ON COLUMN "deliveries"."diagnostic" IS 'Canonical content-free MailDiagnostic; no provider free text';
 COMMENT ON COLUMN "deliveries"."lifecycle_status" IS 'Delivery lifecycle: queued, submitting, accepted, deferred, delivered, bounced, failed, unknown (indeterminate outcome) or canceled';
 COMMENT ON COLUMN "deliveries"."engagement_status" IS 'Engagement status: unopened, opened or clicked';
 COMMENT ON COLUMN "deliveries"."compliance_status" IS 'Compliance status: clean (unrestricted), complained, unsubscribed or suppressed';
@@ -772,6 +824,8 @@ COMMENT ON COLUMN "deliveries"."queued_at" IS 'Time this recipient delivery ente
 COMMENT ON COLUMN "deliveries"."accepted_at" IS 'Provider event time confirming acceptance for this recipient (timestamptz)';
 COMMENT ON COLUMN "deliveries"."delivered_at" IS 'Provider event time reporting final delivery (timestamptz)';
 COMMENT ON COLUMN "deliveries"."updated_at" IS 'Last update time (timestamptz); explicitly maintained by business writes, defaults to now()';
+COMMENT ON COLUMN "deliveries"."revision" IS 'Monotonic version of the complete current delivery snapshot';
+COMMENT ON COLUMN "deliveries"."retry_disposition" IS 'Current retry responsibility and disposition, independent of manual action authorization';
 COMMENT ON TABLE "delivery_events" IS 'Canonical per-recipient delivery facts; source_key prevents duplicate recording of repeated notifications';
 COMMENT ON COLUMN "delivery_events"."id" IS 'Unique delivery event identifier';
 COMMENT ON COLUMN "delivery_events"."delivery_id" IS 'Recipient delivery associated with this event';
@@ -1054,9 +1108,6 @@ COMMENT ON COLUMN "submission_attempts"."external_message_id" IS 'Provider-retur
 COMMENT ON COLUMN "submission_attempts"."rfc_message_id" IS 'RFC Message-ID used in the request or confirmed by the provider, for conversation and evidence correlation';
 COMMENT ON COLUMN "submission_attempts"."status" IS 'Attempt status: submitting, accepted, failed (definite failure), unknown (indeterminate outcome), reconciling or reconciled';
 COMMENT ON COLUMN "submission_attempts"."outcome_determinate" IS 'Whether explicit evidence confirms the provider acceptance outcome; indeterminate outcomes must not trigger blind resends';
-COMMENT ON COLUMN "submission_attempts"."error_category" IS 'Normalized provider error category; null when no error exists';
-COMMENT ON COLUMN "submission_attempts"."error_code" IS 'Normalized or provider-specific error code; null when no error exists';
-COMMENT ON COLUMN "submission_attempts"."error_message" IS 'Redacted error description; must not contain authentication secrets or sensitive message bodies';
 COMMENT ON COLUMN "submission_attempts"."diagnostic" IS 'Redacted provider diagnostic JSON for protocol, network or response failures';
 COMMENT ON COLUMN "submission_attempts"."provider_response_ref" IS 'Reference to provider response evidence; does not store secret response content directly';
 COMMENT ON COLUMN "submission_attempts"."started_at" IS 'Attempt start time (timestamptz, defaults to database transaction time)';

@@ -214,7 +214,7 @@ export const sesModule: ProviderModule = {
                     occurredAt,
                     recipient: email,
                     bounce: type === "bounced" ? {
-                        classification: details.bounceType === "Permanent" ? "hard" : "soft",
+                        classification: details.bounceType === "Permanent" ? "HARD" : details.bounceType === "Transient" ? "SOFT" : "UNKNOWN",
                         code: String(info.status ?? details.bounceSubType ?? ""),
                         message: typeof info.diagnosticCode === "string" ? info.diagnosticCode : undefined
                     } : undefined,

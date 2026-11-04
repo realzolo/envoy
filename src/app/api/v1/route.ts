@@ -8,14 +8,15 @@ export function GET(request: Request) {
     openapi: `${origin}/api/v1/openapi.json`,
     resources: {
       messages: `${origin}/api/v1/messages`,
-      deliveries: `${origin}/api/v1/deliveries`,
-      events: `${origin}/api/v1/events`,
+      messageDiagnostic: `${origin}/api/v2/messages/{id}`,
+      deliveries: `${origin}/api/v2/deliveries`,
+      events: `${origin}/api/v2/events`,
       outboundChanges: `${origin}/api/v1/outbound-changes`,
       inboundChanges: `${origin}/api/v1/inbound-changes`,
       inboundMessages: `${origin}/api/v1/inbound-messages`,
       suppressions: `${origin}/api/v1/suppressions`,
       files: `${origin}/api/v1/files`,
-      requests: `${origin}/api/v1/requests/{requestId}`,
+      requests: `${origin}/api/v2/requests/{requestId}`,
       capabilities: `${origin}/api/v1/capabilities`,
     },
   });

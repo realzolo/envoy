@@ -42,7 +42,7 @@ export interface OutboxDependencies {
     reads: OutboxReadRepository;
     retries: UnitOfWork<OutboxRetryRepository>;
     jobs: QueueJobs;
-    recordWorkflowFailure(submissionId: string, message: string): Promise<void>;
+    recordWorkflowFailure(submissionId: string): Promise<void>;
     markReconciled(attemptId: string, outcome: "unknown"): Promise<void>;
     createId(prefix: string): string;
     log(message: string, ...details: unknown[]): void;

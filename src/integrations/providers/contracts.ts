@@ -150,19 +150,22 @@ export type ProviderSendResult = {
 };
 export type ErrorCategory = "authentication" | "rate_limit" | "invalid_recipient" | "policy" | "provider" | "network" | "unknown";
 export class CanonicalProviderError extends Error {
-    public readonly stage: string;
+    public readonly stage: import("@/contracts/mail-diagnostics").MailDiagnostic["stage"];
     public readonly providerCode?: string;
     public readonly smtpStatus?: string;
-    constructor(message: string, public readonly category: ErrorCategory, public readonly code: string, public readonly outcome: "not_accepted" | "unknown" | "accepted", public readonly retryable: boolean, details: {
-        stage?: string;
+    public readonly reasonCode?: import("@/contracts/mail-diagnostics").DiagnosticReason;
+    constructor(message: string, public readonly category: ErrorCategory, public readonly code: import("@/contracts/mail-diagnostics").MailDiagnostic["code"], public readonly outcome: "not_accepted" | "unknown" | "accepted", public readonly retryable: boolean, details: {
+        stage?: import("@/contracts/mail-diagnostics").MailDiagnostic["stage"];
         providerCode?: string;
         smtpStatus?: string;
+        reasonCode?: import("@/contracts/mail-diagnostics").DiagnosticReason;
     } = {}) {
         super(message);
         this.name = "CanonicalProviderError";
-        this.stage = details.stage ?? "submission";
+        this.stage = details.stage ?? "SUBMISSION";
         this.providerCode = details.providerCode;
         this.smtpStatus = details.smtpStatus;
+        this.reasonCode = details.reasonCode;
     }
 }
 export type CanonicalEventType = "accepted" | "deferred" | "delivered" | "bounced" | "failed" | "opened" | "clicked" | "complained" | "unsubscribed" | "suppressed" | "inbound.received";
@@ -173,7 +176,7 @@ export type CanonicalEvent = {
     occurredAt: Date;
     recipient?: string;
     bounce?: {
-        classification: "hard" | "soft";
+        classification: "HARD" | "SOFT" | "UNKNOWN";
         code?: string;
         message?: string;
     };

@@ -1,3 +1,4 @@
+import { submissionReason } from "./diagnostic-facts";
 import { SendDeadlineError } from "@/modules/outbound/policy";
 import { createHash } from "node:crypto";
 import { CanonicalProviderError, type CanonicalEvent, type CanonicalMessage, type EmailAddress, type ProviderSendResult } from "./contracts";
@@ -15,10 +16,10 @@ export function safeDiagnostic(value: unknown) {
         .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, "")
         .slice(0, 2000);
 }
-export function providerErrorCode(category: string, unknown = false) {
+export function providerErrorCode(category: string, unknown = false): import("@/contracts/mail-diagnostics").MailDiagnostic["code"] {
     if (unknown)
         return "SUBMISSION_OUTCOME_UNKNOWN";
-    return ({ authentication: "PROVIDER_AUTHENTICATION_FAILED", rate_limit: "PROVIDER_RATE_LIMITED", invalid_recipient: "INVALID_RECIPIENT", policy: "PROVIDER_POLICY_REJECTED", provider: "PROVIDER_REJECTED", network: "PROVIDER_UNAVAILABLE" } as Record<string, string>)[category] ?? "PROVIDER_REJECTED";
+    return ({ authentication: "PROVIDER_AUTHENTICATION_FAILED", rate_limit: "PROVIDER_RATE_LIMITED", invalid_recipient: "INVALID_RECIPIENT", policy: "PROVIDER_POLICY_REJECTED", provider: "PROVIDER_REJECTED", network: "PROVIDER_UNAVAILABLE" } as Record<string, import("@/contracts/mail-diagnostics").MailDiagnostic["code"]>)[category] ?? "PROVIDER_REJECTED";
 }
 const crlf = "\r\n";
 function encodedWords(value: string) {
@@ -112,9 +113,9 @@ export async function checkedJson(response: Response): Promise<Record<string, un
         const invalidRecipient = (response.status === 400 || response.status === 422) && (/recipient/.test(details) || /\bto (email|address)\b/.test(details) || /personalizations.*\.to\./.test(details));
         const providerCode = String(body.code ?? body.name ?? body.ErrorCode ?? `http_${response.status}`);
         if (response.status >= 500 || response.status === 408)
-            throw new CanonicalProviderError(message, "provider", "SUBMISSION_OUTCOME_UNKNOWN", "unknown", false, { providerCode });
+            throw new CanonicalProviderError(message, "provider", "SUBMISSION_OUTCOME_UNKNOWN", "unknown", false, { providerCode, reasonCode: submissionReason(providerCode, response.status) });
         const category = response.status === 401 || response.status === 403 ? "authentication" : response.status === 429 ? "rate_limit" : invalidRecipient ? "invalid_recipient" : response.status >= 500 ? "provider" : "policy";
-        throw new CanonicalProviderError(message, category, providerErrorCode(category), "not_accepted", response.status === 429, { providerCode });
+        throw new CanonicalProviderError(message, category, providerErrorCode(category), "not_accepted", response.status === 429, { providerCode, reasonCode: submissionReason(providerCode, response.status) });
     }
     return body;
 }

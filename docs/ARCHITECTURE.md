@@ -31,6 +31,10 @@ The structure follows the Next.js recommendation to use a server-side data acces
 
 Modules import each other's `public.ts` or `contracts.ts`. A `policy.ts` facet may expose pure business policies only when the architecture checker verifies its entire runtime dependency tree has no application orchestration, infrastructure, database, framework, or I/O dependency. An explicit type-only import of a domain type is permitted. Infrastructure may import the four internal identity SQL predicate builders (`domainPermission`, `effectiveDomainBinding`, `outboundDomainAccess`, `inboundDomainAccess`) because they enforce consistent permissions inside locked queries; runtime authorization operations use the public identity service with an opaque transaction context. These are the only cross-module infrastructure exceptions.
 
+## Diagnostic ownership
+
+Transport diagnostics and current delivery observations belong to Envoy, independently of caller business execution or caller observation health. Public/admin reads share the canonical projection; bounded provider adapters create finite safe facts before raw-content erasure. Complete delivery revisions fence current submission/attempt identity and outcome. See [MAIL_DIAGNOSTICS.md](MAIL_DIAGNOSTICS.md) for v2 routes, canonical schemas, retry responsibility, historical conversion and privacy invariants.
+
 ## Service identity and routing
 
 Service is the business isolation boundary. Its globally unique name, active/suspended status, domain bindings, callback and suppression management permission are configured independently. API keys belong to one Service and authenticate against its current status. Messages, inbound copies, files and business suppression rules carry only service ownership. Pausing a Service invalidates all its keys and prevents mail content access, inbound delivery and new outbound submission until it is resumed.

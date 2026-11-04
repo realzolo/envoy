@@ -18,3 +18,5 @@ export { serializeVerification } from "@/integrations/providers/verification";
 
 export { listOutboundChanges } from "@/bootstrap/outbound";
 export { OutboundCursorError } from "./application/changes";
+
+export { projectDeliverySnapshot } from "./infrastructure/diagnostic.projection";

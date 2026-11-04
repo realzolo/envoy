@@ -1,4 +1,5 @@
 import { type PgTableExtraConfigValue, pgTable, unique, check, text, jsonb, integer, timestamp, foreignKey, boolean, index, primaryKey, bigint, uuid } from "drizzle-orm/pg-core"
+import type { MailDiagnostic, RetryDisposition } from "@/contracts/mail-diagnostics";
 import { sql } from "drizzle-orm";
 import { services } from "./identity";
 import { providerAccounts, providerIdentities, providerWebhookEndpoints, sendingDomains } from "./channels";
@@ -10,7 +11,7 @@ export const deliveries = pgTable("deliveries", {
 	recipientEmail: text("recipient_email").notNull(),
 	recipientName: text("recipient_name"),
 	recipientRole: text("recipient_role").notNull(),
-	lastError: jsonb("last_error"),
+	diagnostic: jsonb("diagnostic").$type<MailDiagnostic>(),
 	lifecycleStatus: text("lifecycle_status").default('queued').notNull(),
 	engagementStatus: text("engagement_status").default('unopened').notNull(),
 	complianceStatus: text("compliance_status").default('clean').notNull(),
@@ -20,7 +21,13 @@ export const deliveries = pgTable("deliveries", {
 	acceptedAt: timestamp("accepted_at", { withTimezone: true, mode: 'string' }),
 	deliveredAt: timestamp("delivered_at", { withTimezone: true, mode: 'string' }),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+
+	revision: bigint({mode: "bigint"}).default(sql`1`).notNull(),
+	retryDisposition: jsonb("retry_disposition").$type<RetryDisposition>().default({owner:"ENVOY",action:"SCHEDULED",nextAttemptAt:null}).notNull(),
 }, (table): PgTableExtraConfigValue[] => [
+	check("deliveries_revision_check", sql`revision > 0`),
+	check("deliveries_diagnostic_check", sql`valid_mail_diagnostic(diagnostic)`),
+	check("deliveries_retry_check", sql`valid_mail_retry(retry_disposition)`),
 	index("deliveries_lifecycle_idx").using("btree", table.lifecycleStatus.asc().nullsLast(), table.queuedAt.desc().nullsFirst()),
 	index("deliveries_message_status").using("btree", table.messageId.asc().nullsLast(), table.lifecycleStatus.asc().nullsLast()),
 	foreignKey({
@@ -139,9 +146,6 @@ export const submissionAttempts = pgTable("submission_attempts", {
 	rfcMessageId: text("rfc_message_id"),
 	status: text().notNull(),
 	outcomeDeterminate: boolean("outcome_determinate").default(false).notNull(),
-	errorCategory: text("error_category"),
-	errorCode: text("error_code"),
-	errorMessage: text("error_message"),
 	diagnostic: jsonb(),
 	providerResponseRef: text("provider_response_ref"),
 	startedAt: timestamp("started_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
@@ -152,6 +156,7 @@ export const submissionAttempts = pgTable("submission_attempts", {
 	reconciliationCount: integer("reconciliation_count").default(0).notNull(),
 	reconcileAfter: timestamp("reconcile_after", { withTimezone: true, mode: 'string' }),
 }, (table): PgTableExtraConfigValue[] => [
+	check("submission_attempts_diagnostic_check", sql`valid_mail_diagnostic(diagnostic)`),
 	index("attempts_external_idx").using("btree", table.providerAccountId.asc().nullsLast(), table.externalMessageId.asc().nullsLast()),
 	index("attempts_reconcile_due").using("btree", table.reconcileAfter.asc().nullsLast()).where(sql`(status = ANY (ARRAY['unknown'::text, 'reconciling'::text]))`),
 	index("provider_attempt_usage").using("btree", table.providerAccountId.asc().nullsLast(), table.startedAt.asc().nullsLast()),

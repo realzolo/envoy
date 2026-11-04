@@ -1,9 +1,10 @@
+import { resendBounceFacts, submissionReason } from "../diagnostic-facts";
 import { Resend } from "resend";
 import { Webhook } from "svix";
 import { MAX_FILE_BYTES } from "@/lib/contracts";
 import { type CanonicalEventType, type ManagedIdentityStatus, type ProviderModule } from "../contracts";
 import { inboundHeaders, smtpRecipients } from "../inbound-fields";
-import { accepted, assertMessageCapabilities, checkedJson, event, eventDate, formatAddress, header, messageHeaders, nativeMailCapabilities, safeDiagnostic, stableEventId, submitRequest } from "../shared";
+import { accepted, assertMessageCapabilities, checkedJson, event, eventDate, formatAddress, header, messageHeaders, nativeMailCapabilities, stableEventId, submitRequest } from "../shared";
 function client(secret: {
     type: string;
     apiKey?: string;
@@ -157,6 +158,7 @@ export const resendModule: ProviderModule = {
             const bounce = data.bounce as {
                 type?: string;
                 message?: string;
+                subType?: string; diagnosticCode?: string[];
             } | undefined;
             const failed = data.failed as {
                 reason?: string;
@@ -170,10 +172,9 @@ export const resendModule: ProviderModule = {
                     // An unexpected multi-address payload must retain message scope.
                     recipient: typeof data.recipient === "string" ? data.recipient : Array.isArray(data.to) && data.to.length === 1 && typeof data.to[0] === "string" ? data.to[0] : undefined,
                     bounce: type === "bounced" ? {
-                        classification: bounce?.type === "Permanent" ? "hard" : "soft",
-                        message: bounce?.message
+                        classification: resendBounceFacts(bounce ?? {}).evidence.bounceClass
                     } : undefined,
-                    metadata: failed?.reason ? { reason: safeDiagnostic(failed.reason), providerCode: failed.reason } : {}
+                    metadata: type === "bounced" ? resendBounceFacts(bounce ?? {}) : failed?.reason ? { reasonCode: submissionReason(failed.reason) } : {}
                 })];
         },
     },

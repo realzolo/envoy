@@ -3,7 +3,7 @@ import type { Job } from "bullmq";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { POST as submitMail } from "@/app/api/v1/messages/route";
 import { POST as uploadFile } from "@/app/api/v1/files/route";
-import { GET as inspectRequest } from "@/app/api/v1/requests/[requestId]/route";
+import { GET as inspectRequest } from "@/app/api/v2/requests/[requestId]/route";
 import { createMessageSchema } from "@/lib/contracts";
 import { acceptMessage, cancelMessage, getMessage, MessageValidationError, retryMessage } from "@/modules/outbound/public";
 import { createSuppression } from "@/modules/suppressions/public";
@@ -62,6 +62,44 @@ afterAll(async () => {
   await query("DELETE FROM outbound_files WHERE service_id=$1", [serviceId]);
   await query("DELETE FROM services WHERE id=$1", [serviceId]);
   await db().end();
+});
+
+describe("canonical transport observation",()=>{
+ it("returns and persists a safe typed pre-acceptance rejection for invalid recipient format",async()=>{
+  const response=await submitMail(request("/api/v1/messages",{method:"POST",key:crypto.randomUUID(),body:{...base,to:[{email:"alice@gmail..com"}],cc:[],bcc:[],text:"private 624918",html:undefined}}));
+  expect(response.status).toBe(422);
+  const problem=await response.json();
+  expect(problem).toMatchObject({code:"VALIDATION_FAILED",diagnostic:{source:"ENVOY",code:"INVALID_RECIPIENT",reasonCode:"INVALID_RECIPIENT",stage:"PREPARATION",detailAvailability:"SPECIFIC",evidence:{}}});
+  const diagnostic=await inspectRequest(request(`/api/v2/requests/${problem.requestId}`),{params:Promise.resolve({requestId:problem.requestId})});
+  expect((await diagnostic.json()).problem.diagnostic).toEqual(problem.diagnostic);
+  const retained=(await query("SELECT details FROM request_logs WHERE request_id=$1",[problem.requestId])).rows[0];
+  expect(JSON.stringify(retained)).not.toMatch(/alice|gmail|624918/);
+ });
+ it("preserves bigint delivery revisions in JSON-aggregated message snapshots",async()=>{
+  const row=await fixture();
+  const id=`dlv_big_${crypto.randomUUID().replaceAll("-","")}`;
+  await query("INSERT INTO deliveries(id,message_id,recipient_email,recipient_role,revision) VALUES($1,$2,$3,'to',9007199254740993)",[id,row.id,`big-${suffix}@example.net`]);
+  const message=await getMessage(row.id,serviceId);
+  expect(message?.deliveries.find(item=>item.id===id)?.revision).toBe("9007199254740993");
+ });
+ it("keeps unknown bounces out of soft suppression and preserves safe facts through sensitive projection",async()=>{
+  const email=`unknown-${suffix}@example.net`;
+  for(let index=0;index<3;index++) {
+   const row=await fixture(createMessageSchema.parse({...base,to:[{email}],cc:[],bcc:[],subject:"",text:"private 624918",html:undefined,contentPolicy:"sensitive",sendBefore:new Date(Date.now()+60000).toISOString()}));
+   const prepared=(await prepareSubmission(row.submissionId))!;
+   if("reconcileAttemptId" in prepared) throw new Error("unexpected reconciliation");
+   const externalMessageId=`unknown-${crypto.randomUUID()}`;
+   await markAccepted(prepared.attemptId,externalMessageId);
+   const before=await getDelivery(row.deliveries[0].id,serviceId);
+   expect(before).toMatchObject({retryDisposition:{owner:"PROVIDER",action:"WAITING_PROVIDER"}});
+   await applyCanonicalEvent("pa_mock",null,{id:crypto.randomUUID(),externalMessageId,recipient:email,type:"bounced",occurredAt:new Date(Date.now()+10),bounce:{classification:"UNKNOWN",message:"private 624918"},metadata:{reason:"private 624918",evidence:{smtpStatus:"5.2.2"},reasonCode:"MAILBOX_FULL"}});
+   const after=await getDelivery(row.deliveries[0].id,serviceId);
+   expect(after).toMatchObject({lifecycle:"bounced",diagnostic:{code:"DELIVERY_FAILED",reasonCode:"MAILBOX_FULL",evidence:{bounceClass:"UNKNOWN",smtpStatus:"5.2.2"}},retryDisposition:{owner:"NONE",action:"STOPPED"}});
+   expect(BigInt(after!.revision)).toBeGreaterThan(BigInt(before!.revision));
+   expect(JSON.stringify(after)).not.toContain("624918");
+  }
+  expect((await query("SELECT id FROM suppressions WHERE email_normalized=lower($1)",[email])).rowCount).toBe(0);
+ });
 });
 
 describe("native API integration", () => {
@@ -135,7 +173,7 @@ describe("native API integration", () => {
     await query("UPDATE submission_attempts SET external_message_id=$2 WHERE id=$1", [prepared.attemptId, externalMessageId]);
     const fact = { id: crypto.randomUUID(), externalMessageId, type: "clicked" as const, occurredAt: new Date(), metadata: {} };
     await Promise.all([applyCanonicalEvent("pa_mock", null, fact), applyCanonicalEvent("pa_mock", null, fact)]);
-    expect((await query("SELECT status,outcome_determinate,diagnostic,reconcile_after,error_message FROM submission_attempts WHERE id=$1", [prepared.attemptId])).rows[0]).toEqual({ status: "accepted", outcome_determinate: true, diagnostic: null, reconcile_after: null, error_message: null });
+    expect((await query("SELECT status,outcome_determinate,diagnostic,reconcile_after FROM submission_attempts WHERE id=$1", [prepared.attemptId])).rows[0]).toEqual({ status: "accepted", outcome_determinate: true, diagnostic: null, reconcile_after: null });
     expect((await query("SELECT status FROM submissions WHERE id=$1", [row.submissionId])).rows[0].status).toBe("accepted");
     const mail = await getMessage(row.id, serviceId);
     expect(mail!.deliveries.every(item => item.lifecycle_status === "accepted" && item.engagement_status === "unopened")).toBe(true);
@@ -267,7 +305,7 @@ describe("native API integration", () => {
       expect(send.mock.calls[0][0].envelopeRecipients?.map(item => item.email).sort()).toEqual([...base.to, ...base.bcc].map(item => item.email).sort());
       const cc = row.deliveries.find(item => item.recipient_role === "cc")!;
       const detail = await getDelivery(cc.id, serviceId);
-      expect(detail).toMatchObject({ lifecycle: "failed", compliance: "suppressed", lastError: { code: "RECIPIENT_SUPPRESSED" } });
+      expect(detail).toMatchObject({ lifecycle: "failed", compliance: "suppressed", diagnostic: { code: "RECIPIENT_SUPPRESSED" } });
       expect(detail?.attempts).toHaveLength(0);
       expect((await getMessage(row.id, serviceId))?.outcome).toBe("partially_failed");
     } finally { send.mockRestore(); await query("DELETE FROM suppressions WHERE id=$1", [suppression.id]); }
@@ -303,8 +341,8 @@ describe("native API integration", () => {
     try {
       await processDelivery(job(row.submissionId));
       const detail = await getDelivery(row.deliveries[0].id, serviceId);
-      expect(detail?.lastError).toMatchObject({ code: "PROVIDER_RATE_LIMITED", message: "Temporary provider quota", stage: "submission", acceptance: "not_accepted", retryable: true, providerCode: "quota_limit", retryDecision: { action: "scheduled" } });
-      expect(detail?.attempts[0].error).toMatchObject({ code: "PROVIDER_RATE_LIMITED", providerCode: "quota_limit" });
+      expect(detail?.diagnostic).toMatchObject({ code: "PROVIDER_RATE_LIMITED", source:"PROVIDER", stage: "SUBMISSION", reasonCode:null });
+      expect(detail?.attempts[0].diagnostic).toMatchObject({ code: "PROVIDER_RATE_LIMITED" });
       const callbacks = (await query<{ payload: { data: { diagnostic?: unknown } } }>("SELECT payload FROM callback_deliveries WHERE endpoint_id=$1 AND payload#>>'{data,messageId}'=$2", [`cb_${suffix}`, row.id])).rows;
       expect(callbacks.some(item => JSON.stringify(item.payload.data.diagnostic)?.includes("PROVIDER_RATE_LIMITED"))).toBe(true);
     } finally { send.mockRestore(); }
@@ -320,9 +358,9 @@ describe("native API integration", () => {
       const detail = await getDelivery(row.deliveries[0].id, serviceId);
       expect(detail?.attempts).toHaveLength(0);
       expect(detail?.lifecycle).toBe("failed");
-      expect(detail?.lastError).toMatchObject({ stage: "authorization", acceptance: "not_accepted", retryable: false });
-      expect(detail?.lastError?.message.length).toBeGreaterThan(10);
-      expect(detail?.events.some(item => item.data.diagnostic?.code === detail.lastError?.code)).toBe(true);
+      expect(detail?.diagnostic).toMatchObject({ stage: "AUTHORIZATION", source:"ENVOY" });
+      expect(detail?.diagnostic?.code.length).toBeGreaterThan(10);
+      expect(detail?.events.some(item => item.data.diagnostic?.code === detail.diagnostic?.code)).toBe(true);
     } finally { await query("UPDATE service_domain_bindings SET outbound_provider_identity_id='pi_atlas_mock' WHERE id=$1", [bindingId]); }
   });
 });

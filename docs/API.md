@@ -1,6 +1,6 @@
 # Service API contract
 
-Envoy exposes one native-mail service API at `/api/v1`. `GET /api/v1` lists resources;
+Envoy exposes native-mail submission/control APIs at `/api/v1` and canonical diagnostic reads at `/api/v2`. `GET /api/v1` lists versioned resources;
 `GET /api/v1/openapi.json` is the machine-readable schema. Provider selection and credentials stay internal.
 
 ## Authentication and authorization
@@ -79,7 +79,7 @@ Use `contentPolicy: "sensitive"` for content that must not be inspectable in Env
 
 Sensitive requests require a deadline no more than 900 seconds in the future. Their encrypted content becomes unusable for submission at that deadline and is removed by the mandatory worker privacy sweep, normally within its 10-second interval. This sweep runs independently of optional normal-content retention; worker downtime delays physical removal, while send/read restrictions remain in force. It preserves minimal message/receipt/callback facts. Request and provider fingerprints use KEK-versioned HMACs to prevent offline guessing of short sensitive values; retain old KEKs needed for durable idempotency verification. Identical service key/payload replays resolve **before** deadline and retention checks, even after the encrypted body is gone. Changing the policy or deadline under an existing key is a conflict.
 
-All provider raw bodies, headers and verified receipts are envelope-encrypted before DB/object storage. Outbound receipts are erased after successful normalization; verified outbound receipts first freeze a whitelist of content-free normalized facts. Their raw copies have a 900-second privacy deadline even before association; durable normalized replay remains available after raw removal. Unknown classifications and inbound receipts are not assigned this outbound deadline. Inbound receipts keep their independent recovery/retention lifecycle. Sensitive canonical events, callback data, provider responses and diagnostics retain only delivery facts and fixed diagnostic text, never provider free-text echoes of the original message.
+All provider raw bodies, headers and verified receipts are envelope-encrypted before DB/object storage. Outbound receipts are erased after successful normalization; verified outbound receipts first freeze a whitelist of content-free normalized facts. Their raw copies have a 900-second privacy deadline even before association; durable normalized replay remains available after raw removal. Unknown classifications and inbound receipts are not assigned this outbound deadline. Inbound receipts keep their independent recovery/retention lifecycle. Sensitive canonical events, callback data, provider responses and diagnostics retain only delivery facts and finite diagnostic codes and validated standard facts, never provider free-text echoes of the original message.
 
 Discovery exposes the exact gate below. Callers requiring sensitive/deadline handling must fail closed when these features are absent:
 
@@ -134,7 +134,7 @@ Wait until `usage.canSend` is true before referencing its `id` as `fileId`. Unap
 
 Every authenticated response carries `x-request-id` and rate-limit headers. Save the request ID even for rejected
 requests. Problem responses use RFC 9457 `application/problem+json`, with `type`, `title`, `status`, `detail`, `requestId`,
-and a stable `code` plus field errors when relevant. Querying that request ID with the same service credential closes the diagnostic gap
+a stable `code`, explicit nullable canonical `diagnostic`, and field errors when relevant. Querying that request ID with the same service credential closes the diagnostic gap
 before a mail record exists. Request logging failure is reported by the server rather than changing accepted mail state.
 
 Message `processingState` is `queued`, `processing`, or `finished`. `outcome` separately reports `pending`, `succeeded`,
@@ -142,12 +142,11 @@ Message `processingState` is `queued`, `processing`, or `finished`. `outcome` se
 acceptance is not inbox delivery. Delivery lifecycle is `queued`, `submitting`, `accepted`, `deferred`, `delivered`,
 `bounced`, `failed`, `unknown`, or `canceled`. Engagement and compliance are independent dimensions.
 
-Structured diagnostics include:
+Canonical diagnostics use `source`, coarse `code`, nullable proven `reasonCode`, `stage`, explicit `detailAvailability`, whitelisted `evidence` and nullable `occurredAt`. They contain no provider free text. `retryDisposition` separately identifies the current owner (`ENVOY`, `PROVIDER`, `NONE`, `UNKNOWN`), action and known next time; it never grants a retry action. Permanent rejection alone does not prove a nonexistent mailbox.
 
-- `code`, a stable machine-readable error; `message`, a sanitized actionable description; `stage`, the failed stage.
-- `acceptance`: `not_accepted`, `accepted`, or `unknown`; `retryable`, whether retry conditions exist.
-- `retryDecision`: action `scheduled`, `none`, or `manual_review`, with reason and next time when applicable.
-- Available `providerCode`, `smtpStatus`, and `occurredAt`.
+Diagnostic reads use `/api/v2/messages/{id}`, `/messages/{id}/events`, `/messages/{id}/attempts`, `/deliveries`, `/deliveries/{id}`, `/events` and `/requests/{requestId}`. These v1 reads are retired without aliases. Complete flat delivery snapshots include decimal-string `revision`, current submission/attempt identity, lifecycle/outcome, real nullable accepted/delivered times, diagnostic and retry disposition. The message envelope adds recipient identity to each delivery snapshot. Use revision/current identity to fence current observations and exclude per-read `observedAt` when comparing equal revisions. The v1 outbound-change feed and signed callbacks remain change signals.
+
+See [canonical diagnostic ownership, schemas, privacy and migration](MAIL_DIAGNOSTICS.md) for the complete contract and finite reason semantics. The OpenAPI catalog uses an operation-level v2 server for these reads.
 
 Errors before a provider call (for example revoked sender authorization) are recorded even though no provider attempt
 exists. Trace the chain `requestId → messageId → submissionId → attemptId`, with delivery IDs for recipient results.
@@ -166,7 +165,7 @@ are rechecked before send and manual retry. Provider-native idempotency is reuse
 audited, and retain the original attempt's unknown fact. Already successful recipients are not repeated. Automatic
 provider-readiness deferral and reconciliation are bounded; exhausted work remains inspectable with a specific reason.
 
-Callbacks use the same canonical event and diagnostic model as polling. For lifecycle events, callback `data.lifecycle`
+Callbacks carry canonical event facts and act as change signals; current diagnostic polling uses the versioned complete snapshot. For lifecycle events, callback `data.lifecycle`
 expresses the event fact; `data.currentLifecycle` is the current recipient projection. A late historical event can therefore
 report `delivered` while a separately authorized newer submission is still `submitting`. Events may be repeated or arrive out of order;
 deduplicate by stable event ID and query the current resource when necessary. Submission-scoped provider events remain

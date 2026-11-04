@@ -182,7 +182,7 @@ describe("durable message pipeline", () => {
     await query("UPDATE submission_attempts SET reconciliation_count=11,reconcile_after=now() WHERE id=$1", [submission.attemptId]);
     expect(await getAttemptForReconciliation(submission.attemptId)).toBeTruthy();
     await markReconciled(submission.attemptId, "unknown");
-    expect((await query<{ status: string; reconcile_after: Date | null; error_code: string }>("SELECT status,reconcile_after,error_code FROM submission_attempts WHERE id=$1", [submission.attemptId])).rows[0]).toEqual({ status: "unknown", reconcile_after: null, error_code: "RECONCILIATION_EXHAUSTED" });
+    expect((await query<{ status: string; reconcile_after: Date | null; error_code: string }>("SELECT status,reconcile_after,diagnostic->>'code' AS error_code FROM submission_attempts WHERE id=$1", [submission.attemptId])).rows[0]).toEqual({ status: "unknown", reconcile_after: null, error_code: "RECONCILIATION_EXHAUSTED" });
   });
 
   it("never automatically fails over after an unclassified submission exception", async () => {
@@ -202,7 +202,7 @@ describe("durable message pipeline", () => {
     const accepted = await acceptMessage({ identity, idempotencyKey: crypto.randomUUID(), input: request });
     messageIds.push(accepted.message.id);
     const delivery = (await query<{ id: string }>("SELECT id FROM deliveries WHERE message_id=$1", [accepted.message.id])).rows[0];
-    const send = vi.spyOn(providerRegistry("mock").sender, "send").mockRejectedValue(new CanonicalProviderError("Explicit rejection", "policy", "policy_rejection", "not_accepted", false));
+    const send = vi.spyOn(providerRegistry("mock").sender, "send").mockRejectedValue(new CanonicalProviderError("Explicit rejection", "policy", "PROVIDER_POLICY_REJECTED", "not_accepted", false));
     try {
       await processDelivery({ data: { submissionId: await submissionIdForDelivery(delivery.id) } } as Job<{ submissionId: string }>);
       const failures = (await query<{ event_id: string; payload_id: string }>("SELECT e.id AS event_id,c.payload->>'id' AS payload_id FROM delivery_events e JOIN callback_deliveries c ON c.delivery_event_id=e.id WHERE e.delivery_id=$1 AND e.event_type='failed'", [delivery.id])).rows;
@@ -693,7 +693,7 @@ describe("durable message pipeline", () => {
     const delivery = (await query<{ id: string }>("SELECT id FROM deliveries WHERE message_id=$1", [accepted.message.id])).rows[0];
     const first = await prepareRecipientSubmission(delivery.id);
     if (!first || "reconcileAttemptId" in first) throw new Error("Expected first attempt");
-    await markDeterminateFailure(first.attemptId, { category: "provider", code: "fixture_unavailable", message: "Fixture outage" }, true);
+    await markDeterminateFailure(first.attemptId, { category: "provider", code: "PROVIDER_UNAVAILABLE", message: "Fixture outage" }, true);
     expect((await query<{ status: string }>("SELECT status FROM submissions WHERE id=$1", [first.submissionId])).rows[0].status).toBe("deferred");
     const second = await prepareRecipientSubmission(delivery.id);
     if (!second || "reconcileAttemptId" in second) throw new Error("Expected retry attempt");
@@ -716,13 +716,13 @@ describe("durable message pipeline", () => {
     const send = vi.spyOn(providerRegistry("mock").sender, "send");
     try {
       await query("UPDATE service_domain_bindings SET outbound_provider_identity_id=$1 WHERE id='sdb_atlas'", [alternate]);
-      await expect(providerSender.send(prepared)).rejects.toMatchObject({ code: "DOMAIN_SEND_NOT_AUTHORIZED" });
+      await expect(providerSender.send(prepared)).rejects.toMatchObject({ code: "SENDER_NOT_AUTHORIZED" });
       await query("UPDATE service_domain_bindings SET outbound_provider_identity_id='pi_atlas_mock' WHERE id='sdb_atlas'");
       await query("UPDATE provider_identities SET status='disabled' WHERE id='pi_atlas_mock'");
-      await expect(providerSender.send(prepared)).rejects.toMatchObject({ code: "DOMAIN_SEND_NOT_AUTHORIZED" });
+      await expect(providerSender.send(prepared)).rejects.toMatchObject({ code: "SENDER_NOT_AUTHORIZED" });
       await query("UPDATE provider_identities SET status='verified' WHERE id='pi_atlas_mock'");
       await query("UPDATE provider_accounts SET health=$1 WHERE id='pa_mock'", [{ status: "offline" }]);
-      await expect(providerSender.send(prepared)).rejects.toMatchObject({ code: "DOMAIN_SEND_NOT_AUTHORIZED" });
+      await expect(providerSender.send(prepared)).rejects.toMatchObject({ code: "SENDER_NOT_AUTHORIZED" });
       expect(send).not.toHaveBeenCalled();
     } finally {
       send.mockRestore();

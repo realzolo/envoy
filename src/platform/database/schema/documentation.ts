@@ -96,7 +96,7 @@ export const schemaDocumentation = {
   deliveries: { table: "Per-recipient outbound delivery state, with independent lifecycle, engagement and compliance statuses", columns: {
     id: "Unique recipient delivery identifier", messageId: "Owning outbound message identifier", recipientEmail: "Recipient email address, unique within the message",
     recipientName: "Optional recipient display name", recipientRole: "Recipient role: to (primary), cc (carbon copy) or bcc (blind copy)",
-    lastError: "Latest delivery error JSON containing code, category and description; may be null after success or when no error exists",
+    diagnostic: "Canonical content-free MailDiagnostic; no provider free text", revision: "Monotonic version of the complete current delivery snapshot", retryDisposition: "Current retry responsibility and disposition, independent of manual action authorization",
     lifecycleStatus: "Delivery lifecycle: queued, submitting, accepted, deferred, delivered, bounced, failed, unknown (indeterminate outcome) or canceled",
     engagementStatus: "Engagement status: unopened, opened or clicked", complianceStatus: "Compliance status: clean (unrestricted), complained, unsubscribed or suppressed",
     currentAttemptId: "Current provider submission attempt; null when absent or deleted", currentSubmissionId: "Current sending submission; null when absent or deleted",
@@ -116,7 +116,6 @@ export const schemaDocumentation = {
     rfcMessageId: "RFC Message-ID used in the request or confirmed by the provider, for conversation and evidence correlation",
     status: "Attempt status: submitting, accepted, failed (definite failure), unknown (indeterminate outcome), reconciling or reconciled",
     outcomeDeterminate: "Whether explicit evidence confirms the provider acceptance outcome; indeterminate outcomes must not trigger blind resends",
-    errorCategory: "Normalized provider error category; null when no error exists", errorCode: "Normalized or provider-specific error code; null when no error exists", errorMessage: "Redacted error description; must not contain authentication secrets or sensitive message bodies",
     diagnostic: "Redacted provider diagnostic JSON for protocol, network or response failures", providerResponseRef: "Reference to provider response evidence; does not store secret response content directly",
     startedAt: "Attempt start time (timestamptz, defaults to database transaction time)", finishedAt: "Attempt completion or outcome confirmation time (timestamptz)",
     submissionDeadlineAt: "Deadline for the submission result (timestamptz); defaults to two minutes after transaction start, used for recovery and reconciliation",

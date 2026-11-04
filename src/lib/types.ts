@@ -1,3 +1,4 @@
+import type { DeliverySnapshot, MailDiagnostic } from "@/contracts/mail-diagnostics";
 export type DeliveryStatus =
   | "delivered"
   | "accepted"
@@ -16,7 +17,8 @@ export type EmailRecord = {
   recipient: string;
   recipientName?: string;
   recipientRole?: "to" | "cc" | "bcc";
-  lastError?: Record<string, unknown> | null;
+  diagnostic?: MailDiagnostic | null;
+  transport?: DeliverySnapshot;
   subject: string;
   category: string;
   service: string;

@@ -70,12 +70,12 @@ describe("bounded content retention", () => {
 
   it("preserves correlation metadata and structured errors when deleting sensitive bodies", async () => {
     const id = await message("failed");
-    const error = { code: "MAILBOX_NOT_FOUND", message: "Mailbox unavailable", stage: "recipient_delivery" };
+    const error = {source:"PROVIDER",code:"MAILBOX_PERMANENTLY_REJECTED",reasonCode:"MAILBOX_NOT_FOUND",stage:"RECIPIENT_DELIVERY",detailAvailability:"SPECIFIC",evidence:{smtpStatus:"5.1.1"},occurredAt:null};
     await query("UPDATE messages SET metadata=$2,provider_tags=$3 WHERE id=$1", [id, { orderId: "123" }, { purpose: "receipt" }]);
-    await query("UPDATE deliveries SET last_error=$2 WHERE id=$1", [id, error]);
+    await query("UPDATE deliveries SET diagnostic=$2 WHERE id=$1", [id, error]);
     await runRetention(options(true), store());
     expect((await query("SELECT metadata,provider_tags,subject,text_body FROM messages WHERE id=$1", [id])).rows[0]).toEqual({ metadata: { orderId: "123" }, provider_tags: { purpose: "receipt" }, subject: "", text_body: "" });
-    expect((await query("SELECT last_error FROM deliveries WHERE id=$1", [id])).rows[0].last_error).toEqual(error);
+    expect((await query("SELECT diagnostic FROM deliveries WHERE id=$1", [id])).rows[0].diagnostic).toEqual(error);
   });
 
   it("keeps a shared attachment until every referencing message has expired", async () => {

@@ -20,11 +20,11 @@ export function createDeliveryWorkflow(dependencies: DeliveryDependencies) {
         }
         catch (error) {
             if (error instanceof SendPreparationError)
-                await dependencies.markDeterminateFailure(submission.attemptId, { category: "policy", code: error.code, stage: "preparation", message: error.message }, false);
+                await dependencies.markDeterminateFailure(submission.attemptId, { category: "policy", code: error.code, stage: error.code === "SENDER_NOT_AUTHORIZED" ? "AUTHORIZATION" : "PREPARATION", message: error.message }, false);
             else if (error instanceof SendDeadlineError)
                 await dependencies.markDeterminateFailure(submission.attemptId, { category: "policy", code: error.code, message: error.message }, false);
             else if (error instanceof CanonicalProviderError && error.outcome === "not_accepted")
-                await dependencies.markDeterminateFailure(submission.attemptId, error, error.retryable);
+                await dependencies.markDeterminateFailure(submission.attemptId, { ...error, category:error.category, code:error.code, message:error.message, source:"PROVIDER" }, error.retryable);
             else
                 await dependencies.markUnknown(submission.attemptId, "Provider submission outcome is unknown", error instanceof CanonicalProviderError ? error : undefined);
             return;
@@ -41,7 +41,7 @@ export function createDeliveryWorkflow(dependencies: DeliveryDependencies) {
                     id: crypto.randomUUID(), externalMessageId: result.externalMessageId,
                     type: recipient.email.includes("bounce") ? "bounced" : recipient.email.includes("complaint") ? "complained" : "delivered",
                     occurredAt: new Date(Date.now() + 100), recipient: recipient.email,
-                    bounce: recipient.email.includes("bounce") ? { classification: "hard", message: "Simulated hard bounce" } : undefined,
+                    bounce: recipient.email.includes("bounce") ? { classification: "HARD", message: "Simulated hard bounce" } : undefined,
                     metadata: {},
                 });
             }

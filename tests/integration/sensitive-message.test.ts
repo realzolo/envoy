@@ -10,7 +10,7 @@ import { applyCanonicalEvent, processRawProviderEvent } from "@/modules/outbound
 import { prepareSubmission, markAccepted, markUnknown, markDeterminateFailure, markReconciled } from "@/modules/outbound/public";
 import { providerRegistry } from "@/integrations/providers/registry";
 import { ingestProviderWebhook } from "@/modules/inbound/public";
-import { GET as messageApi } from "@/app/api/v1/messages/[id]/route";
+import { GET as messageApi } from "@/app/api/v2/messages/[id]/route";
 import { GET as capabilitiesApi } from "@/app/api/v1/capabilities/route";
 import { objectStore } from "@/platform/storage/object-store";
 import { uploadOutboundFile } from "@/modules/attachments/public";
@@ -97,7 +97,7 @@ describe("sensitive content and sending deadline", () => {
       if (previousRing === undefined) delete process.env.ENVOY_KEK_KEYRING_JSON; else process.env.ENVOY_KEK_KEYRING_JSON = previousRing;
     }
     expect(await prepareSubmission(row.submissionId)).toBeNull();
-    expect((await getMessage(row.id, identity.serviceId))?.deliveries[0]).toMatchObject({ lifecycle_status: "failed", last_error: { code: "SEND_DEADLINE_EXCEEDED", acceptance: "not_accepted" } });
+    expect((await getMessage(row.id, identity.serviceId))?.deliveries[0]).toMatchObject({ lifecycle_status: "failed", diagnostic: { code: "SEND_DEADLINE_EXCEEDED" } });
   });
 
   it("prevents expired queued work, manual retry, and determinate-rejection failover", async () => {
@@ -105,7 +105,7 @@ describe("sensitive content and sending deadline", () => {
     const prepared = await prepare(row.submissionId);
     await expire(row.id);
     await markDeterminateFailure(prepared.attemptId, { category: "provider", code: "PROVIDER_REJECTED", message: secret }, true);
-    expect((await query("SELECT status,diagnostic FROM submission_attempts WHERE id=$1", [prepared.attemptId])).rows[0]).toMatchObject({ status: "failed", diagnostic: { code: "SEND_DEADLINE_EXCEEDED", retryable: false, retryDecision: { action: "none" } } });
+    expect((await query("SELECT status,diagnostic FROM submission_attempts WHERE id=$1", [prepared.attemptId])).rows[0]).toMatchObject({ status: "failed", diagnostic: { code: "SEND_DEADLINE_EXCEEDED" } });
     expect(await prepareSubmission(row.submissionId)).toBeNull();
     const retry = await retryMessage(row.id, identity.serviceId, { acknowledgeDuplicateRisk: true }, crypto.randomUUID());
     expect(retry).toMatchObject({ queued: 0, skipped: [{ reason: "send_deadline_exceeded" }] });
@@ -126,7 +126,7 @@ describe("sensitive content and sending deadline", () => {
     try {
       await processDelivery({ data: { submissionId: row.submissionId } } as Job<{ submissionId: string }>);
       expect(get).toHaveBeenCalledOnce(); expect(send).not.toHaveBeenCalled();
-      expect((await getMessage(row.id, identity.serviceId))?.deliveries[0]).toMatchObject({ lifecycle_status: "failed", last_error: { code: "SEND_DEADLINE_EXCEEDED" } });
+      expect((await getMessage(row.id, identity.serviceId))?.deliveries[0]).toMatchObject({ lifecycle_status: "failed", diagnostic: { code: "SEND_DEADLINE_EXCEEDED" } });
     } finally { get.mockRestore(); send.mockRestore(); }
   });
 
@@ -148,14 +148,14 @@ describe("sensitive content and sending deadline", () => {
     const row = await fixture(); const prepared = await prepare(row.submissionId);
     await markUnknown(prepared.attemptId, secret); await expire(row.id);
     await markReconciled(prepared.attemptId, "not_accepted");
-    expect((await getMessage(row.id, identity.serviceId))?.deliveries[0]).toMatchObject({ lifecycle_status: "failed", last_error: { code: "SEND_DEADLINE_EXCEEDED" } });
+    expect((await getMessage(row.id, identity.serviceId))?.deliveries[0]).toMatchObject({ lifecycle_status: "failed", diagnostic: { code: "SEND_DEADLINE_EXCEEDED" } });
     expect(await prepareSubmission(row.submissionId)).toBeNull();
   });
 
   it("stores only normalized provider facts, encrypts raw receipts, and clears outbound raw copies", async () => {
     const row = await fixture(); const prepared = await prepare(row.submissionId); const externalId = crypto.randomUUID();
     await markAccepted(prepared.attemptId, externalId);
-    await applyCanonicalEvent("pa_mock", null, { id: crypto.randomUUID(), externalMessageId: externalId, type: "bounced", recipient: row.value.to[0].email, occurredAt: new Date(), bounce: { classification: "soft", code: secret, message: secret }, metadata: { reason: secret, url: secret, providerCode: secret } });
+    await applyCanonicalEvent("pa_mock", null, { id: crypto.randomUUID(), externalMessageId: externalId, type: "bounced", recipient: row.value.to[0].email, occurredAt: new Date(), bounce: { classification: "SOFT", code: secret, message: secret }, metadata: { reason: secret, url: secret, providerCode: secret } });
     const stored = (await query("SELECT canonical_payload FROM delivery_events WHERE delivery_id IN(SELECT id FROM deliveries WHERE message_id=$1)", [row.id])).rows;
     expect(JSON.stringify(stored)).not.toContain(secret);
     expect(JSON.stringify((await query("SELECT payload FROM callback_deliveries WHERE payload#>>'{data,messageId}'=$1", [row.id])).rows)).not.toContain(secret);

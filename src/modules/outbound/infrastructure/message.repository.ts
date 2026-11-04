@@ -27,9 +27,9 @@ export function createMessageRepository(client: Pool | PoolClient): MessageRepos
             serviceId: string;
             listId: string | null;
         }) {
-            return client.query<Record<string, unknown>>(`SELECT 1 FROM suppressions WHERE active=true AND email_normalized=lower($1)
+            return client.query<Record<string, unknown>>(`SELECT reason FROM suppressions WHERE active=true AND email_normalized=lower($1)
     AND (expires_at IS NULL OR expires_at>now()) AND (scope_type='global' OR (scope_type='service' AND service_id=$2)
-    OR (scope_type='list' AND service_id=$2 AND list_id=$3)) LIMIT 1`, [input.email, input.serviceId, input.listId]);
+    OR (scope_type='list' AND service_id=$2 AND list_id=$3)) ORDER BY CASE scope_type WHEN 'global' THEN 0 WHEN 'service' THEN 1 ELSE 2 END,created_at,id LIMIT 1`, [input.email, input.serviceId, input.listId]);
         },
         findBoundProviderType(input: {
             sendingDomainId: string;
@@ -60,7 +60,7 @@ export function createMessageRepository(client: Pool | PoolClient): MessageRepos
             id: string;
             deliveryIds: string[];
         }) {
-            return client.query<Record<string, unknown>>("UPDATE deliveries SET current_submission_id=$1,current_attempt_id=NULL WHERE id=ANY($2::text[])", [input.id, input.deliveryIds]);
+            return client.query<Record<string, unknown>>("UPDATE deliveries SET current_submission_id=$1,current_attempt_id=NULL,accepted_at=NULL,delivered_at=NULL,diagnostic=NULL WHERE id=ANY($2::text[])", [input.id, input.deliveryIds]);
         },
         enqueueSubmission(input: {
             outboxId: string;
@@ -142,24 +142,7 @@ export function createMessageRepository(client: Pool | PoolClient): MessageRepos
             id: string;
             serviceId: string;
         }) {
-            return client.query<MessageRow>(`${projection} WHERE m.id=$1 AND m.service_id=$2 AND ${outboundDomainAccess('m')}`, [input.id, input.serviceId]);
-        },
-        listMessageDeliveries(input: {
-            id: string;
-        }) {
-            return client.query<{
-                id: string;
-                recipient_email: string;
-                recipient_name: string | null;
-                recipient_role: "to" | "cc" | "bcc";
-                lifecycle_status: string;
-                engagement_status: string;
-                compliance_status: string;
-                last_error: unknown;
-                updated_at: Date;
-                accepted_at: Date | null;
-                delivered_at: Date | null;
-            }>("SELECT id,recipient_email,recipient_name,recipient_role,lifecycle_status,engagement_status,compliance_status,last_error,updated_at,accepted_at,delivered_at FROM deliveries WHERE message_id=$1 ORDER BY queued_at,id", [input.id]);
+            return client.query<MessageRow>(`${projection.replace("SELECT m.*,", "SELECT m.*,(SELECT jsonb_agg(to_jsonb(d) || jsonb_build_object('revision',d.revision::text) ORDER BY d.queued_at,d.id) FROM deliveries d WHERE d.message_id=m.id) AS snapshot_deliveries,")} WHERE m.id=$1 AND m.service_id=$2 AND ${outboundDomainAccess('m')}`, [input.id, input.serviceId]);
         },
         lockAuthorizedMessage(input: {
             id: string;
@@ -207,7 +190,7 @@ export function createMessageRepository(client: Pool | PoolClient): MessageRepos
             }>(`SELECT d.id,d.message_id,m.service_id,d.lifecycle_status,d.compliance_status,d.current_attempt_id,
     COALESCE(NOT a.outcome_determinate,false) AS uncertain,(a.status='submitting') IS TRUE AS live,(a.status IN ('accepted','reconciled') AND d.lifecycle_status='deferred') IS TRUE AS provider_pending,m.content_purged_at IS NOT NULL AS content_expired,(m.send_before<=clock_timestamp()) IS TRUE AS deadline_expired,
     ${outboundDomainAccess('m')} AS enabled,
-    EXISTS(SELECT 1 FROM suppressions su WHERE su.active AND su.email_normalized=lower(d.recipient_email) AND (su.expires_at IS NULL OR su.expires_at>now())
+    EXISTS(SELECT reason FROM suppressions su WHERE su.active AND su.email_normalized=lower(d.recipient_email) AND (su.expires_at IS NULL OR su.expires_at>now())
       AND (su.scope_type='global' OR (su.service_id=m.service_id AND (su.scope_type='service' OR su.list_id=m.metadata->>'listId')))) AS blocked
     FROM deliveries d JOIN messages m ON m.id=d.message_id LEFT JOIN submission_attempts a ON a.id=d.current_attempt_id WHERE d.id=$1 FOR UPDATE OF d`, [input.deliveryId]);
         },

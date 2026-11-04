@@ -88,11 +88,9 @@ export function createRoutingRepository(client: Pick<PoolClient, "query">): Rout
         },
         recordInterruptedAttempt(input: {
             id: string;
-            code: string;
-            message: string;
             error: Diagnostic;
         }) {
-            return client.query<Record<string, unknown>>("UPDATE submission_attempts SET status='unknown',outcome_determinate=false,error_category='unknown',error_code=$2,error_message=$3,diagnostic=$4,finished_at=now(),reconcile_after=now()+interval '30 seconds' WHERE id=$1", [input.id, input.code, input.message, input.error]);
+            return client.query<Record<string, unknown>>("UPDATE submission_attempts SET status='unknown',outcome_determinate=false,diagnostic=$2,finished_at=now(),reconcile_after=now()+interval '30 seconds' WHERE id=$1", [input.id, input.error]);
         },
         setInterruptedSubmission(input: {
             submissionId: string;
@@ -147,7 +145,7 @@ export function createRoutingRepository(client: Pick<PoolClient, "query">): Rout
             id: string;
             attemptId: string;
         }) {
-            return client.query<Record<string, unknown>>("UPDATE deliveries SET current_attempt_id=$2 WHERE id=$1", [input.id, input.attemptId]);
+            return client.query<Record<string, unknown>>(`UPDATE deliveries SET current_attempt_id=$2,accepted_at=NULL,delivered_at=NULL,diagnostic=NULL,retry_disposition='{"owner":"ENVOY","action":"SCHEDULED","nextAttemptAt":null}' WHERE id=$1`, [input.id, input.attemptId]);
         },
         findAttemptOwner(input: {
             attemptId: string;
@@ -179,7 +177,7 @@ export function createRoutingRepository(client: Pick<PoolClient, "query">): Rout
             responseJson: string;
             rfcMessageId: string | null;
         }) {
-            return client.query<Record<string, unknown>>("UPDATE submission_attempts SET status='accepted',outcome_determinate=true,external_message_id=$2,provider_response_ref=$3,rfc_message_id=$4,finished_at=now(),reconcile_after=NULL,diagnostic=NULL,error_category=NULL,error_code=NULL,error_message=NULL WHERE id=$1", [input.attemptId, input.externalMessageId, input.responseJson, input.rfcMessageId]);
+            return client.query<Record<string, unknown>>("UPDATE submission_attempts SET status='accepted',outcome_determinate=true,external_message_id=$2,provider_response_ref=$3,rfc_message_id=$4,finished_at=now(),reconcile_after=NULL,diagnostic=NULL WHERE id=$1", [input.attemptId, input.externalMessageId, input.responseJson, input.rfcMessageId]);
         },
         acceptSubmission(input: {
             submissionId: string;
@@ -188,11 +186,9 @@ export function createRoutingRepository(client: Pick<PoolClient, "query">): Rout
         },
         markAttemptUnknown(input: {
             attemptId: string;
-            code: string;
-            message: string;
             error: Diagnostic;
         }) {
-            return client.query<Record<string, unknown>>("UPDATE submission_attempts SET status='unknown',outcome_determinate=false,error_category='unknown',error_code=$2,error_message=$3,diagnostic=$4,finished_at=now(),reconcile_after=now()+interval '30 seconds' WHERE id=$1", [input.attemptId, input.code, input.message, input.error]);
+            return client.query<Record<string, unknown>>("UPDATE submission_attempts SET status='unknown',outcome_determinate=false,diagnostic=$2,finished_at=now(),reconcile_after=now()+interval '30 seconds' WHERE id=$1", [input.attemptId, input.error]);
         },
         markSubmissionUnknown(input: {
             submissionId: string;
@@ -201,12 +197,9 @@ export function createRoutingRepository(client: Pick<PoolClient, "query">): Rout
         },
         failAttempt(input: {
             attemptId: string;
-            category: string;
-            code: string;
-            message: string;
             error: Diagnostic;
         }) {
-            return client.query<Record<string, unknown>>("UPDATE submission_attempts SET status='failed',outcome_determinate=true,error_category=$2,error_code=$3,error_message=$4,diagnostic=$5,finished_at=now(),reconcile_after=NULL WHERE id=$1", [input.attemptId, input.category, input.code, input.message, input.error]);
+            return client.query<Record<string, unknown>>("UPDATE submission_attempts SET status='failed',outcome_determinate=true,diagnostic=$2,finished_at=now(),reconcile_after=NULL WHERE id=$1", [input.attemptId, input.error]);
         },
         setFailureResult(input: {
             submissionId: string;
@@ -239,17 +232,15 @@ export function createRoutingRepository(client: Pick<PoolClient, "query">): Rout
         recordReconciliationExhaustion(input: {
             attemptId: string;
             error: Diagnostic;
-            code: string;
-            message: string;
         }) {
-            return client.query<Record<string, unknown>>("UPDATE submission_attempts SET diagnostic=$2,error_code=$3,error_message=$4 WHERE id=$1", [input.attemptId, input.error, input.code, input.message]);
+            return client.query<Record<string, unknown>>("UPDATE submission_attempts SET diagnostic=$2 WHERE id=$1", [input.attemptId, input.error]);
         },
         resolveAttemptReconciliation(input: {
             attemptId: string;
             status: "failed" | "reconciled";
             diagnostic: Diagnostic | null;
         }) {
-            return client.query<Record<string, unknown>>("UPDATE submission_attempts SET status=$2,outcome_determinate=true,finished_at=now(),reconcile_after=NULL,diagnostic=$3,error_category=CASE WHEN $2='reconciled' THEN NULL ELSE error_category END,error_code=CASE WHEN $2='reconciled' THEN NULL ELSE error_code END,error_message=CASE WHEN $2='reconciled' THEN NULL ELSE error_message END WHERE id=$1", [input.attemptId, input.status, input.diagnostic]);
+            return client.query<Record<string, unknown>>("UPDATE submission_attempts SET status=$2,outcome_determinate=true,finished_at=now(),reconcile_after=NULL,diagnostic=$3 WHERE id=$1", [input.attemptId, input.status, input.diagnostic]);
         },
         setReconciliationResult(input: {
             submissionId: string;

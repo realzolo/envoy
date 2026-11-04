@@ -1,3 +1,4 @@
+import { submissionReason, smtpFacts } from "@/integrations/providers/diagnostic-facts";
 import { diagnostic, type Diagnostic } from "@/modules/outbound/domain/diagnostics";
 import { createId } from "@/platform/ids";
 import { createHash } from "node:crypto";
@@ -8,7 +9,7 @@ import { configuredLimit, evaluateCandidate } from "../domain/routing";
 import type { OutboundDependencies, OutboundRepositories } from "./ports";
 export function createRoutingService(dependencies: OutboundDependencies) {
     const { applyDeliveryEvent, applySubmissionEvent } = dependencies.events;
-    const { createSubmission, isSuppressed } = dependencies.messages;
+    const { createSubmission, suppression, suppressionEvidence } = dependencies.messages;
     async function reserveProviderCapacity(client: OutboundRepositories, candidate: Candidate, recipients: number) {
         const account = (await client.routing.lockAccountQuota({ providerAccountId: candidate.provider_account_id })).rows[0];
         if (!account)
@@ -38,10 +39,10 @@ export function createRoutingService(dependencies: OutboundDependencies) {
             await applyDeliveryEvent(client, row.id, event, `${key}:${row.id}`, { attemptId: attempt?.id, projectLifecycle });
         }
     }
-    async function routingFailure(client: OutboundRepositories, submission: Submission, code: string, message: string, retryable: boolean) {
+    async function routingFailure(client: OutboundRepositories, submission: Submission, code: Diagnostic["code"], message: string, retryable: boolean) {
         const count = (await client.routing.incrementDeferralCount({ id: submission.id })).rows[0].defer_count;
         const retry = retryable && count < 60;
-        const error = diagnostic(code, message, code === "SENDER_NOT_AUTHORIZED" ? "authorization" : "routing", { retryable, retryDecision: retry ? { action: "scheduled", nextAttemptAt: new Date(Date.now() + 60000).toISOString() } : { action: "none", reason: retryable ? "routing_retries_exhausted" : "configuration_or_policy" } });
+        const error = diagnostic(code, code === "SENDER_NOT_AUTHORIZED" ? "AUTHORIZATION" : "ROUTING");
         await client.routing.setRoutingResult({ id: submission.id, status: retry ? "deferred" : "failed" });
         await emit(client, submission.id, retry ? "deferred" : "failed", `submission:${submission.id}:route:${count}`, error);
         if (retry)
@@ -62,8 +63,8 @@ export function createRoutingService(dependencies: OutboundDependencies) {
             if (latest?.status === "submitting") {
                 if (!latest.submission_expired)
                     return null;
-                const error = diagnostic("INTERRUPTED_SUBMISSION", "The submission deadline expired before its outcome was recorded.", "submission", { acceptance: "unknown", retryDecision: { action: "manual_review", reason: "Reconciliation will check provider acceptance; automatic resubmission is blocked." } });
-                await client.routing.recordInterruptedAttempt({ id: latest.id, code: error.code, message: error.message, error: error });
+                const error = diagnostic("INTERRUPTED_SUBMISSION", "SUBMISSION");
+                await client.routing.recordInterruptedAttempt({ id: latest.id, error: error });
                 await client.routing.setInterruptedSubmission({ submissionId: submissionId });
                 await emit(client, submissionId, "unknown", `attempt:${latest.id}:unknown`, error, latest);
                 await enqueueReconciliation(client, latest.id, 30);
@@ -93,8 +94,9 @@ export function createRoutingService(dependencies: OutboundDependencies) {
             message = dependencies.sendingContent(message);
             const allowed: Recipient[] = [];
             for (const recipient of active) {
-                if (recipient.compliance_status !== "clean" || await isSuppressed(client, message.service_id, recipient.recipient_email, message.metadata.listId)) {
-                    await applyDeliveryEvent(client, recipient.id, { id: createId("sup"), type: "suppressed", occurredAt: new Date(), metadata: {} }, `submission:${submissionId}:suppressed:${recipient.id}`);
+                const blocked = await suppression(client,message.service_id,recipient.recipient_email,message.metadata.listId);
+                if (recipient.compliance_status !== "clean" || blocked) {
+                    await applyDeliveryEvent(client, recipient.id, { id: createId("sup"), type: "suppressed", occurredAt: new Date(), metadata: {diagnostic:diagnostic("RECIPIENT_SUPPRESSED","POLICY",{reasonCode:"RECIPIENT_SUPPRESSED",evidence:suppressionEvidence(blocked)})} }, `submission:${submissionId}:suppressed:${recipient.id}`);
                 }
                 else
                     allowed.push(recipient);
@@ -174,14 +176,15 @@ export function createRoutingService(dependencies: OutboundDependencies) {
     async function markUnknown(attemptId: string, message: string, details: {
         providerCode?: string;
         smtpStatus?: string;
-        stage?: string;
+        reasonCode?: import("@/contracts/mail-diagnostics").DiagnosticReason;
+        stage?: Diagnostic["stage"];
     } = {}) {
         await dependencies.unitOfWork.run(async (client) => {
             const row = await lockAttempt(client, attemptId);
             if (!row || row.status !== "submitting")
                 return;
-            const error = diagnostic("SUBMISSION_OUTCOME_UNKNOWN", row.content_policy === "sensitive" ? "Provider submission outcome is unknown." : dependencies.safeDiagnostic(message), details.stage ?? "submission", { acceptance: "unknown", providerCode: row.content_policy === "sensitive" ? undefined : details.providerCode, smtpStatus: row.content_policy === "sensitive" ? undefined : details.smtpStatus, retryDecision: { action: "manual_review", reason: "Automatic resubmission is blocked until provider acceptance is determined." } });
-            await client.routing.markAttemptUnknown({ attemptId: attemptId, code: error.code, message: error.message, error: error });
+            const error = diagnostic("SUBMISSION_OUTCOME_UNKNOWN", details.stage ?? "SUBMISSION");
+            await client.routing.markAttemptUnknown({ attemptId: attemptId, error: error });
             if (row.is_current)
                 await client.routing.markSubmissionUnknown({ submissionId: row.submission_id });
             await emit(client, row.submission_id, "unknown", `attempt:${attemptId}:unknown`, error, row);
@@ -191,11 +194,13 @@ export function createRoutingService(dependencies: OutboundDependencies) {
     }
     async function markDeterminateFailure(attemptId: string, failure: {
         category: string;
-        code: string;
+        source?: Diagnostic["source"];
+        code: Diagnostic["code"];
         message: string;
-        stage?: string;
+        stage?: Diagnostic["stage"];
         providerCode?: string;
         smtpStatus?: string;
+        reasonCode?: import("@/contracts/mail-diagnostics").DiagnosticReason;
     }, retryable: boolean) {
         return dependencies.unitOfWork.run(async (client) => {
             const row = await lockAttempt(client, attemptId);
@@ -203,13 +208,14 @@ export function createRoutingService(dependencies: OutboundDependencies) {
                 return null;
             const expired = Boolean(row.send_before && row.send_before.getTime() <= Date.now());
             if (expired) {
-                failure = { category: "policy", code: DEADLINE_CODE, message: DEADLINE_MESSAGE, stage: "submission" };
+                failure = { category: "policy", code: DEADLINE_CODE, message: DEADLINE_MESSAGE, stage: "SUBMISSION" };
                 retryable = false;
             }
             const retry = !expired && row.is_current && retryable && row.attempt_number < 5;
             const delay = Math.min(300, 5 * 2 ** (row.attempt_number - 1));
-            const error = diagnostic(failure.code, row.content_policy === "sensitive" && !expired ? "Provider submission was not accepted." : dependencies.safeDiagnostic(failure.message), failure.stage ?? "submission", { retryable, acceptance: "not_accepted", providerCode: row.content_policy === "sensitive" ? undefined : failure.providerCode, smtpStatus: row.content_policy === "sensitive" ? undefined : failure.smtpStatus, retryDecision: retry ? { action: "scheduled", nextAttemptAt: new Date(Date.now() + delay * 1000).toISOString() } : { action: "none", reason: retryable ? "attempts_exhausted" : "not_retryable" } });
-            await client.routing.failAttempt({ attemptId: attemptId, category: failure.category, code: error.code, message: error.message, error: error });
+            const facts = smtpFacts([failure.smtpStatus]);
+            const error = diagnostic(failure.code, failure.stage ?? "SUBMISSION", { evidence:facts.evidence, source: expired ? "ENVOY" : failure.source ?? "ENVOY", reasonCode: failure.reasonCode ?? submissionReason(failure.providerCode) ?? facts.reasonCode });
+            await client.routing.failAttempt({ attemptId: attemptId, error: error });
             if (row.is_current)
                 await client.routing.setFailureResult({ submissionId: row.submission_id, status: retry ? "deferred" : "failed" });
             await emit(client, row.submission_id, retry ? "deferred" : "failed", `attempt:${attemptId}:failure`, error, row);
@@ -230,8 +236,8 @@ export function createRoutingService(dependencies: OutboundDependencies) {
                 const exhausted = row.reconciliation_count >= 12;
                 await client.routing.recordUncertainReconciliation({ attemptId: attemptId, status: exhausted ? "unknown" : "reconciling", exhausted: exhausted });
                 if (exhausted) {
-                    const error = diagnostic("RECONCILIATION_EXHAUSTED", "Provider acceptance could not be determined after reconciliation. Review before authorizing a retry.", "reconciliation", { acceptance: "unknown", retryDecision: { action: "manual_review", reason: "reconciliation_exhausted" } });
-                    await client.routing.recordReconciliationExhaustion({ attemptId: attemptId, error: error, code: error.code, message: error.message });
+                    const error = diagnostic("RECONCILIATION_EXHAUSTED", "RECONCILIATION");
+                    await client.routing.recordReconciliationExhaustion({ attemptId: attemptId, error: error });
                     await emit(client, row.submission_id, "unknown", `attempt:${attemptId}:reconciliation_exhausted`, error, row);
                 }
                 else if (row.is_current)
@@ -240,7 +246,7 @@ export function createRoutingService(dependencies: OutboundDependencies) {
             }
             const expired = Boolean(row.send_before && row.send_before.getTime() <= Date.now());
             const retry = !expired && outcome === "not_accepted" && row.is_current && row.attempt_number < 5;
-            const error = outcome === "not_accepted" ? diagnostic(expired ? DEADLINE_CODE : "PROVIDER_NOT_ACCEPTED", expired ? DEADLINE_MESSAGE : "Reconciliation confirmed the provider did not accept the message.", "reconciliation", { retryable: !expired, retryDecision: retry ? { action: "scheduled", nextAttemptAt: new Date(Date.now() + 5000).toISOString() } : { action: "none", reason: expired ? "send_deadline_exceeded" : "attempts_exhausted" } }) : undefined;
+            const error = outcome === "not_accepted" ? diagnostic(expired ? DEADLINE_CODE : "PROVIDER_NOT_ACCEPTED", "RECONCILIATION") : undefined;
             await client.routing.resolveAttemptReconciliation({ attemptId: attemptId, status: outcome === "accepted" ? "reconciled" : "failed", diagnostic: error ?? null });
             if (row.is_current)
                 await client.routing.setReconciliationResult({ submissionId: row.submission_id, status: outcome === "accepted" ? "accepted" : retry ? "deferred" : "failed" });
@@ -249,16 +255,16 @@ export function createRoutingService(dependencies: OutboundDependencies) {
                 await enqueue(client, row.submission_id, 5);
         });
     }
-    async function recordWorkflowFailure(submissionId: string, message: string) {
+    async function recordWorkflowFailure(submissionId: string) {
         await dependencies.unitOfWork.run(async (client) => {
             const owner = (await client.routing.findWorkflowOwner({ submissionId: submissionId })).rows[0];
             if (!owner)
                 return;
-            const content = (await client.routing.lockWorkflowContent({ messageId: owner.message_id })).rows[0];
+            await client.routing.lockWorkflowContent({ messageId: owner.message_id });
             const row = (await client.routing.lockWorkflowSubmission({ submissionId: submissionId })).rows[0];
             if (!["queued", "deferred"].includes(row.status))
                 return;
-            const error = diagnostic("WORKFLOW_EXHAUSTED", content.content_policy === "sensitive" ? "Message workflow requires review." : dependencies.safeDiagnostic(message), "queue", { retryable: true, retryDecision: { action: "manual_review", reason: "The task exhausted infrastructure retries; retry the failed task or use the message retry API." } });
+            const error = diagnostic("WORKFLOW_EXHAUSTED", "QUEUE");
             await client.routing.deferWorkflow({ submissionId: submissionId });
             await emit(client, submissionId, "deferred", `submission:${submissionId}:workflow_exhausted`, error);
         });

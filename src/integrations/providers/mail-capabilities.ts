@@ -25,7 +25,7 @@ export function estimatedMessageBytes(message: Pick<CanonicalMessage, "from" | "
     return Buffer.byteLength(JSON.stringify(fields), "utf8") * 2 + attachments.reduce((size, attachment) => size + Math.ceil(attachment.content.byteLength / 3) * 4 + 2048, 0) + 8192;
 }
 export function assertMessageCapabilities(message: CanonicalMessage, capabilities: ProviderCapabilities) {
-    const unsupported = (feature: string) => { throw new CanonicalProviderError(`Provider cannot preserve ${feature}`, "policy", "UNSUPPORTED_MAIL_FEATURE", "not_accepted", false, { stage: "routing", providerCode: feature }); };
+    const unsupported = (feature: string) => { throw new CanonicalProviderError(`Provider cannot preserve ${feature}`, "policy", "UNSUPPORTED_MAIL_FEATURE", "not_accepted", false, { stage: "ROUTING", providerCode: feature }); };
     if (message.cc.length && !capabilities.cc)
         unsupported("cc");
     if (message.bcc.length && !capabilities.bcc)

@@ -1,7 +1,6 @@
 import { createUnitOfWork } from "@/platform/database";
 import { createOutboundChanges } from "@/modules/outbound/application/changes";
 import { outboundChangesRepository } from "@/modules/outbound/infrastructure/changes.read-repository";
-import { safeDiagnostic } from "@/integrations/providers/shared";
 import type { ProviderType } from "@/integrations/providers/contracts";
 import { providerRegistry } from "@/integrations/providers/registry";
 import { createDeliveryWorkflow } from "@/modules/outbound/application/delivery";
@@ -19,7 +18,6 @@ import { secretDigest } from "@/platform/crypto/envelope";
 import { transactionClient } from "@/platform/database";
 import type { TransactionContext } from "@/platform/transactions";
 const base = {
-    safeDiagnostic,
     payloadDigest: secretDigest,
     providerEvents: providerEventDecoder,
     unitOfWork: outboundUnitOfWork,

@@ -17,7 +17,7 @@ export function createRecoveryService(dependencies: OutboxDependencies) {
                 const latest = await repository.findLatestWork(work);
                 if (latest?.status === "failed") {
                     if (work.event_type === "submission.requested")
-                        await dependencies.recordWorkflowFailure(work.payload.submissionId, "The task exhausted infrastructure retries. Review the failed task before resuming.");
+                        await dependencies.recordWorkflowFailure(work.payload.submissionId);
                     continue;
                 }
                 if (latest?.recent)
@@ -30,7 +30,7 @@ export function createRecoveryService(dependencies: OutboxDependencies) {
                     if (state === "failed") {
                         await repository.markFailed(latest.id);
                         if (work.event_type === "submission.requested")
-                            await dependencies.recordWorkflowFailure(work.payload.submissionId, "The worker task exhausted its infrastructure retries. Review the failed task before resuming.");
+                            await dependencies.recordWorkflowFailure(work.payload.submissionId);
                         continue;
                     }
                 }

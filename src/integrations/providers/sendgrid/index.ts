@@ -127,7 +127,7 @@ export const sendgridModule: ProviderModule = {
                         occurredAt: eventDate(Number(row.timestamp) * 1000),
                         recipient: typeof row.email === "string" ? row.email : undefined,
                         bounce: type === "bounced" ? {
-                            classification: String(row.type).includes("bounce") ? "hard" : "soft",
+                            classification: row.type === "bounce" ? "HARD" : row.type === "blocked" ? "SOFT" : "UNKNOWN",
                             code: typeof row.status === "string" ? row.status : undefined,
                             message: String(row.reason ?? "")
                         } : undefined,

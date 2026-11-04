@@ -12,7 +12,7 @@ export function createOutboxService(dependencies: OutboxDependencies) {
                 catch (error) {
                     const status = await repository.recordPublicationFailure(event.id);
                     if (status === "failed" && event.event_type === "submission.requested")
-                        await dependencies.recordWorkflowFailure(event.payload.submissionId, error instanceof Error ? error.message : "Queue publication failed");
+                        await dependencies.recordWorkflowFailure(event.payload.submissionId);
                     dependencies.log("Failed to publish outbox event", event.id, error);
                 }
             }
@@ -23,7 +23,7 @@ export function createOutboxService(dependencies: OutboxDependencies) {
     async function markOutboxJobFailed(jobId: string, error: Error) {
         const event = await dependencies.reads.markExhaustedPublishedJob(jobId);
         if (event?.event_type === "submission.requested")
-            await dependencies.recordWorkflowFailure(event.payload.submissionId, error.message);
+            await dependencies.recordWorkflowFailure(event.payload.submissionId);
         dependencies.log("Task exhausted queue retries", jobId, error.message);
     }
     async function retryOutbox(id: string, actor: string) {

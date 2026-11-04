@@ -19,8 +19,16 @@ export function createMessageService(dependencies: Omit<OutboundDependencies, "m
         return value;
     }
     function hashPayload(input: unknown) { return createHash("sha256").update(JSON.stringify(stable(input))).digest("hex"); }
+    async function suppression(client: OutboundRepositories, serviceId: string, email: string, listId?: string) {
+        return (await client.message.isRecipientSuppressed({email,serviceId,listId:listId ?? null})).rows[0] ?? null;
+    }
     async function isSuppressed(client: OutboundRepositories, serviceId: string, email: string, listId?: string) {
-        return Boolean((await client.message.isRecipientSuppressed({ email: email, serviceId: serviceId, listId: listId ?? null })).rowCount);
+        return Boolean(await suppression(client,serviceId,email,listId));
+    }
+    function suppressionEvidence(value: Record<string,unknown> | null): import("@/contracts/mail-diagnostics").DiagnosticEvidence {
+        const known: Record<string,import("@/contracts/mail-diagnostics").DiagnosticEvidence["suppressionReason"]> = {hard_bounce:"HARD_BOUNCE",complained:"COMPLAINED",suppressed:"PROVIDER_SUPPRESSED",soft_bounce_threshold:"SOFT_BOUNCE_THRESHOLD",unsubscribe:"UNSUBSCRIBE",manual:"MANUAL"};
+        const reason = typeof value?.reason === "string" ? known[value.reason] : undefined;
+        return reason ? {suppressionReason:reason} : {};
     }
     async function assertRoutable(client: OutboundRepositories, message: MessageContent, recipients: {
         email: string;
@@ -103,7 +111,7 @@ export function createMessageService(dependencies: Omit<OutboundDependencies, "m
             const recipients = [];
             for (const role of ["to", "cc", "bcc"] as const)
                 for (const address of input[role])
-                    recipients.push({ ...address, role, blocked: await isSuppressed(client, args.identity.serviceId, address.email, input.metadata?.listId) });
+                    recipients.push({ ...address, role, blocked: await suppression(client, args.identity.serviceId, address.email, input.metadata?.listId) });
             const allowed = recipients.filter(item => !item.blocked);
             if (allowed.length)
                 await assertRoutable(client, content, allowed);
@@ -125,7 +133,7 @@ export function createMessageService(dependencies: Omit<OutboundDependencies, "m
                     deliveryIds.push(deliveryId);
                 await applyDeliveryEvent(client, deliveryId, {
                     id: deliveryId, type: recipient.blocked ? "suppressed" : "queued", occurredAt: accepted.accepted_at,
-                    metadata: recipient.blocked ? { diagnostic: diagnostic("RECIPIENT_SUPPRESSED", "The recipient is blocked by the current suppression policy.", "policy") } : {},
+                    metadata: recipient.blocked ? { diagnostic: diagnostic("RECIPIENT_SUPPRESSED", "POLICY", { reasonCode: "RECIPIENT_SUPPRESSED", evidence:suppressionEvidence(recipient.blocked) }) } : {},
                 }, `message:${id}:${deliveryId}:accepted`);
             }
             await createSubmission(client, id, deliveryIds);
@@ -155,7 +163,7 @@ export function createMessageService(dependencies: Omit<OutboundDependencies, "m
         const message = (await dependencies.repositories.message.findAuthorizedMessage({ id: id, serviceId: serviceId })).rows[0];
         if (!message)
             return null;
-        const deliveries = (await dependencies.repositories.message.listMessageDeliveries({ id: id })).rows;
+        const deliveries = message.snapshot_deliveries;
         return { ...message, deliveries };
     }
     async function cancelMessage(id: string, serviceId: string) {
@@ -244,5 +252,5 @@ export function createMessageService(dependencies: Omit<OutboundDependencies, "m
         const result = await retryMessage(message.id, message.service_id, { deliveryIds: [deliveryId], acknowledgeDuplicateRisk: options.acknowledgeUnknown }, createId("retry"), options.actor);
         return { deliveryId, queued: Boolean(result?.queued), reason: result?.skipped[0]?.reason ?? null };
     }
-    return { isSuppressed, assertRoutable, createSubmission, acceptMessage, listMessages, getMessage, cancelMessage, getDeliveryRetryEligibility, retryMessage, retryDelivery };
+    return { suppression, suppressionEvidence, isSuppressed, assertRoutable, createSubmission, acceptMessage, listMessages, getMessage, cancelMessage, getDeliveryRetryEligibility, retryMessage, retryDelivery };
 }

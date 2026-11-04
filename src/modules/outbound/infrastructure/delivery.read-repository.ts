@@ -1,4 +1,5 @@
-import { diagnosticSchema } from "@/lib/contracts";
+import { projectDeliverySnapshot } from "./diagnostic.projection";
+import { projectDiagnostic } from "@/contracts/mail-diagnostics";
 import { encodeCursor } from "@/lib/pagination";
 import { outboundDomainAccess } from "@/modules/identity/infrastructure/authorization";
 import { query } from "@/platform/database";
@@ -33,7 +34,7 @@ export async function listDeliveries(serviceId: string, options: {
         recipient_email: string;
         recipient_name: string | null;
         recipient_role: "to" | "cc" | "bcc";
-        last_error: Record<string, unknown> | null;
+        diagnostic: Record<string, unknown> | null;
         lifecycle_status: string;
         engagement_status: string;
         compliance_status: string;
@@ -41,7 +42,7 @@ export async function listDeliveries(serviceId: string, options: {
         updated_at: Date;
         subject: string;
         category: string;
-    }>(`SELECT d.id,d.message_id,d.recipient_email,d.recipient_name,d.recipient_role,d.last_error,d.lifecycle_status,d.engagement_status,
+    }>(`SELECT d.*,d.recipient_email,d.recipient_name,d.recipient_role,d.diagnostic,d.lifecycle_status,d.engagement_status,
        d.compliance_status,d.queued_at,to_char(d.queued_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_at,d.updated_at,m.subject,m.message_category AS category
      FROM deliveries d JOIN messages m ON m.id=d.message_id
      WHERE m.service_id=$1 AND ${outboundDomainAccess('m')} AND ($2::text IS NULL OR d.message_id=$2)
@@ -51,12 +52,10 @@ export async function listDeliveries(serviceId: string, options: {
     const page = nextCursor(rows, options.limit, row => row.queued_at);
     return {
         data: page.data.map(row => ({
-            id: row.id,
-            messageId: row.message_id,
             recipient: row.recipient_email,
             recipientName: row.recipient_name,
             recipientRole: row.recipient_role,
-            lastError: publicDiagnostic(row.last_error),
+            ...projectDeliverySnapshot(row as unknown as Record<string, unknown>),
             subject: row.subject,
             category: row.category,
             lifecycle: row.lifecycle_status,
@@ -75,7 +74,7 @@ export async function getDelivery(id: string, serviceId: string) {
         recipient_email: string;
         recipient_name: string | null;
         recipient_role: "to" | "cc" | "bcc";
-        last_error: Record<string, unknown> | null;
+        diagnostic: Record<string, unknown> | null;
         lifecycle_status: string;
         engagement_status: string;
         compliance_status: string;
@@ -86,7 +85,7 @@ export async function getDelivery(id: string, serviceId: string) {
         subject: string;
         category: string;
         reference_id: string | null;
-    }>(`SELECT d.id,d.message_id,d.recipient_email,d.recipient_name,d.recipient_role,d.last_error,d.lifecycle_status,d.engagement_status,
+    }>(`SELECT d.*,d.recipient_email,d.recipient_name,d.recipient_role,d.diagnostic,d.lifecycle_status,d.engagement_status,
        d.compliance_status,d.queued_at,d.accepted_at,d.delivered_at,d.updated_at,m.subject,
        m.message_category AS category,m.reference_id
      FROM deliveries d JOIN messages m ON m.id=d.message_id
@@ -102,13 +101,11 @@ export async function getDelivery(id: string, serviceId: string) {
         query<Omit<PublicEventRow, "delivery_id" | "message_id">>("SELECT id,event_type,occurred_at,canonical_payload FROM delivery_events WHERE delivery_id=$1 ORDER BY occurred_at DESC,id DESC", [id]),
     ]);
     return {
-        id: delivery.id,
-        messageId: delivery.message_id,
         referenceId: delivery.reference_id,
         recipient: delivery.recipient_email,
         recipientName: delivery.recipient_name,
         recipientRole: delivery.recipient_role,
-        lastError: publicDiagnostic(delivery.last_error),
+        ...projectDeliverySnapshot(delivery as unknown as Record<string, unknown>),
         subject: delivery.subject,
         category: delivery.category,
         lifecycle: delivery.lifecycle_status,
@@ -167,25 +164,19 @@ export function publicEvent(row: PublicEventRow) {
             ...(typeof payload.attemptId === "string" ? { attemptId: payload.attemptId } : {}),
             ...(typeof payload.recipient === "string" ? { recipient: payload.recipient } : {}),
             ...(publicDiagnostic(diagnostic) ? { diagnostic: publicDiagnostic(diagnostic) } : {}),
-            ...(typeof payload.reason === "string" ? { reason: payload.reason } : {}),
-            ...(bounce && (bounce.classification === "hard" || bounce.classification === "soft") ? { bounce: {
+                        ...(bounce && (["HARD", "SOFT", "UNKNOWN"].includes(String(bounce.classification))) ? { bounce: {
                     classification: bounce.classification,
-                    ...(typeof bounce.code === "string" ? { code: bounce.code } : {}),
-                    ...(typeof bounce.message === "string" ? { message: bounce.message } : {}),
                 } } : {}),
         },
     };
 }
-function publicDiagnostic(value: unknown) {
-    const parsed = diagnosticSchema.safeParse(value);
-    return parsed.success ? parsed.data : null;
-}
+const publicDiagnostic = projectDiagnostic;
 function publicAttempt(row: Record<string, unknown>) {
     return {
         id: row.id, submissionId: row.submission_id, number: row.attempt_number, status: row.status,
         rfcMessageId: row.rfc_message_id ?? null,
         rfcMessageIdStatus: row.rfc_message_id ? "confirmed" : "unknown",
-        outcomeDeterminate: row.outcome_determinate, error: publicDiagnostic(row.diagnostic),
+        outcomeDeterminate: row.outcome_determinate, diagnostic: publicDiagnostic(row.diagnostic),
         startedAt: (row.started_at as Date).toISOString(), finishedAt: (row.finished_at as Date | null)?.toISOString() ?? null,
         recipients: row.recipients ?? [],
     };
@@ -228,5 +219,6 @@ export async function getRequestDiagnostic(requestId: string, serviceId: string)
         created_at: Date;
         details: Record<string, unknown>;
     }>(`SELECT request_id,method,path,status_code,duration_ms,message_id,created_at,details FROM request_logs r WHERE request_id=$1 AND service_id=$2 AND (message_id IS NULL OR EXISTS(SELECT 1 FROM messages m WHERE m.id=r.message_id AND ${outboundDomainAccess('m')}))`, [requestId, serviceId])).rows[0];
-    return row ? { requestId: row.request_id, method: row.method, path: row.path, statusCode: row.status_code, durationMs: row.duration_ms, messageId: row.message_id, createdAt: row.created_at.toISOString(), problem: row.details.problem ?? null } : null;
+    const problem=row?.details.problem && typeof row.details.problem === "object" ? row.details.problem as Record<string,unknown> : null;
+    return row ? { requestId: row.request_id, method: row.method, path: row.path, statusCode: row.status_code, durationMs: row.duration_ms, messageId: row.message_id, createdAt: row.created_at.toISOString(), problem: problem ? {...problem,diagnostic:projectDiagnostic(problem.diagnostic)} : null } : null;
 }

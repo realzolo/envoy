@@ -41,6 +41,7 @@ export type MessageContent = {
     sensitive_content_purged_at?: Date | null;
 };
 export type MessageRow = MessageContent & {
+    snapshot_deliveries: Array<Record<string,unknown> & { id:string; recipient_email:string; lifecycle_status:string; diagnostic:unknown }>;
     request_id: string | null;
     accepted_at: Date;
     recipient_count: number;

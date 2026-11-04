@@ -1,3 +1,4 @@
+import { mailDiagnosticSchema, deliverySnapshotSchema } from "@/contracts/mail-diagnostics";
 import { z } from "zod";
 
 export const MAX_REQUEST_BYTES = 4_200_000;
@@ -87,42 +88,28 @@ export type AcceptedMessage = {
   referenceId?: string;
 };
 
-export type ProblemDetails = {
-  type: string;
-  title: string;
-  status: number;
-  detail: string;
-  code?: string;
-  requestId?: string;
-  errors?: Record<string, string[]>;
-};
+export type ProblemDetails = z.infer<typeof problemDetailsSchema>;
 
 const iso = z.string().datetime({ offset: true });
 const nullableText = z.string().nullable();
 export const processingStates = ["queued", "processing", "finished"] as const;
 export const messageOutcomes = ["pending", "succeeded", "partially_failed", "failed", "canceled", "unknown"] as const;
-export const diagnosticSchema = z.object({
-  code: z.string(), message: z.string(), stage: z.string(),
-  acceptance: z.enum(["not_accepted", "accepted", "unknown"]), retryable: z.boolean(),
-  retryDecision: z.object({ action: z.enum(["scheduled", "none", "manual_review"]), nextAttemptAt: iso.optional(), reason: z.string().optional() }),
-  providerCode: z.string().optional(), smtpStatus: z.string().optional(), occurredAt: iso.optional(),
-});
-export const deliverySummarySchema = z.object({
+export const diagnosticSchema = mailDiagnosticSchema;
+export const deliverySummarySchema = deliverySnapshotSchema.extend({
   id: z.string(), messageId: z.string(), recipient: z.string(), recipientName: nullableText, recipientRole: z.enum(["to", "cc", "bcc"]),
   subject: z.string(), category: z.string(), lifecycle: z.enum(deliveryStatuses),
   engagement: z.enum(["unopened", "opened", "clicked"]), compliance: z.enum(["clean", "complained", "unsubscribed", "suppressed"]),
-  lastError: diagnosticSchema.nullable(), queuedAt: iso, updatedAt: iso,
+  diagnostic: diagnosticSchema.nullable(), queuedAt: iso, updatedAt: iso,
 });
 export const publicEventSchema = z.object({
   id: z.string(), messageId: z.string(), deliveryId: z.string().nullable(), submissionId: z.string().optional(),
   type: z.string(), scope: z.enum(["recipient", "submission"]), occurredAt: iso,
   data: z.object({ attemptId: z.string().optional(), recipient: z.string().optional(), diagnostic: diagnosticSchema.optional(),
-    bounce: z.object({ classification: z.enum(["hard", "soft"]), code: z.string().optional(), message: z.string().optional() }).optional(),
-    reason: z.string().optional() }),
+    bounce: z.object({ classification: z.enum(["HARD", "SOFT", "UNKNOWN"]) }).strict().optional() }),
 });
 export const submissionAttemptSchema = z.object({
-  id: z.string(), submissionId: z.string(), number: z.number(), status: z.string(),
-  outcomeDeterminate: z.boolean(), error: diagnosticSchema.nullable(),
+  id: z.string(), submissionId: z.string(), number: z.number().int().positive(), status: z.enum(["submitting","accepted","failed","unknown","reconciling","reconciled"]),
+  outcomeDeterminate: z.boolean(), diagnostic: diagnosticSchema.nullable(),
   rfcMessageId: nullableText, rfcMessageIdStatus: z.enum(["confirmed","unknown"]),
   startedAt: iso, finishedAt: iso.nullable(),
   recipients: z.array(z.object({ deliveryId: z.string(), email: z.string(), role: z.enum(["to", "cc", "bcc"]) })),
@@ -145,10 +132,10 @@ export const messageDetailSchema = messageSummarySchema.extend({
   html: nullableText, text: nullableText, contentPurgedAt: iso.nullable(), replyTo: z.array(emailAddressSchema),
   headers: z.record(z.string(), z.string()), inReplyTo: nullableText, references: z.array(z.string()), attachments: z.array(outboundAttachmentSchema),
   metadata: z.record(z.string(), z.string()), tags: z.record(z.string(), z.string()),
-  deliveries: z.array(deliverySummarySchema.omit({ messageId: true, subject: true, category: true, queuedAt: true }).extend({ acceptedAt: iso.nullable(), deliveredAt: iso.nullable() })),
+  deliveries: z.array(deliverySnapshotSchema.extend({recipient:z.string(),recipientName:nullableText,recipientRole:z.enum(["to","cc","bcc"]),engagement:z.enum(["unopened","opened","clicked"]),compliance:z.enum(["clean","complained","unsubscribed","suppressed"])})),
 });
 export const deliveryDetailSchema = deliverySummarySchema.extend({ referenceId: nullableText, acceptedAt: iso.nullable(), deliveredAt: iso.nullable(), attempts: z.array(submissionAttemptSchema), events: z.array(publicEventSchema) });
-export const problemDetailsSchema = z.object({ type: z.string(), title: z.string(), status: z.number(), detail: z.string(), code: z.string(), requestId: z.string(), errors: z.record(z.string(), z.array(z.string())).optional() });
+export const problemDetailsSchema = z.object({ type: z.string(), title: z.string(), status: z.number(), detail: z.string(), code: z.string(), requestId: z.string(), diagnostic:mailDiagnosticSchema.nullable(), errors: z.record(z.string(), z.array(z.string())).optional() });
 export const requestDiagnosticSchema = z.object({ requestId: z.string(), method: z.string(), path: z.string(), statusCode: z.number(), durationMs: z.number(), messageId: nullableText, createdAt: iso, problem: problemDetailsSchema.nullable() });
 export const suppressionSchema = z.object({ id: z.string(), scope: z.enum(["global", "service", "list"]), listId: nullableText, email: z.string(), reason: z.string(), source: z.string(), expiresAt: iso.nullable(), createdAt: iso });
 

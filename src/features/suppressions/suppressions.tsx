@@ -5,6 +5,7 @@ import { Grid,Input,Select,Space } from "@arco-design/web-react";
 import { IconDelete } from "@arco-design/web-react/icon";
 import { useState } from "react";
 export function Suppressions({ data }: { data: Data }) {
+  const reasonLabels: Record<string,string>={hard_bounce:"历史硬退信",soft_bounce_threshold:"30天内软退信达到阈值",complained:"收件人投诉",suppressed:"供应商抑制",unsubscribe:"退订",manual:"人工抑制"};
   const action = useAction();
   const [scope, setScope] = useState<"global" | "service" | "list">("global");
   const services = rows(data.services);
@@ -45,7 +46,7 @@ export function Suppressions({ data }: { data: Data }) {
           columns={[
             { title: "Email", render: (_, suppression) => value(suppression, "email_normalized") },
             { title: "Scope", render: (_, suppression) => `${value(suppression, "scope_type")} ${value(suppression, "service")}${value(suppression, "list_id") ? ` / ${value(suppression, "list_id")}` : ""}` },
-            { title: "Reason", render: (_, suppression) => value(suppression, "reason") },
+            { title: "Reason", render: (_, suppression) => `${reasonLabels[value(suppression,"reason")] ?? "已记录的抑制规则"}（${value(suppression,"reason")}）${value(suppression,"scope_type")==="global" ? " · 全局生效" : ""}` },
             { title: "Source", render: (_, suppression) => value(suppression, "source") },
             { title: "Expires", render: (_, suppression) => suppression.expires_at ? date(suppression.expires_at) : "Permanent" },
             {

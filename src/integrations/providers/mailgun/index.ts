@@ -111,7 +111,7 @@ export const mailgunModule: ProviderModule = {
                     occurredAt: eventDate(Number(data.timestamp) * 1000),
                     recipient,
                     bounce: type === "bounced" || type === "deferred" ? {
-                        classification: data.severity === "permanent" ? "hard" : "soft",
+                        classification: data.severity === "permanent" ? "HARD" : data.severity === "temporary" ? "SOFT" : "UNKNOWN",
                         code: String(((data["delivery-status"] ?? {}) as Record<string, unknown>).code ?? ""),
                         message: String(((data["delivery-status"] ?? {}) as Record<string, unknown>).message ?? "")
                     } : undefined

@@ -83,21 +83,6 @@ export interface MessageRepository {
         id: string;
         serviceId: string;
     }): Promise<RepositoryResult<MessageRow>>;
-    listMessageDeliveries(input: {
-        id: string;
-    }): Promise<RepositoryResult<{
-        id: string;
-        recipient_email: string;
-        recipient_name: string | null;
-        recipient_role: "to" | "cc" | "bcc";
-        lifecycle_status: string;
-        engagement_status: string;
-        compliance_status: string;
-        last_error: unknown;
-        updated_at: Date;
-        accepted_at: Date | null;
-        delivered_at: Date | null;
-    }>>;
     lockAuthorizedMessage(input: {
         id: string;
         serviceId: string;
@@ -271,7 +256,7 @@ export interface EventsRepository {
             externalMessageId?: string | undefined;
             recipient?: string | undefined;
             bounce?: {
-                classification: "hard" | "soft";
+                classification: "HARD" | "SOFT" | "UNKNOWN";
                 code?: string;
                 message?: string;
             } | undefined;
@@ -319,6 +304,7 @@ export interface EventsRepository {
         deliveryId: string;
         error: Diagnostic;
     }): Promise<RepositoryResult<Record<string, unknown>>>;
+    recordRetryDisposition(input: { deliveryId: string; retry: import("@/contracts/mail-diagnostics").RetryDisposition }): Promise<RepositoryResult<Record<string, unknown>>>;
     clearDeliveryDiagnostic(input: {
         deliveryId: string;
     }): Promise<RepositoryResult<Record<string, unknown>>>;
@@ -361,7 +347,7 @@ export interface EventsRepository {
             externalMessageId?: string | undefined;
             recipient?: string | undefined;
             bounce?: {
-                classification: "hard" | "soft";
+                classification: "HARD" | "SOFT" | "UNKNOWN";
                 code?: string;
                 message?: string;
             } | undefined;
@@ -524,8 +510,6 @@ export interface RoutingRepository {
     }): Promise<RepositoryResult<Attempt>>;
     recordInterruptedAttempt(input: {
         id: string;
-        code: string;
-        message: string;
         error: Diagnostic;
     }): Promise<RepositoryResult<Record<string, unknown>>>;
     setInterruptedSubmission(input: {
@@ -588,8 +572,6 @@ export interface RoutingRepository {
     }): Promise<RepositoryResult<Record<string, unknown>>>;
     markAttemptUnknown(input: {
         attemptId: string;
-        code: string;
-        message: string;
         error: Diagnostic;
     }): Promise<RepositoryResult<Record<string, unknown>>>;
     markSubmissionUnknown(input: {
@@ -597,9 +579,6 @@ export interface RoutingRepository {
     }): Promise<RepositoryResult<Record<string, unknown>>>;
     failAttempt(input: {
         attemptId: string;
-        category: string;
-        code: string;
-        message: string;
         error: Diagnostic;
     }): Promise<RepositoryResult<Record<string, unknown>>>;
     setFailureResult(input: {
@@ -624,8 +603,6 @@ export interface RoutingRepository {
     recordReconciliationExhaustion(input: {
         attemptId: string;
         error: Diagnostic;
-        code: string;
-        message: string;
     }): Promise<RepositoryResult<Record<string, unknown>>>;
     resolveAttemptReconciliation(input: {
         attemptId: string;
@@ -676,9 +653,10 @@ export interface EventOperations {
 export interface MessageOperations {
     createSubmission(repositories: OutboundRepositories, messageId: string, deliveryIds: string[]): Promise<string | null>;
     isSuppressed(repositories: OutboundRepositories, serviceId: string, email: string, listId?: string): Promise<boolean>;
+    suppression(repositories: OutboundRepositories, serviceId:string,email:string,listId?:string):Promise<Record<string,unknown>|null>;
+    suppressionEvidence(value:Record<string,unknown>|null):import("@/contracts/mail-diagnostics").DiagnosticEvidence;
 }
 export interface OutboundDependencies {
-    safeDiagnostic(value: unknown): string;
     unitOfWork: import("@/platform/transactions").UnitOfWork<OutboundRepositories>;
     repositories: OutboundRepositories;
     payloadDigest(value: string, context: string, keyVersion?: string): {

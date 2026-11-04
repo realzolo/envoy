@@ -1,5 +1,5 @@
 import { fork } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { initializeDatabase } from "@/platform/database/initialization";
 import { Client } from "pg";
 import { runMigrations, Worker, createPostgresBackend, type PostgresQueueBackend } from "bullmq";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -26,7 +26,7 @@ beforeAll(async () => {
   ({ dispatchOutboxBatch, markOutboxJobFailed, retryOutbox, recoverWorkBatch } = await import("@/platform/outbox/public"));
   const client = await db().connect();
   try {
-    await client.query(await readFile("db/migrations/001_initial.sql", "utf8"));
+    await initializeDatabase(client);
     await runMigrations(client, "bullmq");
     await client.query(`INSERT INTO services(id,name) VALUES ('s','queue-test');
       INSERT INTO sending_domains(id,domain) VALUES ('domain','queue.test');
@@ -218,9 +218,9 @@ describe("PostgreSQL queue / transactional outbox handoff", () => {
       await dispatchOutboxBatch();
       await markOutboxJobFailed("workflow-worker-job", new Error("Worker dependency unavailable"));
     } finally { add.mockRestore(); logging.mockRestore(); }
-    const rows = await query<{ id: string; lifecycle_status: string; last_error: { code: string; stage: string; retryDecision: { action: string } } }>("SELECT id,lifecycle_status,last_error FROM deliveries WHERE id IN ('workflow-publish','workflow-worker') ORDER BY id");
+    const rows = await query<{ id: string; lifecycle_status: string; diagnostic: { code: string; stage: string; retryDecision: { action: string } } }>("SELECT id,lifecycle_status,diagnostic,retry_disposition FROM deliveries WHERE id IN ('workflow-publish','workflow-worker') ORDER BY id");
     expect(rows.rows).toHaveLength(2);
-    for (const row of rows.rows) expect(row).toMatchObject({ lifecycle_status: "deferred", last_error: { code: "WORKFLOW_EXHAUSTED", stage: "queue", retryDecision: { action: "manual_review" } } });
+    for (const row of rows.rows) expect(row).toMatchObject({ lifecycle_status: "deferred", diagnostic: { code: "WORKFLOW_EXHAUSTED", stage: "QUEUE" }, retry_disposition: {owner:"ENVOY",action:"MANUAL_REVIEW" } });
     expect((await query("SELECT id FROM outbox_events WHERE id IN ('workflow-publish-job','workflow-worker-job') AND status='failed'")).rowCount).toBe(2);
     expect((await query("SELECT id FROM submission_events WHERE submission_id IN ('workflow-publish','workflow-worker') AND canonical_payload#>>'{metadata,diagnostic,code}'='WORKFLOW_EXHAUSTED'")).rowCount).toBe(2);
   });
@@ -248,7 +248,7 @@ describe("PostgreSQL queue / transactional outbox handoff", () => {
       INSERT INTO raw_provider_events(id,provider_account_id,webhook_endpoint_id,native_type,signature_valid,replay_valid,headers,received_at,processing_attempt_count,next_attempt_at)
       VALUES ('exhausted-raw','provider','webhook','delivered',true,true,'{}',now()-interval '5 minutes',20,now()-interval '1 minute')`);
     await recoverWorkBatch();
-    const attempt = (await query<{ status: string; reconcile_after: Date | null; error_code: string }>("SELECT status,reconcile_after,error_code FROM submission_attempts WHERE id='exhausted-attempt'")).rows[0];
+    const attempt = (await query<{ status: string; reconcile_after: Date | null; error_code: string }>("SELECT status,reconcile_after,diagnostic->>'code' AS error_code FROM submission_attempts WHERE id='exhausted-attempt'")).rows[0];
     expect(attempt).toEqual({ status: "unknown", reconcile_after: null, error_code: "RECONCILIATION_EXHAUSTED" });
     expect((await query<{ processing_error: string }>("SELECT processing_error FROM raw_provider_events WHERE id='exhausted-raw'")).rows[0].processing_error).toContain("exhausted");
     expect((await query("SELECT id FROM outbox_events WHERE aggregate_id='exhausted-attempt'")).rowCount).toBe(0);

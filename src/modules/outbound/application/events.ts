@@ -1,3 +1,5 @@
+import { diagnosticEvidenceSchema, projectDiagnostic, stoppedRetry, type RetryDisposition } from "@/contracts/mail-diagnostics";
+import { smtpFacts, safeReason, submissionReason } from "@/integrations/providers/diagnostic-facts";
 import type { CanonicalEvent } from "@/integrations/providers/contracts";
 import { contentFreeOutboundEvents } from "@/integrations/providers/event-facts";
 import { diagnostic, type Diagnostic } from "@/modules/outbound/domain/diagnostics";
@@ -8,24 +10,22 @@ import type { DeliveryStateEvent } from "../contracts";
 import type { OutboundDependencies, OutboundRepositories } from "./ports";
 export function createEventsService(dependencies: Omit<OutboundDependencies, "events" | "messages">) {
     function eventDiagnostic(event: DeliveryStateEvent): Diagnostic | null {
-        if (event.metadata.diagnostic && typeof event.metadata.diagnostic === "object")
-            return event.metadata.diagnostic as Diagnostic;
-        if (event.type === "bounced")
-            return diagnostic(event.bounce?.classification === "hard" ? "MAILBOX_PERMANENTLY_REJECTED" : "MAILBOX_TEMPORARILY_REJECTED", dependencies.safeDiagnostic(event.bounce?.message ?? "The recipient server rejected delivery."), "recipient_delivery", { acceptance: "accepted", providerCode: event.bounce?.code, smtpStatus: event.bounce?.code?.match(/\b[245]\.\d{1,3}\.\d{1,3}\b/)?.[0], occurredAt: event.occurredAt.toISOString() });
-        if (event.type === "failed" || event.type === "deferred")
-            return diagnostic(event.type === "failed" ? "DELIVERY_FAILED" : "DELIVERY_DEFERRED", dependencies.safeDiagnostic(event.metadata.reason ?? event.bounce?.message ?? (event.type === "failed" ? "Delivery failed." : "The recipient server temporarily deferred delivery.")), "recipient_delivery", { acceptance: "accepted", retryable: event.type === "deferred", providerCode: typeof event.metadata.providerCode === "string" ? dependencies.safeDiagnostic(event.metadata.providerCode) : event.bounce?.code, smtpStatus: typeof event.metadata.smtpStatus === "string" ? dependencies.safeDiagnostic(event.metadata.smtpStatus) : undefined, retryDecision: { action: "none", reason: event.type === "deferred" ? "provider_managed_retry" : "not_retryable" }, occurredAt: event.occurredAt.toISOString() });
-        if (event.type === "suppressed")
-            return diagnostic("RECIPIENT_SUPPRESSED", "The recipient is blocked by suppression policy.", event.externalMessageId ? "recipient_delivery" : "policy", { acceptance: event.externalMessageId ? "accepted" : "not_accepted", occurredAt: event.occurredAt.toISOString() });
+        if (event.metadata.diagnostic) return projectDiagnostic(event.metadata.diagnostic);
+        const supplied = event.metadata.evidence && typeof event.metadata.evidence === "object" ? event.metadata.evidence : {};
+        const parsed = diagnosticEvidenceSchema.parse({ ...smtpFacts([event.bounce?.code, event.bounce?.message, event.metadata.smtpStatus]).evidence, ...supplied, ...(event.bounce ? { bounceClass: event.bounce.classification } : {}) });
+        const facts = smtpFacts([event.bounce?.code, event.bounce?.message, event.metadata.smtpStatus]);
+        const reasonCode = safeReason(event.metadata.reasonCode) ?? submissionReason(event.metadata.providerCode) ?? facts.reasonCode;
+        const options = { source: "PROVIDER" as const, reasonCode, evidence: parsed, occurredAt: event.occurredAt.toISOString(), detailAvailability: reasonCode ? "SPECIFIC" as const : "PROVIDER_NOT_SUPPLIED" as const };
+        if (event.type === "bounced") return diagnostic(event.bounce?.classification === "HARD" ? "MAILBOX_PERMANENTLY_REJECTED" : event.bounce?.classification === "SOFT" ? "MAILBOX_TEMPORARILY_REJECTED" : "DELIVERY_FAILED", "RECIPIENT_DELIVERY", options);
+        if (event.type === "failed" || event.type === "deferred") return diagnostic(event.type === "failed" ? "DELIVERY_FAILED" : "DELIVERY_DEFERRED", "RECIPIENT_DELIVERY", options);
+        if (event.type === "suppressed") return diagnostic("RECIPIENT_SUPPRESSED", event.externalMessageId ? "RECIPIENT_DELIVERY" : "POLICY", { ...options, source: event.externalMessageId ? "PROVIDER" : "ENVOY", reasonCode: "RECIPIENT_SUPPRESSED" });
         return null;
     }
-    function sensitiveEvent(event: DeliveryStateEvent): DeliveryStateEvent {
+    function safeEvent(event: DeliveryStateEvent): DeliveryStateEvent {
         const error = eventDiagnostic(event);
-        const safe = error ? { ...error, message: error.code === "SEND_DEADLINE_EXCEEDED" ? "The message sending deadline has passed; no new provider submission is allowed." : "Sensitive message delivery diagnostic withheld.",
-            providerCode: undefined, smtpStatus: undefined,
-            retryDecision: { ...error.retryDecision, reason: error.retryDecision.action === "manual_review" ? "manual_review_required" : undefined } } : undefined;
         return { id: event.id, externalMessageId: event.externalMessageId, type: event.type, occurredAt: event.occurredAt,
             recipient: event.recipient, ...(event.bounce ? { bounce: { classification: event.bounce.classification } } : {}),
-            metadata: safe ? { diagnostic: safe } : {} };
+            metadata: { ...(error ? { diagnostic: error } : {}), ...(event.type === "unsubscribed" && typeof event.metadata.listId === "string" ? {listId:event.metadata.listId} : {}) } };
     }
     async function enqueueCallbacks(client: OutboundRepositories, serviceId: string, eventId: string, event: DeliveryStateEvent, data: Record<string, unknown> & {
         messageId: string;
@@ -47,14 +47,14 @@ export function createEventsService(dependencies: Omit<OutboundDependencies, "ev
         recipient_email: string;
         service_id: string;
     }, event: DeliveryStateEvent, providerEvent: boolean) {
-        if (event.type === "complained" || (event.type === "suppressed" && providerEvent) || (event.type === "bounced" && event.bounce?.classification === "hard")) {
+        if (event.type === "complained" || (event.type === "suppressed" && providerEvent) || (event.type === "bounced" && event.bounce?.classification === "HARD")) {
             await client.events.insertGlobalSuppression({ suppressionId: createId("sup"), recipientEmail: delivery.recipient_email, reason: event.type === "bounced" ? "hard_bounce" : event.type });
         }
         else if (event.type === "unsubscribed") {
             const listId = typeof event.metadata.listId === "string" ? event.metadata.listId : null;
             await client.events.insertUnsubscribeSuppression({ suppressionId: createId("sup"), scope: listId ? "list" : "service", serviceId: delivery.service_id, listId: listId, recipientEmail: delivery.recipient_email });
         }
-        else if (event.type === "bounced" && event.bounce?.classification === "soft") {
+        else if (event.type === "bounced" && event.bounce?.classification === "SOFT") {
             const count = await client.events.countRecentSoftBounces({ recipientEmail: delivery.recipient_email });
             if (Number(count.rows[0]?.count ?? 0) >= 3)
                 await client.events.insertSoftBounceSuppression({ suppressionId: createId("sup"), recipientEmail: delivery.recipient_email, bounceCount: Number(count.rows[0]?.count ?? 0) });
@@ -70,8 +70,7 @@ export function createEventsService(dependencies: Omit<OutboundDependencies, "ev
         const current = (await client.events.lockDeliveryState({ deliveryId: deliveryId })).rows[0];
         if (!current)
             return false;
-        if ((await client.events.findDeliveryContentPolicy({ deliveryId: deliveryId })).rows[0]?.content_policy === "sensitive")
-            event = sensitiveEvent(event);
+        event = safeEvent(event);
         const eventId = createId("dev");
         const key = event.type === "accepted" && options.attemptId ? `attempt:${options.attemptId}:${deliveryId}:accepted` : sourceKey;
         const error = eventDiagnostic(event);
@@ -109,6 +108,14 @@ export function createEventsService(dependencies: Omit<OutboundDependencies, "ev
             await client.events.recordDeliveryDiagnostic({ deliveryId: deliveryId, error: error });
         else if (projects && ["queued", "delivered", "accepted"].includes(event.type))
             await client.events.clearDeliveryDiagnostic({ deliveryId: deliveryId });
+        if (projects) {
+            const retry: RetryDisposition = (event.type === "accepted" || event.type === "deferred" && options.providerEvent)
+                ? { owner: "PROVIDER", action: "WAITING_PROVIDER", nextAttemptAt: null }
+                : ["queued", "submitting", "deferred", "unknown"].includes(event.type) && !["RECONCILIATION_EXHAUSTED", "WORKFLOW_EXHAUSTED"].includes(error?.code ?? "")
+                    ? { owner: "ENVOY", action: "SCHEDULED", nextAttemptAt: null }
+                    : error?.code === "WORKFLOW_EXHAUSTED" ? { owner: "ENVOY", action: "MANUAL_REVIEW", nextAttemptAt: null } : event.type === "unknown" ? { owner: "UNKNOWN", action: "MANUAL_REVIEW", nextAttemptAt: null } : stoppedRetry;
+            await client.events.recordRetryDisposition({ deliveryId, retry });
+        }
         const delivery = (await client.events.findDeliveryCallbackContext({ deliveryId: deliveryId })).rows[0];
         await applySuppression(client, delivery, event, options.providerEvent ?? false);
         await enqueueCallbacks(client, delivery.service_id, eventId, event, {
@@ -116,13 +123,12 @@ export function createEventsService(dependencies: Omit<OutboundDependencies, "ev
             recipient: delivery.recipient_email, recipientRole: delivery.recipient_role, service: delivery.service, category: delivery.category,
             lifecycle: lifecycleTypes.includes(event.type) ? event.type : delivery.lifecycle_status, currentLifecycle: delivery.lifecycle_status, ...(options.attemptId ? { attemptId: options.attemptId } : {}),
             engagement: delivery.engagement_status, compliance: delivery.compliance_status, ...(error ? { diagnostic: error } : {}),
-            ...(event.bounce ? { bounce: { ...event.bounce, message: event.bounce.message ? dependencies.safeDiagnostic(event.bounce.message) : undefined } } : {}),
+            ...(event.bounce ? { bounce: { ...event.bounce, message: undefined } } : {}),
         }, "recipient");
         return true;
     }
     async function applySubmissionEvent(client: OutboundRepositories, submissionId: string, event: DeliveryStateEvent, sourceKey: string, attemptId?: string, rawEventId?: string | null) {
-        if ((await client.events.findSubmissionContentPolicy({ submissionId: submissionId })).rows[0]?.content_policy === "sensitive")
-            event = sensitiveEvent(event);
+        event = safeEvent(event);
         const id = createId("sev");
         const error = eventDiagnostic(event);
         const payload = { ...event, id, attemptId, sourceId: event.id, metadata: { ...event.metadata, ...(error ? { diagnostic: error } : {}) } };
