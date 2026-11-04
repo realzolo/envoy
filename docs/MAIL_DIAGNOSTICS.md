@@ -26,6 +26,12 @@ Provider-managed deferral does not permit manual resend. `sendBefore` prevents n
 
 The complete flat snapshot is `{id,messageId,revision,submissionId,attemptId,lifecycle,outcome,acceptedAt,deliveredAt,diagnostic,retryDisposition,observedAt}`. `revision` is a decimal bigint string scoped to the delivery. Its database trigger advances when current identity, lifecycle, compliance, engagement, diagnostic, retry disposition or acceptance/delivery facts change; no-op writes do not advance it. New current submissions/attempts clear old current-attempt timing and diagnostics. Message+delivery snapshots are selected in one SQL statement. Administrative queue acceptance never substitutes for provider acceptance. `observedAt` is read time and must be excluded from equality/hash comparisons of equal revisions.
 
+## Administrative presentation
+
+Envoy administrative interface text is English, including diagnostic explanations, suppression reasons and next steps. Callers localize the canonical codes for their own audiences; display language is not part of the diagnostic wire contract. Message subjects and other original business content retain their original language.
+
+The shared delivery presentation distinguishes ordinary progress, successful completion, unknown outcomes and failures. An absent diagnostic does not imply a failure or a missing failure record: delivered messages show successful delivery with no action needed, while queued, submitting, accepted and deferred messages describe their current progress. Only failed or bounced deliveries with no diagnostic report missing failure details. `NONE` / `STOPPED` describes completed processing, so successful deliveries must not present it as a stopped or failed operation. List and detail views share these presentation rules.
+
 ## Pre-acceptance submission rejection
 
 All RFC 9457 Problem responses include explicit nullable `diagnostic`; the formal envelope schema is `docs/contracts/submission-problem.schema.json`. A rejected `POST /api/v1/messages` has no message/delivery resource, so callers persist this safe diagnostic as an execution result and retain the request ID. The authenticated request log stores the same diagnostic; `GET /api/v2/requests/{requestId}` returns it. Historical generic validation records retain `VALIDATION_FAILED` with `NOT_RECORDED` and no inferred specific reason.

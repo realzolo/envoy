@@ -1,6 +1,6 @@
 "use client";
 
-import { diagnosticPresentation, retryPresentation } from "./diagnostic-presentation";
+import { deliveryPresentation, diagnosticPresentation } from "./diagnostic-presentation";
 import { LocalTime } from "@/components/local-time";
 import styles from "@/components/mail-views.module.css";
 import { PageHeader } from "@/components/page-header";
@@ -52,6 +52,7 @@ function JsonDetails({ value }: { value: unknown }) {
 export function DeliveryDetailView({ detail, back = "/emails" }: { detail: DeliveryDetail; back?: string }) {
   const router = useRouter();
   const reason = detail.diagnostic ? diagnosticPresentation(detail.diagnostic) : null;
+  const presentation = deliveryPresentation(detail);
 
   return (
     <section className={styles.page}>
@@ -69,12 +70,14 @@ export function DeliveryDetailView({ detail, back = "/emails" }: { detail: Deliv
         type="warning"
       />}
       {detail.diagnostic && reason && <Alert type={detail.lifecycle === "deferred" ? "warning" : "error"} showIcon title={reason.title} content={<Space direction="vertical"><span>{reason.detail}</span><span>{reason.advice}</span><Typography.Text type="secondary">{detail.diagnostic.code}{detail.diagnostic.reasonCode ? ` / ${detail.diagnostic.reasonCode}` : ""}</Typography.Text></Space>} />}
-      {detail.transport && <Card bordered={false} title="投递事实与处理责任"><Descriptions column={2} data={[
-        {label:"当前修订",value:detail.transport.revision}, {label:"后续处理",value:retryPresentation(detail.transport.retryDisposition)},
-        {label:"供应商受理",value:detail.transport.acceptedAt ? <LocalTime value={detail.transport.acceptedAt}/> : "尚无确认事实"},
-        {label:"实际送达",value:detail.transport.deliveredAt ? <LocalTime value={detail.transport.deliveredAt}/> : "尚无确认事实"},
-        {label:"SMTP 状态",value:detail.diagnostic?.evidence.smtpStatus ?? "未提供"}, {label:"SMTP 响应码",value:detail.diagnostic?.evidence.smtpReplyCode ?? "未提供"},
-        {label:"退信分类",value:detail.diagnostic?.evidence.bounceClass ?? "未提供"}, {label:"当前尝试",value:detail.transport.attemptId ?? "尚未提交"},
+      {detail.transport && <Card bordered={false} title="Delivery facts and next steps"><Descriptions column={2} data={[
+        {label:"Current revision",value:detail.transport.revision}, {label:"Next step",value:presentation.followUp ?? "No action needed"},
+        {label:"Provider accepted",value:detail.transport.acceptedAt ? <LocalTime value={detail.transport.acceptedAt}/> : "Not confirmed"},
+        {label:"Delivered",value:detail.transport.deliveredAt ? <LocalTime value={detail.transport.deliveredAt}/> : "Not confirmed"},
+        ...(detail.diagnostic?.evidence.smtpStatus ? [{label:"SMTP status",value:detail.diagnostic.evidence.smtpStatus}] : []),
+        ...(detail.diagnostic?.evidence.smtpReplyCode ? [{label:"SMTP reply code",value:detail.diagnostic.evidence.smtpReplyCode}] : []),
+        ...(detail.diagnostic?.evidence.bounceClass ? [{label:"Bounce classification",value:detail.diagnostic.evidence.bounceClass}] : []),
+        {label:"Current attempt",value:detail.transport.attemptId ?? "Not submitted"},
       ]}/></Card>}
       <Card className={styles.card} bordered={false} title="Delivery overview" extra={<Tag color={statusColors[detail.status]} bordered={false}>{labelForStatus(detail.status)}</Tag>}>
         <Descriptions className={styles.descriptions} column={{ xs: 1, md: 2, xl: 3 }} layout="vertical" tableLayout="fixed" data={[
@@ -154,7 +157,7 @@ export function DeliveryDetailView({ detail, back = "/emails" }: { detail: Deliv
                       { label: "Outcome confirmed", value: attempt.outcome_determinate === true ? "Yes" : attempt.outcome_determinate === false ? "No" : "Not reported" },
                       { label: "Started", value: attempt.started_at ? <LocalTime value={timestamp(attempt.started_at)} /> : "Not reported" },
                       { label: "Finished", value: attempt.finished_at ? <LocalTime value={timestamp(attempt.finished_at)} /> : "Not reported" },
-                      ...(attempt.diagnostic ? [{ label: "诊断类别 / 原因", value: `${attempt.diagnostic.code} / ${attempt.diagnostic.reasonCode ?? "未记录"}` }] : []),
+                      ...(attempt.diagnostic ? [{ label: "Diagnostic category / reason", value: `${attempt.diagnostic.code} / ${attempt.diagnostic.reasonCode ?? "Not recorded"}` }] : []),
                       ...(attempt.retry_authorized_at ? [{ label: "Duplicate risk accepted", span: 3, value: <Space wrap>{displayValue(attempt.retry_authorized_by)}<LocalTime value={timestamp(attempt.retry_authorized_at)} /></Space> }] : []),
                     ]} />
                     <Collapse bordered={false}>

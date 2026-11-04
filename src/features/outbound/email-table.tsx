@@ -1,6 +1,6 @@
 "use client";
 
-import { diagnosticPresentation, retryPresentation } from "./diagnostic-presentation";
+import { deliveryPresentation } from "./diagnostic-presentation";
 import { LocalTime } from "@/components/local-time";
 import styles from "@/components/mail-views.module.css";
 import type { DeliveryStatus,EmailRecord } from "@/lib/types";
@@ -67,11 +67,14 @@ const columns = (back: string): TableColumnProps<EmailRecord>[] => [
     render: (status: DeliveryStatus) => <Tag color={statusColors[status]} bordered={false}>{statusLabels[status]}</Tag>,
   },
   {
-    title: "原因 / 后续处理", width: 280,
-    render: (_, email) => <Space direction="vertical" size={2}>
-      <Typography.Text>{email.diagnostic ? diagnosticPresentation(email.diagnostic).title : "未记录失败原因"}</Typography.Text>
-      <Typography.Text type="secondary">{email.transport ? retryPresentation(email.transport.retryDisposition) : "无投递快照"}</Typography.Text>
-    </Space>,
+    title: "Details / next steps", width: 280,
+    render: (_, email) => {
+      const presentation = deliveryPresentation(email);
+      return <Space direction="vertical" size={2}>
+        <Typography.Text>{presentation.title}</Typography.Text>
+        {presentation.followUp && <Typography.Text type="secondary">{presentation.followUp}</Typography.Text>}
+      </Space>;
+    },
   },
   {
     title: "Accepted at", dataIndex: "createdAt", width: 240,

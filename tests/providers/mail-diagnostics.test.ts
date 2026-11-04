@@ -38,7 +38,7 @@ describe("content-free canonical mail diagnostics", () => {
  });
  it("explains absent historical detail without guessing and separates provider retry responsibility",()=>{
   const value=mailDiagnosticSchema.parse({source:"PROVIDER",code:"MAILBOX_PERMANENTLY_REJECTED",reasonCode:null,stage:"RECIPIENT_DELIVERY",detailAvailability:"NOT_RECORDED",evidence:{},occurredAt:null});
-  expect(diagnosticPresentation(value)).toMatchObject({title:"收件方永久拒绝",detail:"历史记录未保存更具体原因。"});
+  expect(diagnosticPresentation(value)).toMatchObject({title:"Recipient permanently rejected delivery",detail:"The historical record did not retain a more specific cause."});
   expect(retryDispositionSchema.parse({owner:"PROVIDER",action:"WAITING_PROVIDER",nextAttemptAt:null})).toMatchObject({owner:"PROVIDER"});
  });
 });
