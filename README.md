@@ -26,6 +26,7 @@ pipeline, and security model.
 
 ## Project Documentation
 
+- [Passive inbound documents and protected image resources](docs/INBOUND_DOCUMENTS.md)
 - [Deployment guide](docs/DEPLOYMENT.md)
 - [Release and operations guide](docs/OPERATIONS.md)
 - [Business mail connection contract and runnable example](docs/API.md#business-mail-connection-and-discovery)

@@ -1,3 +1,5 @@
+import type { DocumentWrite } from "./document";
+import type { DocumentSource } from "../domain/document";
 import type { InboundDispatch } from "../contracts";
 import type { UnitOfWork } from "@/platform/transactions";
 
@@ -29,12 +31,13 @@ export interface InboundRepository {
   releaseClaim(input: { id: string; token: string }): Promise<RepositoryResult<Record<string, unknown>>>;
   registerAttachment(id: string, kind: "inbound", serviceId: string | null, digest: string): Promise<void>;
   completeUploads(keys: string[]): Promise<void>;
+  saveDocument(id: string, write: DocumentWrite): Promise<void>;
 }
 export interface InboundDependencies {
   repository: InboundRepository;
   unitOfWork: UnitOfWork<InboundRepository>;
   id(prefix: string): string;
   digest(bytes: Uint8Array): string;
-  sanitizeHtml(html: string): string;
+  prepareDocument(id: string, source: DocumentSource): DocumentWrite;
   uploads: { register(key: string): Promise<void>; put(key: string, bytes: Uint8Array, contentType: string): Promise<unknown> };
 }

@@ -34,3 +34,25 @@ export async function inboundHeaders(input: unknown) {
         to: mailAddresses(parsed.to), cc: mailAddresses(parsed.cc),
     };
 }
+
+const MAX_CID_METADATA_CHARACTERS = 262_144;
+const MAX_CID_METADATA_ENTRIES = 1024;
+/** Provider form-part keys establish the mapping; filenames never establish CID ownership. */
+export function inboundContentIds(raw: unknown, rawAttachmentInfo?: unknown): ReadonlyMap<string, string> {
+    const object = (value: unknown): Record<string, unknown> => {
+        try {
+            if (typeof value === "string") value = value.length <= MAX_CID_METADATA_CHARACTERS ? JSON.parse(value) : null;
+            return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+        } catch { return {}; }
+    };
+    const ids = new Map<string, string>(), conflicts = new Set<string>();
+    const add = (part: unknown, cid: unknown) => {
+        if (typeof part !== "string" || !/^attachment-?\d+$/.test(part) || typeof cid !== "string" || !cid || cid.length > 998) return;
+        if (ids.has(part) && ids.get(part) !== cid) conflicts.add(part);
+        else ids.set(part, cid);
+    };
+    for (const [cid, part] of Object.entries(object(raw)).slice(0, MAX_CID_METADATA_ENTRIES)) add(part, cid);
+    for (const [part, info] of Object.entries(object(rawAttachmentInfo)).slice(0, MAX_CID_METADATA_ENTRIES)) add(part, object(info)["content-id"]);
+    for (const part of conflicts) ids.delete(part);
+    return ids;
+}

@@ -2,7 +2,7 @@
 
 # Business mail architecture
 
-Read `docs/ARCHITECTURE.md` and `docs/API.md` for the final domain-permission contract. For transport diagnostics, versioned reads, observation revisions and privacy normalization, read `docs/MAIL_DIAGNOSTICS.md`; finite wire schemas are under `docs/contracts/`. Envoy owns business Service identities, rotating Service Keys, domain sending/receiving grants and one unified callback per Service. Business APPs, exact mailbox purposes, templates and APP dispatch belong to callers.
+Read `docs/ARCHITECTURE.md` and `docs/API.md` for the final domain-permission contract. For transport diagnostics, versioned reads, observation revisions and privacy normalization, read `docs/MAIL_DIAGNOSTICS.md`; finite wire schemas are under `docs/contracts/`. For passive inbound bodies, retained-source reprojection and protected image resources, read `docs/INBOUND_DOCUMENTS.md`. Envoy owns business Service identities, rotating Service Keys, domain sending/receiving grants and one unified callback per Service. Business APPs, exact mailbox purposes, templates and APP dispatch belong to callers.
 
 Envoy updates and test deployments use `main`. Merge reviewed changes into `main` before deployment; do not switch the deployment checkout to a feature branch.
 

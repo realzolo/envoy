@@ -18,5 +18,9 @@
   {
     "file": "005_canonical_mail_diagnostics.sql",
     "sha256": "d8aa6772a86372188926d65025c31f88f091afa4b96ff4e984ac8d76462733a8"
+  },
+  {
+    "file": "006_passive_inbound_documents.sql",
+    "sha256": "01222195e011a470bf9f46b3f6df6f3c97715a87321d068afca7a6e20d8c5207"
   }
 ]

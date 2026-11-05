@@ -1,5 +1,17 @@
 /** Native PostgreSQL invariants included in the generated schema snapshot. */
-export const databaseBehaviors = String.raw`-- Database-enforced inbound change ordering and attachment purge fencing.
+export const databaseBehaviors = String.raw`
+CREATE FUNCTION erase_inbound_document() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW.content_purged_at IS NOT NULL THEN
+    NEW.document_source := NULL; NEW.document_projection := NULL;
+    NEW.sanitized_html := NULL; NEW.text_body := NULL;
+    UPDATE inbound_document_resources SET source=NULL,cached_content=NULL,metadata=metadata || jsonb_build_object('contentId',NULL),state='ERASED',reason_code='CONTENT_ERASED',lease_token=NULL,lease_expires_at=NULL WHERE inbound_message_id=NEW.id;
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER inbound_document_purge BEFORE UPDATE ON inbound_messages FOR EACH ROW EXECUTE FUNCTION erase_inbound_document();
+
+-- Database-enforced inbound change ordering and attachment purge fencing.
 
 CREATE FUNCTION record_inbound_change() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE change_type text; next_position bigint;

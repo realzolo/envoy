@@ -216,6 +216,7 @@ export const resendModule: ProviderModule = {
                 subject: message.subject,
                 html: message.html ?? undefined,
                 text: message.text ?? undefined,
+                textProvenance: message.text ? "NOT_RECORDED" : "UNAVAILABLE",
                 attachments,
                 authorDate: fields.authorDate,
                 receivedAt: eventDate(message.created_at)

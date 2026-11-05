@@ -26,7 +26,8 @@ async function persistInbound(input: InboundInput) {
     if (recipients.length) return persistInboundCopy({ ...input, message: { ...input.message, envelopeRecipients: recipients } }, "quarantine", null);
     const tombstone = (await dependencies.repository.findTombstone({ accountId: input.providerAccountId, externalId: input.message.externalMessageId })).rows[0];
     if (tombstone) return tombstone.id;
-    const stored = await dependencies.repository.insertRejected({ id: dependencies.id("inb"), accountId: input.providerAccountId, rawEventId: input.rawEventId, externalId: input.message.externalMessageId, messageId: input.message.messageId??null, from: address(input.message.from), to: input.message.to, cc: input.message.cc, bcc: input.message.bcc, subject: input.message.subject, html: input.message.html?dependencies.sanitizeHtml(input.message.html):null, text: input.message.text??null, reason: "ENVELOPE_RECIPIENT_UNAVAILABLE", receivedAt: input.ingressReceivedAt, envelope: recipients, replyTo: input.message.replyTo??[], inReplyTo: input.message.inReplyTo??null, references: input.message.references??[], authorDate: authorDate(input.message.authorDate) });
+    const rejectedId=dependencies.id("inb"), rejectedBody=dependencies.prepareDocument(rejectedId,{html:input.message.html??null,text:input.message.text??null,textProvenance:input.message.textProvenance??"NOT_RECORDED",attachments:[]});
+    const stored = await dependencies.repository.insertRejected({ id: rejectedId, accountId: input.providerAccountId, rawEventId: input.rawEventId, externalId: input.message.externalMessageId, messageId: input.message.messageId??null, from: address(input.message.from), to: input.message.to, cc: input.message.cc, bcc: input.message.bcc, subject: input.message.subject, html: rejectedBody.html, text: rejectedBody.text, reason: "ENVELOPE_RECIPIENT_UNAVAILABLE", receivedAt: input.ingressReceivedAt, envelope: recipients, replyTo: input.message.replyTo??[], inReplyTo: input.message.inReplyTo??null, references: input.message.references??[], authorDate: authorDate(input.message.authorDate) });
     return stored.rows[0].id;
   }
   // One private projection per Service, even when several Services share a domain.
@@ -67,7 +68,7 @@ async function persistInboundCopy(input: InboundInput, scope: string, serviceId:
   if (duplicate && duplicate.status !== "scanning") return duplicate.id;
   let id = duplicate?.id ?? dependencies.id("inb");
   const recipients = message.to.map(address);
-  const inserted = duplicate ? null : await dependencies.repository.insertCopy({ id: id, serviceId, accountId: input.providerAccountId, rawEventId: input.rawEventId, externalId: message.externalMessageId, messageId: message.messageId ?? null, from: address(message.from), to: recipients, cc: message.cc.map(address), bcc: message.bcc.map(address), subject: message.subject, html: message.html ? dependencies.sanitizeHtml(message.html) : null, text: message.text ?? null, receivedAt: input.ingressReceivedAt, scope: scope, envelope: message.envelopeRecipients, replyTo: message.replyTo??[], inReplyTo: message.inReplyTo??null, references: message.references??[] });
+  const inserted = duplicate ? null : await dependencies.repository.insertCopy({ id: id, serviceId, accountId: input.providerAccountId, rawEventId: input.rawEventId, externalId: message.externalMessageId, messageId: message.messageId ?? null, from: address(message.from), to: recipients, cc: message.cc.map(address), bcc: message.bcc.map(address), subject: message.subject, html: null, text: null, receivedAt: input.ingressReceivedAt, scope: scope, envelope: message.envelopeRecipients, replyTo: message.replyTo??[], inReplyTo: message.inReplyTo??null, references: message.references??[] });
   if (inserted && !inserted.rowCount) {
     const existing = (await dependencies.repository.findConcurrentCopy({ accountId: input.providerAccountId, externalId: message.externalMessageId, scope: scope })).rows[0];
     if (!existing) throw new Error("Inbound message was not persisted");
@@ -87,6 +88,7 @@ async function persistInboundCopy(input: InboundInput, scope: string, serviceId:
   const writtenKeys: string[] = [];
   let rawKey: string | null = null;
   const attachments: Array<(typeof message.attachments)[number] & {
+    id: string;
     objectKey: string;
     sha256: string;
   }> = [];
@@ -97,7 +99,7 @@ async function persistInboundCopy(input: InboundInput, scope: string, serviceId:
     for (const file of message.attachments) if (file.content.byteLength > MAX_FILE_BYTES) throw new InboundTerminalError(`Attachment exceeds the size limit: ${file.fileName}`, "INBOUND_ATTACHMENT_TOO_LARGE");
     // Store private bytes first. The shared durable safety pipeline controls every attachment download.
     for (const [index, file] of message.attachments.entries()) {
-      attachments.push({ ...file, objectKey: `${prefix}/attachments/${index}`, sha256: dependencies.digest(file.content) });
+      attachments.push({ ...file, id: dependencies.id("ina"), objectKey: `${prefix}/attachments/${index}`, sha256: dependencies.digest(file.content) });
     }
     if (message.rawMime) {
       rawKey = `${prefix}/raw.eml`;
@@ -112,6 +114,9 @@ async function persistInboundCopy(input: InboundInput, scope: string, serviceId:
       await dependencies.uploads.register(file.objectKey);
       await dependencies.uploads.put(file.objectKey, file.content, file.contentType);
     }
+    const document = dependencies.prepareDocument(id, { html: message.html ?? null, text: message.text ?? null,
+      textProvenance: message.text !== undefined ? message.textProvenance ?? "NOT_RECORDED" : "UNAVAILABLE",
+      attachments: attachments.map(file => ({ id: file.id, contentId: file.contentId ?? null })) });
     await dependencies.unitOfWork.run(async client => {
       if (serviceId && !(await client.authorizeCompletion({ id: id })).rowCount) {
         throw new InboundTerminalError("Domain receiving permission was revoked", "DOMAIN_RECEIVE_NOT_AUTHORIZED");
@@ -119,10 +124,11 @@ async function persistInboundCopy(input: InboundInput, scope: string, serviceId:
       const completed = await client.completeCopy({ id: id, rawKey: rawKey, token: token });
       if (!completed.rowCount) throw new Error("Inbound processing ownership expired");
       for (const file of attachments) {
-        const attachmentId=dependencies.id("ina");
+        const attachmentId=file.id;
         await client.insertAttachment({ id: attachmentId, messageId: id, fileName: file.fileName, contentType: file.contentType, sizeBytes: file.content.byteLength, objectKey: file.objectKey, contentId: file.contentId ?? null, digest: file.sha256 });
         await client.registerAttachment(attachmentId,"inbound",serviceId,file.sha256);
       }
+      await client.saveDocument(id, document);
       await client.completeUploads( writtenKeys);
       const callback = serviceId ? await client.subscribedCallbacks({ serviceId }) : { rows: [] };
       for (const {id:callbackEndpointId} of callback.rows) {

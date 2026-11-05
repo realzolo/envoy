@@ -1,4 +1,4 @@
-import { inbound, inboundManagement } from "@/bootstrap/inbound";
+import { inbound, inboundManagement, inboundDocuments } from "@/bootstrap/inbound";
 export const { persistInbound, processInboundEvent } = inbound;
 export const { replayRawEvent, terminateRawEvent } = inboundManagement;
 export { listInboundChanges } from "@/bootstrap/inbound";
@@ -9,3 +9,6 @@ export { inboundAdminReads, readAdminInboundDetail } from "./infrastructure/admi
 
 import { webhookIngress } from "@/bootstrap/inbound";
 export const { ingestProviderWebhook } = webhookIngress;
+
+export const { reproject: reprojectInboundDocument, readResource: readInboundDocumentResource } = inboundDocuments;
+export { DocumentAccessError } from "./application/document";

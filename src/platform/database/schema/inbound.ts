@@ -34,6 +34,10 @@ export const inboundMessages = pgTable("inbound_messages", {
 	readyAt: timestamp("ready_at", { withTimezone: true, mode: 'string' }),
 	receivedAt: timestamp("received_at", { withTimezone: true, mode: 'string' }).default(sql`clock_timestamp()`).notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	documentRevision: bigint("document_revision", { mode: "number" }).default(0).notNull(),
+	documentProjection: jsonb("document_projection"),
+	documentSource: jsonb("document_source"),
+
 }, (table): PgTableExtraConfigValue[] => [
 	index("inbound_evidence").using("btree", table.serviceId.asc().nullsLast(), table.providerAccountId.asc().nullsLast(), table.createdAt.desc().nullsFirst()).where(sql`(status = 'ready'::text)`),
 	index("inbound_messages_received_idx").using("btree", table.receivedAt.desc().nullsFirst()),
@@ -115,3 +119,25 @@ export const inboundChanges = pgTable("inbound_changes", {
 	unique("inbound_changes_id_key").on(table.id),
 	check("inbound_changes_type_check", sql`type = ANY (ARRAY['inbound.available'::text, 'inbound.content_purged'::text])`),
 ]);
+
+export const inboundDocumentResources = pgTable("inbound_document_resources", {
+  id: text().primaryKey().notNull(),
+  inboundMessageId: text("inbound_message_id").notNull().references(() => inboundMessages.id, { onDelete: "cascade" }),
+  documentRevision: bigint("document_revision", { mode: "number" }).notNull(),
+  metadata: jsonb().notNull(),
+  source: jsonb(),
+  cachedContent: jsonb("cached_content"),
+  contentType: text("content_type"),
+  sizeBytes: bigint("size_bytes", { mode: "number" }),
+  sha256: text(),
+  scanPolicy: text("scan_policy"),
+  state: text().notNull(),
+  reasonCode: text("reason_code"),
+  attemptCount: bigint("attempt_count", { mode: "number" }).default(0).notNull(),
+  availableAt: timestamp("available_at", { withTimezone: true, mode: "string" }).defaultNow().notNull(),
+  leaseToken: text("lease_token"),
+  leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true, mode: "string" }),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).defaultNow().notNull(),
+}, table => [index("inbound_document_resources_message").on(table.inboundMessageId, table.documentRevision),
+  check("inbound_document_resource_size", sql`size_bytes IS NULL OR (size_bytes >= 0 AND size_bytes <= 5000000)`),
+  check("inbound_document_resource_state", sql`state IN ('READY','PREPARING','RETRYABLE','BLOCKED','UNAVAILABLE','ERASED')`)]);

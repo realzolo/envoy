@@ -121,8 +121,9 @@ describe("public API boundary", () => {
     const message = messageDetailSchema.parse(await response.json());
     expect(message.contentPurgedAt).toBe(contentPurgedAt ? "2026-10-17T00:00:00.000Z" : null);
 
-    vi.mocked(query).mockResolvedValueOnce({ rows: [{ id: "inb", from_email: "a@example.net", to_emails: ["b@example.net"], cc_emails: [], bcc_emails: [], subject: contentPurgedAt ? "" : "Hello", sanitized_html: null, text_body: contentPurgedAt ? null : "Hello", status: "ready", rejection_reason: null, received_at: at, content_purged_at: contentPurgedAt }] } as never)
-      .mockResolvedValueOnce({ rows: [null, at].map((purgedAt, index) => ({ id: `att${index}`, file_name: "receipt.txt", content_type: "text/plain", size_bytes: "12", content_id: null, sha256:"digest", content_purged_at: purgedAt, object_key: "private/object-key" })) } as never);
+    vi.mocked(query).mockResolvedValueOnce({ rows: [{ id: "inb", document_revision:"0",document_projection:null, from_email: "a@example.net", to_emails: ["b@example.net"], cc_emails: [], bcc_emails: [], subject: contentPurgedAt ? "" : "Hello", sanitized_html: null, text_body: contentPurgedAt ? null : "Hello", status: "ready", rejection_reason: null, received_at: at, content_purged_at: contentPurgedAt }] } as never)
+      .mockResolvedValueOnce({ rows: [null, at].map((purgedAt, index) => ({ id: `att${index}`, file_name: "receipt.txt", content_type: "text/plain", size_bytes: "12", content_id: null, sha256:"digest", content_purged_at: purgedAt, object_key: "private/object-key" })) } as never)
+      .mockResolvedValueOnce({rows:[{id:"inb"}],rowCount:1} as never);
     const inboundResult = await getInboundMessage("inb", "svc");
     const inbound = inboundDetailSchema.parse(inboundResult);
     expect(inbound.contentPurgedAt).toBe(message.contentPurgedAt);

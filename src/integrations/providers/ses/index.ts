@@ -280,7 +280,7 @@ export const sesModule: ProviderModule = {
             if (!object.Body)
                 throw new Error("SES inbound object is empty");
             const bytes = await object.Body.transformToByteArray();
-            const parsed = await simpleParser(Buffer.from(bytes));
+            const parsed = await simpleParser(Buffer.from(bytes), { skipHtmlToText: true, skipTextToHtml: true, keepCidLinks: true });
             return {
                 externalMessageId: routing.externalMessageId,
                 messageId: parsed.messageId,
@@ -293,7 +293,8 @@ export const sesModule: ProviderModule = {
                 bcc: mailAddresses(parsed.bcc),
                 subject: parsed.subject ?? "",
                 html: typeof parsed.html === "string" ? parsed.html : undefined,
-                text: parsed.text,
+                text: parsed.text || undefined,
+                textProvenance: parsed.text ? "AUTHORED" : "UNAVAILABLE",
                 rawMime: bytes,
                 attachments: parsed.attachments.map(a => ({
                     fileName: a.filename ?? "attachment",

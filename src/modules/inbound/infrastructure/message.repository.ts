@@ -1,3 +1,4 @@
+import { saveDocument } from "./document.repository";
 import type { PoolClient } from "pg";
 import type { InboundRepository } from "../application/ports";
 import type { InboundDispatch } from "../contracts";
@@ -54,6 +55,7 @@ return {
     rejectCopy(input: { id: string; reason: string; token: string }) { return client.query<Record<string, unknown>>("UPDATE inbound_messages SET status='rejected',rejection_reason=$2,processing_token=NULL,processing_deadline_at=NULL WHERE id=$1 AND processing_token=$3", [input.id, input.reason, input.token]); },
     releaseClaim(input: { id: string; token: string }) { return client.query<Record<string, unknown>>("UPDATE inbound_messages SET processing_token=NULL,processing_deadline_at=NULL WHERE id=$1 AND processing_token=$2", [input.id, input.token]); },
   registerAttachment: (id, kind, serviceId, digest) => registerAttachment(transactionContext(client as PoolClient), id, kind, serviceId, digest),
+  saveDocument: (id, write) => saveDocument(client, id, write),
   completeUploads: keys => completeObjectUploads(transactionContext(client as PoolClient), keys),
 };
 }

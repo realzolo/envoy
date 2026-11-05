@@ -370,6 +370,28 @@ CREATE TABLE "inbound_changes" (
 	CONSTRAINT "inbound_changes_type_check" CHECK (type = ANY (ARRAY['inbound.available'::text, 'inbound.content_purged'::text]))
 );
 
+CREATE TABLE "inbound_document_resources" (
+	"id" text PRIMARY KEY NOT NULL,
+	"inbound_message_id" text NOT NULL,
+	"document_revision" bigint NOT NULL,
+	"metadata" jsonb NOT NULL,
+	"source" jsonb,
+	"cached_content" jsonb,
+	"content_type" text,
+	"size_bytes" bigint,
+	"sha256" text,
+	"scan_policy" text,
+	"state" text NOT NULL,
+	"reason_code" text,
+	"attempt_count" bigint DEFAULT 0 NOT NULL,
+	"available_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"lease_token" text,
+	"lease_expires_at" timestamp with time zone,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "inbound_document_resource_size" CHECK (size_bytes IS NULL OR (size_bytes >= 0 AND size_bytes <= 5000000)),
+	CONSTRAINT "inbound_document_resource_state" CHECK (state IN ('READY','PREPARING','RETRYABLE','BLOCKED','UNAVAILABLE','ERASED'))
+);
+
 CREATE TABLE "inbound_messages" (
 	"content_purged_at" timestamp with time zone,
 	"id" text PRIMARY KEY NOT NULL,
@@ -400,6 +422,9 @@ CREATE TABLE "inbound_messages" (
 	"ready_at" timestamp with time zone,
 	"received_at" timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"document_revision" bigint DEFAULT 0 NOT NULL,
+	"document_projection" jsonb,
+	"document_source" jsonb,
 	CONSTRAINT "inbound_messages_provider_account_id_external_message_id_de_key" UNIQUE("provider_account_id","external_message_id","delivery_scope"),
 	CONSTRAINT "inbound_messages_status_check" CHECK (status = ANY (ARRAY['scanning'::text, 'ready'::text, 'rejected'::text]))
 );
@@ -629,6 +654,7 @@ ALTER TABLE "submissions" ADD CONSTRAINT "submissions_message_id_fkey" FOREIGN K
 ALTER TABLE "submissions" ADD CONSTRAINT "submissions_current_attempt_fk" FOREIGN KEY ("current_attempt_id") REFERENCES "public"."submission_attempts"("id") ON DELETE set null ON UPDATE no action;
 ALTER TABLE "inbound_changes" ADD CONSTRAINT "inbound_changes_service_id_fkey" FOREIGN KEY ("service_id") REFERENCES "public"."services"("id") ON DELETE cascade ON UPDATE no action;
 ALTER TABLE "inbound_changes" ADD CONSTRAINT "inbound_changes_inbound_message_id_fkey" FOREIGN KEY ("inbound_message_id") REFERENCES "public"."inbound_messages"("id") ON DELETE cascade ON UPDATE no action;
+ALTER TABLE "inbound_document_resources" ADD CONSTRAINT "inbound_document_resources_inbound_message_id_inbound_messages_id_fk" FOREIGN KEY ("inbound_message_id") REFERENCES "public"."inbound_messages"("id") ON DELETE cascade ON UPDATE no action;
 ALTER TABLE "inbound_messages" ADD CONSTRAINT "inbound_messages_service_id_fkey" FOREIGN KEY ("service_id") REFERENCES "public"."services"("id") ON DELETE set null ON UPDATE no action;
 ALTER TABLE "inbound_messages" ADD CONSTRAINT "inbound_messages_provider_account_id_fkey" FOREIGN KEY ("provider_account_id") REFERENCES "public"."provider_accounts"("id") ON DELETE restrict ON UPDATE no action;
 ALTER TABLE "inbound_messages" ADD CONSTRAINT "inbound_messages_raw_provider_event_id_fkey" FOREIGN KEY ("raw_provider_event_id") REFERENCES "public"."raw_provider_events"("id") ON DELETE set null ON UPDATE no action;
@@ -668,6 +694,7 @@ CREATE INDEX "submission_events_raw_event_idx" ON "submission_events" USING btre
 CREATE INDEX "submission_events_timeline" ON "submission_events" USING btree ("submission_id","occurred_at" DESC NULLS FIRST,"id" DESC NULLS FIRST);
 CREATE INDEX "submissions_message" ON "submissions" USING btree ("message_id");
 CREATE INDEX "submissions_recovery" ON "submissions" USING btree ("status","updated_at") WHERE (status = ANY (ARRAY['queued'::text, 'deferred'::text, 'submitting'::text, 'unknown'::text]));
+CREATE INDEX "inbound_document_resources_message" ON "inbound_document_resources" USING btree ("inbound_message_id","document_revision");
 CREATE INDEX "inbound_evidence" ON "inbound_messages" USING btree ("service_id","provider_account_id","created_at" DESC NULLS FIRST) WHERE (status = 'ready'::text);
 CREATE INDEX "inbound_messages_received_idx" ON "inbound_messages" USING btree ("received_at" DESC NULLS FIRST);
 CREATE INDEX "inbound_messages_service_received_cursor" ON "inbound_messages" USING btree ("service_id","received_at" DESC NULLS FIRST,"id" DESC NULLS FIRST);
@@ -686,6 +713,18 @@ CREATE INDEX "rate_limit_expiry" ON "rate_limit_counters" USING btree ("expires_
 CREATE INDEX "request_logs_created_idx" ON "request_logs" USING btree ("created_at" DESC NULLS FIRST);
 CREATE INDEX "request_logs_service" ON "request_logs" USING btree ("service_id","created_at" DESC NULLS FIRST);
 CREATE INDEX "worker_heartbeat_recency" ON "worker_heartbeats" USING btree ("last_seen_at");
+
+
+CREATE FUNCTION erase_inbound_document() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW.content_purged_at IS NOT NULL THEN
+    NEW.document_source := NULL; NEW.document_projection := NULL;
+    NEW.sanitized_html := NULL; NEW.text_body := NULL;
+    UPDATE inbound_document_resources SET source=NULL,cached_content=NULL,metadata=metadata || jsonb_build_object('contentId',NULL),state='ERASED',reason_code='CONTENT_ERASED',lease_token=NULL,lease_expires_at=NULL WHERE inbound_message_id=NEW.id;
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER inbound_document_purge BEFORE UPDATE ON inbound_messages FOR EACH ROW EXECUTE FUNCTION erase_inbound_document();
 
 -- Database-enforced inbound change ordering and attachment purge fencing.
 
@@ -856,6 +895,24 @@ COMMENT ON COLUMN "inbound_changes"."id" IS 'Globally unique inbound change iden
 COMMENT ON COLUMN "inbound_changes"."inbound_message_id" IS 'Inbound message affected by the change';
 COMMENT ON COLUMN "inbound_changes"."type" IS 'Change type: inbound.available (message becomes available) or inbound.content_purged (content removed)';
 COMMENT ON COLUMN "inbound_changes"."recorded_at" IS 'Change recording time (timestamptz, defaults to wall-clock clock_timestamp()); stream ordering uses position';
+COMMENT ON TABLE "inbound_document_resources" IS 'Private versioned inbound bitmap resources; source and cache are envelope encrypted and erased with their parent message';
+COMMENT ON COLUMN "inbound_document_resources"."id" IS 'Unpredictable resource identity scoped to one inbound document revision';
+COMMENT ON COLUMN "inbound_document_resources"."inbound_message_id" IS 'Original private inbound message owner';
+COMMENT ON COLUMN "inbound_document_resources"."document_revision" IS 'Frozen owning document revision';
+COMMENT ON COLUMN "inbound_document_resources"."metadata" IS 'Safe kind and MIME attachment identity, without source URL';
+COMMENT ON COLUMN "inbound_document_resources"."source" IS 'Envelope-encrypted original image URL or explicit embedded bitmap';
+COMMENT ON COLUMN "inbound_document_resources"."cached_content" IS 'Envelope-encrypted verified bitmap bytes';
+COMMENT ON COLUMN "inbound_document_resources"."content_type" IS 'Byte-verified raster MIME type';
+COMMENT ON COLUMN "inbound_document_resources"."size_bytes" IS 'Verified bitmap size, limited to 5000000 bytes';
+COMMENT ON COLUMN "inbound_document_resources"."sha256" IS 'Verified byte digest';
+COMMENT ON COLUMN "inbound_document_resources"."scan_policy" IS 'Scanner configuration policy used for the cached bitmap';
+COMMENT ON COLUMN "inbound_document_resources"."state" IS 'Finite preparation/read state';
+COMMENT ON COLUMN "inbound_document_resources"."reason_code" IS 'Finite content-free preparation reason';
+COMMENT ON COLUMN "inbound_document_resources"."attempt_count" IS 'Bounded preparation attempts';
+COMMENT ON COLUMN "inbound_document_resources"."available_at" IS 'Earliest preparation retry time';
+COMMENT ON COLUMN "inbound_document_resources"."lease_token" IS 'Exclusive preparation claim';
+COMMENT ON COLUMN "inbound_document_resources"."lease_expires_at" IS 'Preparation claim deadline';
+COMMENT ON COLUMN "inbound_document_resources"."created_at" IS 'Resource registration time';
 COMMENT ON TABLE "inbound_messages" IS 'Inbound messages and service-isolated copies; quarantined mail has no service owner and business reads require completed scanning';
 COMMENT ON COLUMN "inbound_messages"."content_purged_at" IS 'Irreversible content purge time (timestamptz); a non-null value prevents content reads while retaining business metadata';
 COMMENT ON COLUMN "inbound_messages"."id" IS 'Unique inbound message identifier';
@@ -886,6 +943,9 @@ COMMENT ON COLUMN "inbound_messages"."ingress_received_at" IS 'Initial webhook i
 COMMENT ON COLUMN "inbound_messages"."ready_at" IS 'Time the message first completed processing and became available (timestamptz)';
 COMMENT ON COLUMN "inbound_messages"."received_at" IS 'Inbound record receipt clock (timestamptz, defaults to wall-clock clock_timestamp()), distinct from transaction start time';
 COMMENT ON COLUMN "inbound_messages"."created_at" IS 'Record creation time (timestamptz); defaults to the database transaction start time, now()';
+COMMENT ON COLUMN "inbound_messages"."document_revision" IS 'Monotonic reading projection revision, zero for unprojected legacy copies';
+COMMENT ON COLUMN "inbound_messages"."document_projection" IS 'Passive document metadata and resource identities; never resource source URLs';
+COMMENT ON COLUMN "inbound_messages"."document_source" IS 'Envelope-encrypted canonical authored body retained under the original inbound lifetime';
 COMMENT ON TABLE "inbound_receipts" IS 'Idempotent receipts freezing initial provider inbound routing results; retries reuse the first receipt time and ownership snapshot';
 COMMENT ON COLUMN "inbound_receipts"."provider_account_id" IS 'Receiving provider account; composite primary key with external_message_id';
 COMMENT ON COLUMN "inbound_receipts"."external_message_id" IS 'Provider inbound message identifier, unique within the account';

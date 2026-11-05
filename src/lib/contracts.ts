@@ -1,3 +1,4 @@
+import { inboundDocumentSchema } from "@/modules/inbound/contracts";
 import { mailDiagnosticSchema, deliverySnapshotSchema } from "@/contracts/mail-diagnostics";
 import { z } from "zod";
 
@@ -123,7 +124,7 @@ export const attachmentSchema = z.object({ id: z.string(), fileName: z.string(),
 export const outboundFileSchema = z.object({ id: z.string(), fileName: z.string(), contentType: z.string(), size: z.number(), sha256: z.string(), contentAvailable: z.boolean(),usage:attachmentUsageSchema, createdAt: iso });
 export const outboundAttachmentSchema = z.object({ fileId: z.string(), fileName: z.string(), contentType: z.string(), size: z.number(), sha256: z.string(), disposition: z.enum(["attachment", "inline"]), contentId: nullableText });
 export const inboundSummarySchema = z.object({ id: z.string(), from: z.string(), to: z.array(z.string()), subject: z.string(), status: z.enum(["scanning", "ready", "rejected"]), attachmentCount: z.number(), authorDate: iso.nullable(), ingressReceivedAt: iso.nullable(), readyAt: iso.nullable(), receivedAt: iso });
-export const inboundDetailSchema = inboundSummarySchema.omit({ attachmentCount: true }).extend({ messageId: nullableText, envelopeRecipients: z.array(z.string()), replyTo: z.array(z.string()), inReplyTo: nullableText, references: z.array(z.string()), cc: z.array(z.string()), bcc: z.array(z.string()), html: nullableText, text: nullableText, contentPurgedAt: iso.nullable(), rejectionReason: nullableText, attachments: z.array(attachmentSchema) });
+export const inboundDetailSchema = inboundSummarySchema.omit({ attachmentCount: true }).extend({ messageId: nullableText, envelopeRecipients: z.array(z.string()), replyTo: z.array(z.string()), inReplyTo: nullableText, references: z.array(z.string()), cc: z.array(z.string()), bcc: z.array(z.string()), html: nullableText, text: nullableText, document: inboundDocumentSchema.nullable(), contentPurgedAt: iso.nullable(), rejectionReason: nullableText, attachments: z.array(attachmentSchema) });
 export const acceptedMessageSchema = z.object({ id: z.string(), processingState: z.literal("queued"), outcome: z.literal("pending"), service: z.string(), category: z.string(), recipientCount: z.number(), acceptedAt: iso, referenceId: z.string().optional() });
 export const messageCountsSchema = z.object(Object.fromEntries([...deliveryStatuses, "suppressed"].map(key => [key, z.number().int().nonnegative()])));
 export const messageSummarySchema = acceptedMessageSchema.extend({ contentPolicy: z.enum(["normal", "sensitive"]), sendBefore: iso.nullable(), processingState: z.enum(processingStates), outcome: z.enum(messageOutcomes), from: emailAddressSchema, subject: z.string(), referenceId: nullableText, counts: messageCountsSchema });

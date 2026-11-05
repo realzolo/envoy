@@ -163,6 +163,7 @@ export const schemaDocumentation = {
     fromEmail: "Sender email header content; does not establish authenticated identity", toEmails: "Primary recipient email header array; not trusted for envelope routing",
     ccEmails: "Carbon-copy email header address array", bccEmails: "Provider-supplied blind-copy address array, possibly empty and isolated by service permissions",
     subject: "Inbound email subject, subject to content retention policy", sanitizedHtml: "Sanitized HTML body; unsanitized provider content must not be served directly", textBody: "Inbound email plain-text body",
+    documentRevision: "Monotonic reading projection revision, zero for unprojected legacy copies", documentProjection: "Passive document metadata and resource identities; never resource source URLs", documentSource: "Envelope-encrypted canonical authored body retained under the original inbound lifetime",
     rawMimeObjectKey: "Optional private object storage key for the original MIME message", status: "Processing status: scanning (processing or awaiting scan), ready (content available) or rejected",
     rejectionReason: "Reason code or description for rejection or unavailable content", processingToken: "Random processing lease token preventing stale workers from overwriting newer results",
     processingDeadlineAt: "Current inbound processing lease deadline (timestamptz); recovery may reclaim expired work",
@@ -268,6 +269,9 @@ export const schemaDocumentation = {
     scope: "Rate limit scope name, such as provider, sending identity or administrative authentication", key: "Limited entity key within the scope; composite primary key with scope and window_start",
     windowStart: "Fixed rate limit window start (timestamptz), bucketed from database time using the configured seconds", count: "Non-negative bigint consumed quota: recipients for sending limits, requests for authentication limits",
     expiresAt: "Counter cleanup eligibility time (timestamptz); retains a short buffer after window end and does not reset the business limit",
+  } },
+  inboundDocumentResources: { table: "Private versioned inbound bitmap resources; source and cache are envelope encrypted and erased with their parent message", columns: {
+    id: "Unpredictable resource identity scoped to one inbound document revision", inboundMessageId: "Original private inbound message owner", documentRevision: "Frozen owning document revision", metadata: "Safe kind and MIME attachment identity, without source URL", source: "Envelope-encrypted original image URL or explicit embedded bitmap", cachedContent: "Envelope-encrypted verified bitmap bytes", contentType: "Byte-verified raster MIME type", sizeBytes: "Verified bitmap size, limited to 5000000 bytes", sha256: "Verified byte digest", scanPolicy: "Scanner configuration policy used for the cached bitmap", state: "Finite preparation/read state", reasonCode: "Finite content-free preparation reason", attemptCount: "Bounded preparation attempts", availableAt: "Earliest preparation retry time", leaseToken: "Exclusive preparation claim", leaseExpiresAt: "Preparation claim deadline", createdAt: "Resource registration time"
   } },
 } satisfies SchemaDocumentation;
 

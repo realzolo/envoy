@@ -1,9 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { Client, Pool, type PoolClient } from "pg";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { initializeApplicationSchema, initializeDatabase } from "@/platform/database/initialization";
 import { loadApplicationMigrations } from "../../db/migrations";
+
+// Full ordered schema/catalog comparisons now include six immutable versions.
+vi.setConfig({ testTimeout: 30_000 });
 
 async function isolated(work: (pool: Pool) => Promise<void>) {
   const adminUrl = process.env.TEST_DATABASE_ADMIN_URL!, name = `envoy_upgrade_${randomUUID().replaceAll("-", "")}`;
@@ -38,6 +41,44 @@ async function preserved(client: PoolClient) {
 }
 
 describe("application database migrations", () => {
+  it("upgrades populated V5 inbound copies without inventing a document or redispatching", async () => {
+    await isolated(async pool => {
+      const client = await pool.connect();
+      try {
+        const migrations = await loadApplicationMigrations(), baseline = migrations.slice(0, 5);
+        await initializeApplicationSchema(client, baseline, baseline.map(item => item.sql).join("\n"));await seed(client);
+        await client.query("INSERT INTO provider_accounts(id,type,name,public_config) VALUES('pa_document','mock','Legacy inbound','{}')");
+        await client.query(`INSERT INTO inbound_messages(id,service_id,provider_account_id,external_message_id,delivery_scope,envelope_recipients,from_email,to_emails,subject,sanitized_html,text_body,raw_mime_object_key,status)
+          VALUES('inb_document','svc_upgrade','pa_document','fixed-native-id','svc_upgrade',ARRAY['inbox@upgrade.example.test'],'author@example.test',ARRAY['inbox@upgrade.example.test'],'Original subject','<table><tr><td>Retained legacy HTML</td></tr></table>','Retained legacy text','private/original.eml','ready')`);
+        await client.query("INSERT INTO inbound_attachments(id,inbound_message_id,file_name,content_type,size_bytes,object_key,content_id,sha256) VALUES('ina_document','inb_document','image.png','image/png',1,'private/original-image','actual@cid','retained-sha')");
+        const before = (await client.query("SELECT to_jsonb(i) AS value FROM inbound_messages i WHERE id='inb_document'")).rows[0].value;
+        const attachment = (await client.query("SELECT to_jsonb(a) AS value FROM inbound_attachments a WHERE id='ina_document'")).rows[0].value;
+        expect(await initializeDatabase(client)).toBe("upgraded");
+        expect((await client.query("SELECT to_jsonb(i)-'document_revision'-'document_projection'-'document_source' AS value FROM inbound_messages i WHERE id='inb_document'")).rows[0].value).toEqual(before);
+        expect((await client.query("SELECT document_revision::text,document_projection,document_source FROM inbound_messages WHERE id='inb_document'")).rows[0]).toEqual({document_revision:'0',document_projection:null,document_source:null});
+        expect((await client.query("SELECT to_jsonb(a) AS value FROM inbound_attachments a WHERE id='ina_document'")).rows[0].value).toEqual(attachment);
+        expect((await client.query("SELECT count(*)::int AS count FROM inbound_document_resources")).rows[0].count).toBe(0);
+        expect((await client.query("SELECT count(*)::int AS count FROM callback_deliveries WHERE inbound_message_id='inb_document'")).rows[0].count).toBe(0);
+        expect(await initializeDatabase(client)).toBe("validated");
+      } finally { client.release(); }
+    });
+  });
+  it("rolls back the complete V6 document migration on a late failure and permits retry", async () => {
+    await isolated(async pool => {
+      const client = await pool.connect();
+      try {
+        const migrations = await loadApplicationMigrations(), baseline = migrations.slice(0, 5);
+        await initializeApplicationSchema(client, baseline, baseline.map(item => item.sql).join("\n"));await seed(client);const before = await preserved(client);
+        const failing = [...baseline, {...migrations[5], sql: `${migrations[5].sql}\nSELECT missing_migration_function();`}];
+        await expect(initializeApplicationSchema(client, failing, await readFile("db/schema.sql", "utf8"))).rejects.toThrow("missing_migration_function");
+        expect(await preserved(client)).toEqual(before);
+        expect((await client.query("SELECT to_regclass('public.inbound_document_resources') AS resources")).rows[0].resources).toBeNull();
+        expect((await client.query("SELECT count(*)::int AS count FROM information_schema.columns WHERE table_schema='public' AND table_name='inbound_messages' AND column_name LIKE 'document_%'")).rows[0].count).toBe(0);
+        expect((await client.query("SELECT count(*)::int AS count FROM envoy_meta.migrations")).rows[0].count).toBe(5);
+        expect(await initializeDatabase(client)).toBe("upgraded");expect(await initializeDatabase(client)).toBe("validated");
+      } finally { client.release(); }
+    });
+  });
   it("converts V4 diagnostics without inventing historical detail and removes retired text",async()=>{
     await isolated(async pool=>{
       const client=await pool.connect();

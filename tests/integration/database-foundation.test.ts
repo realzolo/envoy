@@ -1,7 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { Client, Pool } from "pg";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+// Full schema validation includes six immutable versions and disposable comparison catalogs.
+vi.setConfig({ testTimeout: 30_000 });
 import { initializeDatabase } from "@/platform/database/initialization";
 import { applicationSchemaHealth, database, query, transaction, transactionClient, transactionContext } from "@/platform/database";
 import { services } from "@/platform/database/schema";

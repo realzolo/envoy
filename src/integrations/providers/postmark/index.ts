@@ -154,6 +154,7 @@ export const postmarkModule: ProviderModule = {
                 subject: String(p.Subject ?? ""),
                 html: typeof p.HtmlBody === "string" ? p.HtmlBody : undefined,
                 text: typeof p.TextBody === "string" ? p.TextBody : undefined,
+                textProvenance: typeof p.TextBody === "string" && p.TextBody ? "NOT_RECORDED" : "UNAVAILABLE",
                 attachments,
                 authorDate: fields.authorDate ?? (p.Date && Number.isFinite(Date.parse(String(p.Date))) ? new Date(String(p.Date)) : null),
                 receivedAt: new Date()

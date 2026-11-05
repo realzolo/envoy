@@ -1,0 +1,186 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "revision": {
+      "type": "string",
+      "pattern": "^(?:0|[1-9][0-9]{0,18})$"
+    },
+    "projectionVersion": {
+      "type": "number",
+      "const": 1
+    },
+    "policyVersion": {
+      "type": "string",
+      "const": "mail-passive-v1"
+    },
+    "sourceDigest": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "primaryRepresentation": {
+      "type": "string",
+      "enum": [
+        "HTML",
+        "TEXT",
+        "NONE"
+      ]
+    },
+    "textProvenance": {
+      "type": "string",
+      "enum": [
+        "AUTHORED",
+        "DERIVED",
+        "NOT_RECORDED",
+        "UNAVAILABLE"
+      ]
+    },
+    "state": {
+      "type": "string",
+      "enum": [
+        "CURRENT",
+        "PARTIAL",
+        "SOURCE_UNAVAILABLE"
+      ]
+    },
+    "resources": {
+      "maxItems": 64,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,200}$"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "CID",
+              "EMBEDDED",
+              "REMOTE"
+            ]
+          },
+          "contentId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 998
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "attachmentId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "contentType": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "image/png",
+                  "image/jpeg",
+                  "image/gif",
+                  "image/webp"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "size": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 5000000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "READY",
+              "PREPARING",
+              "RETRYABLE",
+              "BLOCKED",
+              "UNAVAILABLE",
+              "ERASED"
+            ]
+          },
+          "reasonCode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "NOT_READY",
+                  "TRACKING_RISK",
+                  "SOURCE_UNAVAILABLE",
+                  "UNSUPPORTED_TYPE",
+                  "SIZE_LIMIT",
+                  "PIXEL_LIMIT",
+                  "FETCH_FAILED",
+                  "NETWORK_BLOCKED",
+                  "SCAN_PENDING",
+                  "SCAN_REJECTED",
+                  "CONTENT_ERASED",
+                  "RESOURCE_LIMIT"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "downloadEligible": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "contentId",
+          "attachmentId",
+          "contentType",
+          "size",
+          "state",
+          "reasonCode",
+          "downloadEligible"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "revision",
+    "projectionVersion",
+    "policyVersion",
+    "sourceDigest",
+    "primaryRepresentation",
+    "textProvenance",
+    "state",
+    "resources"
+  ],
+  "additionalProperties": false
+}

@@ -25,6 +25,27 @@ describe("inbound provider ownership and RFC fields", () => {
     const mime = `${rawHeaders}\r\nFrom: sender@example.net\r\nTo: visible@example.net\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nRaw content`;
     expect(await adapter.inbound!.receive(receipt({ envelope: parsed.envelope,email: mime }),contexts.sendgrid)).toMatchObject({ ...expected,to: ["visible@example.net"],text: "Raw content",envelopeRecipients: ["hidden@example.test","alias@example.test"] });
   });
+  it("binds SendGrid CID by exact form part and does not claim projected text was authored", async () => {
+    const parsed = { envelope: JSON.stringify({ to: ["hidden@example.test"] }), html: '<img src="cid:logo@original">', text: "provider text",
+      "content-ids": JSON.stringify({ "logo@original": "attachment1" }), "attachment-info": JSON.stringify({ attachment1: { "content-id": "logo@original" } }),
+      attachment1: { name: "same.png", type: "image/png", bytes: new Uint8Array([1]) }, attachment2: { name: "same.png", type: "image/png", bytes: new Uint8Array([2]) } };
+    const mail = (await providerRegistry("sendgrid").inbound!.receive(receipt(parsed), contexts.sendgrid))!;
+    expect(mail.textProvenance).toBe("NOT_RECORDED");
+    expect(mail.attachments.map(file => file.contentId)).toEqual(["logo@original", undefined]);
+    const conflicting = { ...parsed, "attachment-info": JSON.stringify({ attachment1: { "content-id": "different@original" } }) };
+    expect((await providerRegistry("sendgrid").inbound!.receive(receipt(conflicting), contexts.sendgrid))!.attachments[0].contentId).toBeUndefined();
+  });
+  it("binds Mailgun CID by part key and prefers independent raw MIME over derived provider fields", async () => {
+    const parsed = { recipient: "hidden@example.test", "body-html": '<img src="cid:logo@original">', "body-plain": "derived provider text",
+      "content-id-map": JSON.stringify({ "logo@original": "attachment-1" }),
+      "attachment-1": { name: "same.png", type: "image/png", bytes: new Uint8Array([1]) }, "attachment-2": { name: "same.png", type: "image/png", bytes: new Uint8Array([2]) } };
+    const mail = (await providerRegistry("mailgun").inbound!.receive(receipt(parsed), contexts.mailgun))!;
+    expect(mail.textProvenance).toBe("NOT_RECORDED");expect(mail.attachments.map(file => file.contentId)).toEqual(["logo@original", undefined]);
+    const mime = 'From: author@example.net\r\nTo: visible@example.net\r\nMIME-Version: 1.0\r\nContent-Type: multipart/related; boundary="related"\r\n\r\n--related\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<table><tr><td><img src="cid:real@mime">Original</td></tr></table>\r\n--related\r\nContent-Type: image/png\r\nContent-ID: <real@mime>\r\nContent-Transfer-Encoding: base64\r\n\r\nAQ==\r\n--related--';
+    const original = (await providerRegistry("mailgun").inbound!.receive(receipt({ ...parsed, "body-mime": mime }), contexts.mailgun))!;
+    expect(original.html).toContain('src="cid:real@mime"');expect(original.text).toBeUndefined();expect(original.textProvenance).toBe("UNAVAILABLE");
+    expect(original.attachments.map(file => file.contentId)).toEqual(["real@mime"]);expect(original.envelopeRecipients).toEqual(["hidden@example.test"]);
+  });
   it("uses Mailgun recipient without falling back to To, and deduplicates transport receipts separately from RFC Message-ID", async () => {
     const adapter = providerRegistry("mailgun");
     const parsed = { from: "author@example.net",sender: "bounce@example.net",recipient: "hidden@example.test",To: "forged@example.test","message-headers": JSON.stringify([...Object.entries(headers),["To","visible@example.net"]]) };

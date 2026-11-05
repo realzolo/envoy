@@ -7,6 +7,7 @@ const route: InboundDispatch = { service_id: "svc_test", recipients: ["support@e
 const now = new Date("2026-09-24T00:00:00.000Z");
 const result = () => Promise.resolve({ rows: [], rowCount: 1 });
 const repository: InboundRepository = {
+  saveDocument: vi.fn(async()=>{}),
   findDispatches: vi.fn(), freezeReceipt: vi.fn(result), readReceipt: vi.fn(), findTombstone: vi.fn(), insertRejected: vi.fn(),
   allowedDomains: vi.fn(), findCopy: vi.fn(), insertCopy: vi.fn(result), findConcurrentCopy: vi.fn(), recordDates: vi.fn(result),
   claimCopy: vi.fn(), copyState: vi.fn(), renewClaim: vi.fn(result), authorizeCompletion: vi.fn(result), completeCopy: vi.fn(),
@@ -16,7 +17,7 @@ const repository: InboundRepository = {
 const uploads = { register: vi.fn(), put: vi.fn() };
 const dependencies: InboundDependencies = {
   repository, unitOfWork: { run: work => work(repository) }, id: prefix => `${prefix}_test`, digest: () => "digest",
-  sanitizeHtml: html => html, uploads,
+  prepareDocument: () => ({html:null,text:null,document:{revision:"1",projectionVersion:1,policyVersion:"mail-passive-v1",sourceDigest:null,primaryRepresentation:"NONE",textProvenance:"UNAVAILABLE",state:"CURRENT",resources:[]},source:null,resources:[]}), uploads,
 };
 const { persistInbound } = createInboundService(dependencies);
 const message = {

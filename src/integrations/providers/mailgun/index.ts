@@ -1,6 +1,7 @@
+import { simpleParser } from "mailparser";
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import type { CanonicalEventType, ProviderModule } from "../contracts";
-import { inboundHeaders } from "../inbound-fields";
+import { inboundContentIds, inboundHeaders, mailAddresses } from "../inbound-fields";
 import { accepted, assertMessageCapabilities, buildMimeMessage, checkedJson, decodeJson, event, eventDate, header, messageRecipients, type MultipartValue, nativeMailCapabilities, parseMultipart, stableEventId, submitRequest } from "../shared";
 const eventMap: Record<string, CanonicalEventType> = {
     accepted: "accepted",
@@ -130,9 +131,11 @@ export const mailgunModule: ProviderModule = {
             if (!routing) return null;
             const p = verified.parsed as Record<string, MultipartValue | MultipartValue[]>;
             const text = (key: string) => typeof p[key] === "string" ? p[key] as string : "";
-            const multipartAttachments = Object.entries(p).filter(([key, value]) => key.startsWith("attachment") && !Array.isArray(value) && typeof value !== "string").map(([, value]) => {
+            const mime = text("body-mime") ? await simpleParser(text("body-mime"), { skipHtmlToText: true, skipTextToHtml: true, keepCidLinks: true }) : null;
+            const contentIds = inboundContentIds(p["content-id-map"]);
+            const multipartAttachments = Object.entries(p).filter(([key, value]) => key.startsWith("attachment") && !Array.isArray(value) && typeof value !== "string").map(([key, value]) => {
                 const file = value as Exclude<MultipartValue, string>;
-                return { fileName: file.name, contentType: file.type, content: file.bytes };
+                return { fileName: file.name, contentType: file.type, content: file.bytes, contentId: contentIds.get(key) };
             });
             const jsonAttachments = Array.isArray(p.attachments) ? p.attachments.flatMap(item => {
                 if (!item || typeof item !== "object") return [];
@@ -141,21 +144,22 @@ export const mailgunModule: ProviderModule = {
                 return [{ fileName: String(file.filename ?? "attachment"), contentType: String(file["content-type"] ?? "application/octet-stream"), content: new Uint8Array(Buffer.from(file.content, "base64")) }];
             }) : [];
             const headers = Array.isArray(p["message-headers"]) ? p["message-headers"] : text("message-headers") ? JSON.parse(text("message-headers")) : "";
-            const fields = await inboundHeaders(headers);
+            const fields = await inboundHeaders(text("body-mime") || headers);
             return {
                 ...fields,
                 externalMessageId: routing.externalMessageId,
                 messageId: fields.messageId ?? (text("Message-Id") || undefined),
                 envelopeRecipients: routing.envelopeRecipients,
-                from: text("from") || text("sender"),
-                to: fields.to.length ? fields.to : (await inboundHeaders(`To: ${text("To")}`)).to,
-                cc: fields.cc.length ? fields.cc : (await inboundHeaders(`Cc: ${text("Cc")}`)).cc,
+                from: mime?.from?.text ?? (text("from") || text("sender")),
+                to: mime ? mailAddresses(mime.to) : fields.to.length ? fields.to : (await inboundHeaders(`To: ${text("To")}`)).to,
+                cc: mime ? mailAddresses(mime.cc) : fields.cc.length ? fields.cc : (await inboundHeaders(`Cc: ${text("Cc")}`)).cc,
                 bcc: [],
-                subject: text("subject"),
-                html: Array.isArray(p["body-html"]) ? p["body-html"].filter((part): part is string => typeof part === "string").join("\n") : text("body-html"),
-                text: text("body-plain"),
+                subject: mime?.subject ?? text("subject"),
+                html: mime ? (typeof mime.html === "string" ? mime.html : undefined) : Array.isArray(p["body-html"]) ? p["body-html"].filter((part): part is string => typeof part === "string").join("\n") : text("body-html"),
+                text: (mime ? mime.text : text("body-plain")) || undefined,
+                textProvenance: (mime ? mime.text : text("body-plain")) ? (mime ? "AUTHORED" : "NOT_RECORDED") : "UNAVAILABLE",
                 rawMime: typeof p["body-mime"] === "string" ? new TextEncoder().encode(p["body-mime"] as string) : undefined,
-                attachments: [...multipartAttachments, ...jsonAttachments],
+                attachments: mime ? mime.attachments.map(file => ({ fileName: file.filename ?? "attachment", contentType: file.contentType, content: new Uint8Array(file.content), contentId: file.cid })) : [...multipartAttachments, ...jsonAttachments],
                 receivedAt: new Date(Number(text("timestamp") || Date.now() / 1000) * 1000)
             };
         }

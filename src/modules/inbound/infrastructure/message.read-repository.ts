@@ -1,3 +1,5 @@
+import { readDocumentMetadata } from "./document.repository";
+import type { InboundDocument } from "../contracts";
 import { inboundDomainAccess } from "@/modules/identity/infrastructure/authorization";
 import { downloadAttachment } from "@/modules/attachments/public";
 import { attachmentUsage, type SafetyRow } from "@/modules/attachments/public";
@@ -68,11 +70,13 @@ export async function getInboundMessage(id: string, serviceId: string) {
     sanitized_html: string | null;
     text_body: string | null;
     content_purged_at: Date | null;
+    document_projection: InboundDocument | null;
+    document_revision: string;
     status: string;
     rejection_reason: string | null;
     received_at: Date;
     author_date: Date | null; ingress_received_at: Date | null; ready_at: Date | null;
-  }>(`SELECT id,external_message_id,message_id,envelope_recipients,reply_to,in_reply_to,references_ids,from_email,to_emails,cc_emails,bcc_emails,subject,sanitized_html,text_body,content_purged_at,status,rejection_reason,created_at AS received_at,author_date,ingress_received_at,ready_at FROM inbound_messages i WHERE id=$1 AND service_id=$2 AND ${inboundDomainAccess('i')}`, [id, serviceId])).rows[0];
+  }>(`SELECT id,external_message_id,message_id,envelope_recipients,reply_to,in_reply_to,references_ids,from_email,to_emails,cc_emails,bcc_emails,subject,sanitized_html,text_body,content_purged_at,document_projection,document_revision::text,status,rejection_reason,created_at AS received_at,author_date,ingress_received_at,ready_at FROM inbound_messages i WHERE id=$1 AND service_id=$2 AND ${inboundDomainAccess('i')}`, [id, serviceId])).rows[0];
   if (!message) return null;
   const attachments = (await query<{
     id: string;
@@ -83,6 +87,8 @@ export async function getInboundMessage(id: string, serviceId: string) {
     sha256: string; safety: SafetyRow | null;
     content_purged_at: Date | null;
   }>("SELECT a.id,a.file_name,a.content_type,a.size_bytes::text,a.content_id,a.sha256,a.content_purged_at,row_to_json(s) AS safety FROM inbound_attachments a LEFT JOIN attachment_safety s ON s.resource_id=a.id WHERE a.inbound_message_id=$1 ORDER BY a.created_at,a.id", [id])).rows;
+  const document=message.content_purged_at || message.status!=="ready" ? null:await readDocumentMetadata(id,serviceId,message.document_projection);
+  if(!(await query(`SELECT i.id FROM inbound_messages i WHERE i.id=$1 AND i.service_id=$2 AND ${inboundDomainAccess('i')} AND i.document_revision=$3 AND (i.content_purged_at IS NOT NULL)=$4::boolean`,[id,serviceId,message.document_revision,message.content_purged_at!==null])).rowCount)return null;
   return {
     id: message.id,
     messageId: message.message_id ?? null,
@@ -95,8 +101,9 @@ export async function getInboundMessage(id: string, serviceId: string) {
     cc: message.cc_emails,
     bcc: message.bcc_emails,
     subject: message.subject,
-    html: message.sanitized_html,
-    text: message.text_body,
+    html: message.content_purged_at || message.status!=="ready" ? null : message.sanitized_html,
+    text: message.content_purged_at || message.status!=="ready" ? null : message.text_body,
+    document,
     contentPurgedAt: message.content_purged_at?.toISOString() ?? null,
     status: message.status,
     rejectionReason: message.rejection_reason,

@@ -1,7 +1,7 @@
 import { simpleParser } from "mailparser";
 import { createHash, createPublicKey, verify as verifySignature } from "node:crypto";
 import type { CanonicalEventType, ProviderModule } from "../contracts";
-import { inboundHeaders, mailAddresses, smtpRecipients } from "../inbound-fields";
+import { inboundContentIds, inboundHeaders, mailAddresses, smtpRecipients } from "../inbound-fields";
 import { accepted, assertMessageCapabilities, checkedJson, event, eventDate, header, messageHeaders, type MultipartValue, nativeMailCapabilities, parseMultipart, safeDiagnostic, stableEventId, submitRequest } from "../shared";
 const eventMap: Record<string, CanonicalEventType> = {
     processed: "accepted",
@@ -150,11 +150,12 @@ export const sendgridModule: ProviderModule = {
             if (!routing) return null;
             const p = verified.parsed as Record<string, MultipartValue | MultipartValue[]>;
             const text = (key: string) => typeof p[key] === "string" ? p[key] as string : "";
-            const mime = text("email") ? await simpleParser(text("email")) : null;
+            const mime = text("email") ? await simpleParser(text("email"), { skipHtmlToText: true, skipTextToHtml: true, keepCidLinks: true }) : null;
             const fields = await inboundHeaders(text("email") || text("headers"));
-            const files = Object.entries(p).filter(([key, value]) => key.startsWith("attachment") && !Array.isArray(value) && typeof value !== "string").map(([, value]) => {
+            const contentIds = inboundContentIds(p["content-ids"], p["attachment-info"]);
+            const files = Object.entries(p).filter(([key, value]) => key.startsWith("attachment") && !Array.isArray(value) && typeof value !== "string").map(([key, value]) => {
                 const file = value as Exclude<MultipartValue, string>;
-                return { fileName: file.name, contentType: file.type, content: file.bytes };
+                return { fileName: file.name, contentType: file.type, content: file.bytes, contentId: contentIds.get(key) };
             });
             return {
                 ...fields,
@@ -166,7 +167,8 @@ export const sendgridModule: ProviderModule = {
                 bcc: [],
                 subject: mime?.subject ?? text("subject"),
                 html: mime ? (typeof mime.html === "string" ? mime.html : undefined) : text("html"),
-                text: mime?.text ?? text("text"),
+                text: (mime ? mime.text : text("text")) || undefined,
+                textProvenance: (mime ? mime.text : text("text")) ? (mime ? "AUTHORED" : "NOT_RECORDED") : "UNAVAILABLE",
                 rawMime: text("email") ? new TextEncoder().encode(text("email")) : undefined,
                 attachments: mime ? mime.attachments.map(file => ({ fileName: file.filename ?? "attachment", contentType: file.contentType, content: new Uint8Array(file.content), contentId: file.cid })) : files,
                 receivedAt: new Date()

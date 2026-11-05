@@ -217,6 +217,8 @@ export type CanonicalInboundMessage = {
     subject: string;
     html?: string;
     text?: string;
+    /** Provenance of the separate text value; provider-origin uncertainty is NOT_RECORDED. */
+    textProvenance?: "AUTHORED" | "DERIVED" | "NOT_RECORDED" | "UNAVAILABLE";
     rawMime?: Uint8Array;
     attachments: Array<{
         fileName: string;

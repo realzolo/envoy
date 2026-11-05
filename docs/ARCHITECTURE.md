@@ -59,6 +59,11 @@ flowchart LR
 
 The mailbox local part does not select a Service. Route ownership is frozen when the verified webhook is accepted. Resend uses `received_for` from the signed `email.received` event, falling back to its signed `to/cc/bcc` lists when absent. The worker fetches the body and attachments through the Resend API. All active Services with Receive enabled for a recipient domain receive separate copies. If no Service matches, Envoy retains the message for administrators without forwarding it; this is a normal received state. Older `NO_RECEIVING_SERVICE` rejected records can be explicitly replayed after enabling Receive while their verified receipts are retained. Existing successful copies are never redistributed.
 
+Inbound also owns versioned passive reading documents, independent MIME text provenance, original-source
+reprojection and the protected image manifest. It exposes fixed resource IDs rather than an arbitrary image proxy;
+attachment safety, current full-envelope ownership and content erasure remain authoritative. See
+[INBOUND_DOCUMENTS.md](INBOUND_DOCUMENTS.md) for the owner/API/cache and bounded historical repair contract.
+
 ### Outbound
 
 ```mermaid
