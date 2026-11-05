@@ -42,7 +42,7 @@
     "postcss-value-parser": "4.2.0",
     "react": "19.3.1",
     "react-dom": "19.3.1",
-    "resend": "^6.28.1",
+    "resend": "^6.37.0",
     "sanitize-html": "^2.18.1",
     "server-only": "^0.0.1",
     "svix": "^2.5.0",
