@@ -5,7 +5,7 @@ import { z } from "zod";
 export const MAX_REQUEST_BYTES = 4_200_000;
 export const MAX_CONTENT_BYTES = 2_000_000;
 export const deliveryStatuses = ["queued", "submitting", "accepted", "deferred", "delivered", "bounced", "failed", "unknown", "canceled"] as const;
-export const eventTypes = ["queued", "submitting", "accepted", "deferred", "delivered", "bounced", "failed", "opened", "clicked", "complained", "unsubscribed", "suppressed", "canceled", "unknown"] as const;
+export const eventTypes = ["queued", "submitting", "accepted", "deferred", "delivered", "bounced", "failed", "opened", "clicked", "complained", "unsubscribed", "suppressed", "canceled", "unknown", "identity_confirmed"] as const;
 const contentSchema = z.string().refine(value => new TextEncoder().encode(value).byteLength <= MAX_CONTENT_BYTES, "Content must be at most 2000000 UTF-8 bytes");
 
 export const MAX_FILE_BYTES = 10_000_000;

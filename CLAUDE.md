@@ -56,6 +56,10 @@ time never controls stream position. Retain the always-present nextCursor after 
 errors provide errors.resetCursor and gaps require reconciling owned messages first. Prefix retention is 90 days.
 V2 locks event writes, backfills existing facts with local recordedAt, then installs triggers in one transaction.
 `/events` remains a descending historical browse API and must not serve as an incremental synchronization cursor.
+Verified Resend `email.*` facts may fill an unknown attempt's actual RFC Message-ID from `data.message_id`, never from
+its opaque external email ID. The one-time `identity_confirmed` submission fact uses the existing change stream even
+when acceptance is deduplicated; it changes no delivery lifecycle/revision and creates no acceptance callback. Existing
+confirmed identity is immutable. See `docs/API.md` for exact association and source/retention limits.
 Callback delivery has one 10-second execution deadline from DNS through TLS, final authorization and response;
 expiry cancels the request and late asynchronous work cannot write it. A 2xx header acknowledges receipt immediately;
 failure summaries are limited to 500 bytes and connections are closed. The 2-minute work lease is independent.

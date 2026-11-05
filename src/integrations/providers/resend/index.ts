@@ -1,4 +1,5 @@
 import { resendBounceFacts, submissionReason } from "../diagnostic-facts";
+import { confirmedRfcMessageId } from "../rfc-message-id";
 import { Resend } from "resend";
 import { Webhook } from "svix";
 import { MAX_FILE_BYTES } from "@/lib/contracts";
@@ -166,6 +167,7 @@ export const resendModule: ProviderModule = {
             return [event({
                     id: verified.providerEventId ?? stableEventId(payload),
                     externalMessageId: typeof data.email_id === "string" ? data.email_id : undefined,
+                    ...(confirmedRfcMessageId(data.message_id) ? { rfcMessageId: data.message_id as string } : {}),
                     type,
                     occurredAt: eventDate(payload.created_at),
                     // Current Resend events contain exactly one recipient in `to`.

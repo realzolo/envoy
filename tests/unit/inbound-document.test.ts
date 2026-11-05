@@ -25,6 +25,12 @@ describe("passive inbound document fidelity and privacy",()=>{
   expect(project('<img src="https://tracker.test/shared" width="300" height="100"><img src="https://tracker.test/shared" width="1" height="1">').document.resources).toMatchObject([{state:'BLOCKED',reasonCode:'TRACKING_RISK',downloadEligible:false}]);
   expect(result.document.resources).toHaveLength(2);expect(canonicalContentId('<Case@ID>')).toBe('Case@ID');expect(canonicalContentId('a\u00a0b')).toBeNull();
  });
+ it("preserves explicit cited-reply provenance and literal sender attachment placeholders",()=>{
+  const result=project('<p>New reply</p><blockquote type="cite"><span id="cid:app-logo">&lt;app-logo.png&gt;</span><span id="cid:attachment">&lt;document.md&gt;</span></blockquote><blockquote type="not-cite">Actual body quotation</blockquote>');
+  expect(result.html).toContain('<blockquote type="cite">');expect(result.html).not.toContain('type="not-cite"');
+  expect(result.html).toContain('&lt;app-logo.png&gt;');expect(result.html).toContain('&lt;document.md&gt;');
+  expect(result.document.resources).toEqual([]);
+ });
  it("retains srcset-only images as controlled candidates and honestly marks truncation/empty HTML",()=>{
   const result=project('<picture><source srcset="https://image.test/a 1x, https://image.test/b 2x"><img srcset="https://image.test/a 1x, https://image.test/b 2x"></picture>');
   expect(result.html).toContain('srcset="mail-resource:');expect(result.html).toContain('src="mail-resource:');expect(result.document.resources).toHaveLength(2);expect(result.html).not.toContain('https://');

@@ -381,6 +381,12 @@ export interface EventsRepository {
     lockEventAttempt(input: {
         id: string;
     }): Promise<RepositoryResult<Record<string, unknown>>>;
+    confirmAttemptRfcMessageId(input: {
+        id: string;
+        providerAccountId: string;
+        externalMessageId: string;
+        rfcMessageId: string;
+    }): Promise<RepositoryResult<Record<string, unknown>>>;
     listEventRecipients(input: {
         submissionId: string;
         recipient: string | null;

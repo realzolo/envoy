@@ -2,6 +2,7 @@ import { diagnosticEvidenceSchema, projectDiagnostic, stoppedRetry, type RetryDi
 import { smtpFacts, safeReason, submissionReason } from "@/integrations/providers/diagnostic-facts";
 import type { CanonicalEvent } from "@/integrations/providers/contracts";
 import { contentFreeOutboundEvents } from "@/integrations/providers/event-facts";
+import { confirmedRfcMessageId } from "@/integrations/providers/rfc-message-id";
 import { diagnostic, type Diagnostic } from "@/modules/outbound/domain/diagnostics";
 import { createId } from "@/platform/ids";
 import { PROVIDER_EVENT_RECEIVED } from "@/platform/outbox/events";
@@ -153,6 +154,24 @@ export function createEventsService(dependencies: Omit<OutboundDependencies, "ev
             const rows = (await client.events.listEventRecipients({ submissionId: found.submission_id, recipient: event.recipient ?? null })).rows;
             if (event.recipient && !rows.length)
                 return false;
+            const rfcMessageId = confirmedRfcMessageId(event.rfcMessageId);
+            if (rfcMessageId) {
+                // Only the exact provider execution can confirm this header. A later differing
+                // provider fact cannot rewrite an already confirmed attempt identity.
+                const confirmed = await client.events.confirmAttemptRfcMessageId({ id: found.id, providerAccountId,
+                    externalMessageId: event.externalMessageId!, rfcMessageId });
+                if (confirmed.rowCount) {
+                    // Acceptance can already have been deduplicated against the sender's HTTP
+                    // receipt. This independent fact advances the committed change stream even
+                    // then, without a delivery transition or a second acceptance callback.
+                    const id = createId("sev");
+                    await client.events.insertSubmissionEvent({ id, submissionId: found.submission_id,
+                        attemptId: found.id, type: "identity_confirmed", key: `attempt:${found.id}:identity_confirmed`,
+                        occurredAt: event.occurredAt, rawEventId,
+                        payload: { id, attemptId: found.id, sourceId: event.id, type: "identity_confirmed",
+                            occurredAt: event.occurredAt, metadata: {} } });
+                }
+            }
             // Trusted post-submission facts prove acceptance even when the sender lost
             // its HTTP response. Resolve transport uncertainty as accepted for the immutable request group;
             // message-scoped facts still never invent recipient delivery or engagement.

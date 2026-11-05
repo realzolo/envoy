@@ -273,6 +273,16 @@ export function createEventsRepository(client: Pick<PoolClient, "query">): Event
         }) {
             return client.query<Record<string, unknown>>("SELECT id FROM submission_attempts WHERE id=$1 FOR UPDATE", [input.id]);
         },
+        confirmAttemptRfcMessageId(input: {
+            id: string;
+            providerAccountId: string;
+            externalMessageId: string;
+            rfcMessageId: string;
+        }) {
+            return client.query<Record<string, unknown>>(`UPDATE submission_attempts SET rfc_message_id=$4
+                WHERE id=$1 AND provider_account_id=$2 AND external_message_id=$3 AND rfc_message_id IS NULL`,
+                [input.id, input.providerAccountId, input.externalMessageId, input.rfcMessageId]);
+        },
         listEventRecipients(input: {
             submissionId: string;
             recipient: string | null;

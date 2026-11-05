@@ -168,10 +168,12 @@ export class CanonicalProviderError extends Error {
         this.reasonCode = details.reasonCode;
     }
 }
-export type CanonicalEventType = "accepted" | "deferred" | "delivered" | "bounced" | "failed" | "opened" | "clicked" | "complained" | "unsubscribed" | "suppressed" | "inbound.received";
+export type CanonicalEventType = "accepted" | "deferred" | "delivered" | "bounced" | "failed" | "opened" | "clicked" | "complained" | "unsubscribed" | "suppressed" | "identity_confirmed" | "inbound.received";
 export type CanonicalEvent = {
     id: string;
     externalMessageId?: string;
+    /** Actual RFC header confirmed by the provider; never inferred from externalMessageId. */
+    rfcMessageId?: string;
     type: CanonicalEventType;
     occurredAt: Date;
     recipient?: string;

@@ -120,7 +120,7 @@ export function projectDocument(source: DocumentSource, options: { revision: str
   };
   const markup = htmlSource?.trim() ? sanitizeHtml(htmlSource, {
     allowedTags: [...sanitizeHtml.defaults.allowedTags, "html", "head", "body", "style", "img", "center", "font", "picture", "source"],
-    allowedAttributes: { "*": ["class", "id", "style", "dir", "lang", "title", "align", "valign", "width", "height", "bgcolor"], a: ["href", "name", "target", "rel"], img: ["src", "srcset", "alt", "width", "height"], source: ["srcset", "media", "type"], table: ["border", "cellpadding", "cellspacing", "width", "height", "role"], td: ["colspan", "rowspan", "width", "height"], th: ["colspan", "rowspan", "scope"], font: ["color", "face", "size"] },
+    allowedAttributes: { "*": ["class", "id", "style", "dir", "lang", "title", "align", "valign", "width", "height", "bgcolor"], a: ["href", "name", "target", "rel"], blockquote: [{ name: "type", values: ["cite"] }], img: ["src", "srcset", "alt", "width", "height"], source: ["srcset", "media", "type"], table: ["border", "cellpadding", "cellspacing", "width", "height", "role"], td: ["colspan", "rowspan", "width", "height"], th: ["colspan", "rowspan", "scope"], font: ["color", "face", "size"] },
     allowedSchemes: ["https", "http", "mailto", "tel", "mail-resource"], allowedSchemesByTag: { img: ["mail-resource"], source: ["mail-resource"] }, allowProtocolRelative: false,
     allowVulnerableTags: true, parseStyleAttributes: false,
     transformTags: { "*": (tagName, attributes) => {

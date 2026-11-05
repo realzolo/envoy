@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { CanonicalProviderError, type CanonicalEvent, type CanonicalMessage, type EmailAddress, type ProviderSendResult } from "./contracts";
 import { boundedProviderRequest, responseHeaders, submissionPolicy } from "./submission-policy";
 import { messageHeaders } from "./mail-capabilities";
+import { confirmedRfcMessageId } from "./rfc-message-id";
 export { nativeMailCapabilities, formatAddress, messageHeaders, messageRecipients, estimatedMessageBytes, assertMessageCapabilities } from "./mail-capabilities";
 
 export function safeDiagnostic(value: unknown) {
@@ -122,7 +123,7 @@ export async function checkedJson(response: Response): Promise<Record<string, un
 export function accepted(id: unknown, response?: Record<string, unknown>, rfcMessageId?: unknown): ProviderSendResult {
     if (typeof id !== "string" || !id)
         throw new CanonicalProviderError("Provider returned no message identifier", "provider", "SUBMISSION_OUTCOME_UNKNOWN", "unknown", false, { providerCode: "missing_message_id" });
-    return { outcome: "accepted", externalMessageId: id, response, rfcMessageId: typeof rfcMessageId === "string" && /^<[^<>\s@]+@[^<>\s@]+>$/.test(rfcMessageId) ? rfcMessageId : null };
+    return { outcome: "accepted", externalMessageId: id, response, rfcMessageId: confirmedRfcMessageId(rfcMessageId) };
 }
 export function event(input: Omit<CanonicalEvent, "metadata"> & {
     metadata?: Record<string, unknown>;

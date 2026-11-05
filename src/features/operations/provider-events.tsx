@@ -3,6 +3,7 @@ import { ActionButton,type Data,DataTable,date,JsonPreview,rows,StatusTag,TableC
 import styles from "@/components/admin-views.module.css";
 import { Space,Typography } from "@arco-design/web-react";
 import { IconRotateLeft } from "@arco-design/web-react/icon";
+import { eventLabel } from "@/features/outbound/diagnostic-presentation";
 export function Events({ data }: { data: Data }) {
   return (
     <Space direction="vertical" size="large" className={styles.stack}>
@@ -26,7 +27,7 @@ export function Events({ data }: { data: Data }) {
           data={rows(data.canonicalEvents)}
           minWidth="900px"
           columns={[
-            { title: "Type", render: (_, event) => <Typography.Text code>{value(event, "event_type")}</Typography.Text> },
+            { title: "Type", render: (_, event) => <Typography.Text>{eventLabel(value(event, "event_type"))}</Typography.Text> },
             { title: "Scope / recipient", render: (_, event) => `${value(event, "scope")} / ${value(event, "recipient_email") || "Entire submission"}` },
             { title: "Occurred", render: (_, event) => date(event.occurred_at) },
             { title: "Canonical payload", render: (_, event) => <JsonPreview data={event.canonical_payload} title="Canonical event payload" /> },

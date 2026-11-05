@@ -409,7 +409,25 @@ replying to a multi-submission message. Confirmation is an adapter/API contract 
 | Postmark | Envoy sends an attempt-specific RFC `Message-ID` through the documented custom header; after acceptance the exact header is confirmed separately from Postmark's UUID |
 | Mailgun MIME | A syntactically valid RFC Message-ID returned by its messages API is confirmed; opaque/non-RFC responses stay null |
 | SES raw MIME | SES overwrites the proposed MIME Message-ID. Its API result is an external ID; no verified actual RFC header is currently available, so null |
-| SendGrid / Resend | Current submission paths expose external IDs without confirmed final RFC headers; null |
+| Resend | The send HTTP response exposes only its opaque email ID. Verified `email.*` webhook `data.message_id` confirms the exact actual RFC header for the matched provider account/external ID; absent or invalid values remain null |
+| SendGrid | Current submission paths expose external IDs without confirmed final RFC headers; null |
+
+Resend's documented [Message-ID support](https://resend.com/changelog/message-id-for-sent-emails) is distinct from its
+opaque `email_id`; no external ID is converted, and no caller-proposed header is treated as confirmed. Only a valid
+bounded RFC header from a verified provider fact, associated with that exact provider account/external ID and recipient
+scope, may fill a null attempt identity. Repeated identical facts are idempotent; a different later value never rewrites
+the first confirmation. The content-free normalized receipt retains this identity when the raw provider echo is erased.
+
+The first null-to-confirmed transition appends one submission-scoped `identity_confirmed` event and the corresponding
+`/outbound-changes` entry, with source identity deduplicated by attempt. This is a correlation fact, not a delivery
+lifecycle or engagement/compliance transition; it does not change the delivery revision, send another email, or emit a
+second acceptance callback. This remains visible when a late `email.sent` is deduplicated against the existing HTTP
+acceptance or arrives after terminal delivery. Consumers refresh the known message's attempts on this event. It is a
+change-feed/history fact, not an `email.identity_confirmed` callback subscription. Console activity and canonical event
+views label it "Message identity confirmed"; raw provider native event types remain available separately.
+
+Previously processed receipts whose raw source and normalized actual RFC header are both absent remain unknown.
+This capture path adds no remote polling, provider-wide history scan or historical backfill.
 | Mock | No real RFC transport exists; null |
 
 Lost/ambiguous responses and historical attempts remain unknown unless an adapter has a confirmed fact. The generated

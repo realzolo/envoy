@@ -177,7 +177,7 @@ export function createRoutingRepository(client: Pick<PoolClient, "query">): Rout
             responseJson: string;
             rfcMessageId: string | null;
         }) {
-            return client.query<Record<string, unknown>>("UPDATE submission_attempts SET status='accepted',outcome_determinate=true,external_message_id=$2,provider_response_ref=$3,rfc_message_id=$4,finished_at=now(),reconcile_after=NULL,diagnostic=NULL WHERE id=$1", [input.attemptId, input.externalMessageId, input.responseJson, input.rfcMessageId]);
+            return client.query<Record<string, unknown>>("UPDATE submission_attempts SET status='accepted',outcome_determinate=true,external_message_id=$2,provider_response_ref=$3,rfc_message_id=COALESCE(rfc_message_id,$4),finished_at=now(),reconcile_after=NULL,diagnostic=NULL WHERE id=$1", [input.attemptId, input.externalMessageId, input.responseJson, input.rfcMessageId]);
         },
         acceptSubmission(input: {
             submissionId: string;

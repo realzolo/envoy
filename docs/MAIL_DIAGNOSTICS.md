@@ -54,6 +54,12 @@ The message response has `deliveries:[{...snapshot,recipient,recipientName,recip
 
 The former v1 diagnostic reads are retired without aliases. v1 submissions, explicit retry/cancel operations, capabilities, attachments, inbound APIs, callback signing and outbound change feed retain their authority and semantics. Callbacks/feed are change signals; consumers fetch current v2 snapshots and fence observations using delivery revision and current submission/attempt identity. The single OpenAPI catalog remains `/api/v1/openapi.json`; diagnostic read operations explicitly select the `/api/v2` server.
 
+`identity_confirmed` is an independent submission-scoped correlation fact. A verified provider actual RFC header may
+fill an unknown exact attempt once, including after terminal delivery, without changing the delivery snapshot/revision.
+The existing outbound feed advances once and consumers refresh that known message's attempts even when the delivery
+revision is unchanged. It creates no delivery transition or callback and is never interpreted as acceptance or delivery
+success. See [actual RFC confirmation](API.md#outbound-rfc-message-id-and-standard-replies) for scope and retention limits.
+
 ## Migration and verification
 
 Forward migration 005 transforms already stored categories deterministically, marks historical detail `NOT_RECORDED`, removes old free-text diagnostic columns and adds revision/validated retry state. It does not infer missing SMTP details or perform a provider lookup. No automatic production historical refill exists. Executed migrations 001–004 remain immutable. Typed schema, SQL snapshot, checksums and strict database JSON validation must move together.

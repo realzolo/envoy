@@ -58,6 +58,10 @@ strip complete outer angle brackets, preserve case, and require one actual same-
 CID; duplicate/missing CID is unavailable. Filenames never establish CID ownership. Explicit bitmap data URIs in
 resource positions become encrypted resources. Author-written literal URLs, data strings and encoded text are not
 rewritten or removed. Links remain safe explicit user navigation; consumers must display/intercept them safely.
+Explicit `blockquote type="cite"` is retained as passive quoted-reply provenance; other `type` values are removed.
+Sender-authored attachment placeholders such as `<span id="cid:logo">&lt;app-logo.png&gt;</span>` remain literal text:
+an element ID or filename is not an image reference, MIME part or downloadable attachment. A reply which does not
+reattach original files must not obtain synthetic attachments or a current logo substituted into historical content.
 
 ## Protected resource preparation
 

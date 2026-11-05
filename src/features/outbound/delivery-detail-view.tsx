@@ -1,6 +1,6 @@
 "use client";
 
-import { deliveryPresentation, diagnosticPresentation } from "./diagnostic-presentation";
+import { deliveryPresentation, diagnosticPresentation, eventLabel } from "./diagnostic-presentation";
 import { LocalTime } from "@/components/local-time";
 import styles from "@/components/mail-views.module.css";
 import { PageHeader } from "@/components/page-header";
@@ -104,7 +104,7 @@ export function DeliveryDetailView({ detail, back = "/emails" }: { detail: Deliv
                 return <Timeline.Item key={String(event.id)} dotColor={`rgb(var(--${colorForEvent(type)}-6))`}>
                   <div className={styles.eventContent}>
                     <div className={styles.eventHeading}>
-                      <Typography.Text bold>{labelForStatus(type)}</Typography.Text>
+                      <Typography.Text bold>{eventLabel(type)}</Typography.Text>
                       {event.scope === "submission" && <Tag>Submission event</Tag>}
                       <Typography.Text type="secondary"><LocalTime value={timestamp(event.occurred_at)} /></Typography.Text>
                     </div>

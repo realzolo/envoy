@@ -1,6 +1,11 @@
 import type { MailDiagnostic, RetryDisposition } from "@/contracts/mail-diagnostics";
 import type { DeliveryStatus, EmailRecord } from "@/lib/types";
 
+export function eventLabel(type: string) {
+  return type === "identity_confirmed" ? "Message identity confirmed"
+    : type.replace(/[_.]/g, " ").replace(/\b\w/g, letter => letter.toUpperCase());
+}
+
 const reasons: Record<NonNullable<MailDiagnostic["reasonCode"]>, [string, string]> = {
   MAILBOX_NOT_FOUND: ["Recipient mailbox does not exist", "Verify the recipient address before starting a new send through your application."],
   DOMAIN_INVALID: ["Recipient domain cannot receive mail", "Check the domain spelling and ask the recipient to confirm its mail configuration."],

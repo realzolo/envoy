@@ -33,7 +33,7 @@ Modules import each other's `public.ts` or `contracts.ts`. A `policy.ts` facet m
 
 ## Diagnostic ownership
 
-Transport diagnostics and current delivery observations belong to Envoy, independently of caller business execution or caller observation health. Public/admin reads share the canonical projection; bounded provider adapters create finite safe facts before raw-content erasure. Complete delivery revisions fence current submission/attempt identity and outcome. See [MAIL_DIAGNOSTICS.md](MAIL_DIAGNOSTICS.md) for v2 routes, canonical schemas, retry responsibility, historical conversion and privacy invariants.
+Transport diagnostics and current delivery observations belong to Envoy, independently of caller business execution or caller observation health. Public/admin reads share the canonical projection; bounded provider adapters create finite safe facts before raw-content erasure. Complete delivery revisions fence current submission/attempt identity and outcome. Verified provider actual RFC Message-ID confirmation fills only a previously unknown exact attempt identity; its independent `identity_confirmed` submission fact advances the existing outbound stream without a delivery-state transition or acceptance callback. Provider external IDs never become RFC IDs by inference. See [MAIL_DIAGNOSTICS.md](MAIL_DIAGNOSTICS.md) for v2 routes, canonical schemas, retry responsibility, historical conversion and privacy invariants, and [API correlation semantics](API.md#outbound-rfc-message-id-and-standard-replies).
 
 ## Service identity and routing
 
