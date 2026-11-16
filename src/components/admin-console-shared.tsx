@@ -53,9 +53,10 @@ export function ActionForm({ fieldErrors, className, ...props }: ComponentProps<
   return <FieldErrorContext.Provider value={fieldErrors ?? {}}><Form labelAlign="left" colon={false} {...props} className={[styles.form, ...(Array.isArray(className) ? className : [className])].filter(Boolean).join(" ")} /></FieldErrorContext.Provider>;
 }
 
-export async function mutate(body: AdminMutation) {
+export async function mutate(body: AdminMutation, signal?: AbortSignal) {
   const response = await fetch(body.path, {
     method: body.method,
+    signal,
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body.payload),
   });
@@ -66,6 +67,7 @@ export async function mutate(body: AdminMutation) {
 
 export function actionResultText(result: unknown) {
   const details = record(result);
+  if (typeof details.message === "string") return details.message;
   if (Array.isArray(details.identities)) {
     const failed = rows(details.identities).filter(identity => identity.status === "failed");
     if (failed.length) {
@@ -373,6 +375,9 @@ export function DnsRecords({ records }: { records: unknown }) {
       type: value(dns, "type"),
       name: value(dns, "name"),
       dnsValue: value(dns, "value"),
+      purpose: value(dns,"record"),
+      ttl: value(dns,"ttl"),
+      priority: dns.priority === undefined ? "" : String(dns.priority),
       status: value(dns, "status"),
     };
   }).filter(item => item.type || item.name || item.dnsValue);
@@ -384,6 +389,9 @@ export function DnsRecords({ records }: { records: unknown }) {
       data={entries}
       minWidth="620px"
       columns={[
+        { title: "Purpose", width: 100, render: (_, entry) => value(entry,"purpose") || "—" },
+        { title: "TTL", width: 80, render: (_, entry) => value(entry,"ttl") || "—" },
+        { title: "Priority", width: 80, render: (_, entry) => value(entry,"priority") || "—" },
         { title: "Type", width: 80, render: (_, entry) => <Typography.Text>{value(entry, "type") || "DNS"}</Typography.Text> },
         { title: "Name", width: 220, render: (_, entry) => <CopyableValue text={value(entry, "name")} label="DNS name" /> },
         { title: "Value", width: 400, render: (_, entry) => <CopyableValue text={value(entry, "dnsValue")} label="DNS value" /> },

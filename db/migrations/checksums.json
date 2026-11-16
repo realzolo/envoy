@@ -22,5 +22,9 @@
   {
     "file": "006_passive_inbound_documents.sql",
     "sha256": "01222195e011a470bf9f46b3f6df6f3c97715a87321d068afca7a6e20d8c5207"
+  },
+  {
+    "file": "007_domain_identity_recovery.sql",
+    "sha256": "5b13fbb6e04051cc1e5b9acb14fc710410f32017b9d2bb85fe291330c88aa0f0"
   }
 ]

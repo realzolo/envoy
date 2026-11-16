@@ -25,7 +25,7 @@ describe("Resend domain association", () => {
     const transport = vi.fn()
       .mockResolvedValueOnce(Response.json({ data: [{ id: "first", name: "other.example" }], has_more: true }))
       .mockResolvedValueOnce(Response.json({ data: [{ id: "existing", name: "Mail.Example.com", status: "pending" }], has_more: false }))
-      .mockResolvedValueOnce(Response.json({ id: "existing", status: "verified", records }));
+      .mockResolvedValueOnce(Response.json({ id: "existing", name: "mail.example.com", status: "verified", records }));
     vi.stubGlobal("fetch", transport);
 
     await expect(resendModule.identity!.createIdentity("mail.example.com", context)).resolves.toEqual({
@@ -42,7 +42,7 @@ describe("Resend domain association", () => {
   it("does not treat a previously verified domain as verified when its current state is incomplete", async () => {
     const transport = vi.fn()
       .mockResolvedValueOnce(Response.json({ data: [{ id: "existing", name: "mail.example.com", status: "verified" }], has_more: false }))
-      .mockResolvedValueOnce(Response.json({ id: "existing", status: "partially_verified", records: [] }));
+      .mockResolvedValueOnce(Response.json({ id: "existing", name: "mail.example.com", status: "partially_verified", records: [] }));
     vi.stubGlobal("fetch", transport);
     await expect(resendModule.identity!.createIdentity("mail.example.com", context)).resolves.toMatchObject({ status: "pending" });
   });
@@ -65,4 +65,46 @@ describe("Resend domain association", () => {
     await expect(resendModule.identity!.createIdentity("mail.example.com", context)).rejects.toThrow("API key is restricted");
     expect(transport).toHaveBeenCalledTimes(1);
   });
+});
+
+
+describe("Resend DNS recovery", () => {
+  it("finds a recreated domain after the saved ID is missing without creating anything", async () => {
+    const records = [{record:"SPF",type:"CNAME",name:"send",value:"new.resend.example",status:"verified",ttl:"Auto"}];
+    const transport = vi.fn()
+      .mockResolvedValueOnce(Response.json({name:"not_found",statusCode:404,message:"Not found"},{status:404}))
+      .mockResolvedValueOnce(Response.json({data:[{id:"new",name:"mail.example.com"}],has_more:false}))
+      .mockResolvedValueOnce(Response.json({id:"new",name:"mail.example.com",status:"verified",records}));
+    vi.stubGlobal("fetch",transport);
+    await expect(resendModule.identity!.checkIdentity("old",context,"mail.example.com")).resolves.toEqual({externalIdentityId:"new",status:"verified",dnsRecords:records});
+    expect(transport.mock.calls.every(([,options])=>options.method === "GET")).toBe(true);
+  });
+  it.each([401,403,429,500])("does not rediscover or create after HTTP %s", async statusCode => {
+    const transport=vi.fn().mockResolvedValue(Response.json({name:"provider_error",statusCode,message:"Unavailable"},{status:statusCode}));
+    vi.stubGlobal("fetch",transport);
+    await expect(resendModule.identity!.checkIdentity("old",context,"mail.example.com")).rejects.toMatchObject({statusCode});
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
+  it("does not fabricate a domain when it is absent from this account",async()=>{
+    const transport=vi.fn().mockResolvedValueOnce(Response.json({name:"not_found",statusCode:404,message:"Not found"},{status:404}))
+      .mockResolvedValueOnce(Response.json({data:[],has_more:false}));
+    vi.stubGlobal("fetch",transport);
+    await expect(resendModule.identity!.checkIdentity("old",context,"mail.example.com")).rejects.toThrow("Domain not found in this Resend account");
+    expect(transport).toHaveBeenCalledTimes(2);
+  });
+  it("rejects an ID that resolves to a different domain",async()=>{
+    vi.stubGlobal("fetch",vi.fn().mockResolvedValue(Response.json({id:"wrong",name:"other.example.com",status:"verified",records:[]})));
+    await expect(resendModule.identity!.checkIdentity("wrong",context,"mail.example.com")).rejects.toThrow("different domain");
+  });
+  it("starts verification with POST rather than treating retrieval as verification",async()=>{
+    const transport=vi.fn().mockResolvedValue(Response.json({id:"domain",object:"domain"}));vi.stubGlobal("fetch",transport);
+    await expect(resendModule.identity!.verifyIdentity!("domain",context)).resolves.toBeUndefined();
+    expect(transport.mock.calls[0][0]).toBe("https://api.resend.com/domains/domain/verify");
+    expect(transport.mock.calls[0][1].method).toBe("POST");
+  });
+});
+
+it("preserves provider Retry-After for the background scheduler",async()=>{
+  vi.stubGlobal("fetch",vi.fn().mockResolvedValue(Response.json({name:"rate_limit_exceeded",statusCode:429,message:"Slow down"},{status:429,headers:{"retry-after":"7200"}})));
+  await expect(resendModule.identity!.checkIdentity("domain",context,"mail.example.com")).rejects.toMatchObject({statusCode:429,retryAfterSeconds:7200});
 });

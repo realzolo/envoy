@@ -3,7 +3,7 @@ import { confirmedRfcMessageId } from "../rfc-message-id";
 import { Resend } from "resend";
 import { Webhook } from "svix";
 import { MAX_FILE_BYTES } from "@/lib/contracts";
-import { type CanonicalEventType, type ManagedIdentityStatus, type ProviderModule } from "../contracts";
+import { IdentityMissingError, type CanonicalEventType, type ManagedIdentityStatus, type ProviderModule } from "../contracts";
 import { inboundHeaders, smtpRecipients } from "../inbound-fields";
 import { accepted, assertMessageCapabilities, checkedJson, event, eventDate, formatAddress, header, messageHeaders, nativeMailCapabilities, stableEventId, submitRequest } from "../shared";
 function client(secret: {
@@ -12,7 +12,19 @@ function client(secret: {
 }) {
     if (secret.type !== "resend" || !secret.apiKey)
         throw new Error("Invalid Resend credential");
-    return new Resend(secret.apiKey);
+    const resend = new Resend(secret.apiKey);
+    const request = resend.fetchRequest.bind(resend);
+    resend.fetchRequest = <T>(path: string, options: RequestInit = {}) => request<T>(path, { ...options, signal: options.signal ?? AbortSignal.timeout(30_000) });
+    return resend;
+}
+export class ResendIdentityError extends Error {
+    constructor(message: string, public readonly statusCode: number | null, public readonly code?: string, public readonly retryAfterSeconds?: number) { super(message); }
+}
+function identityError(error: { message: string; statusCode: number | null; name: string } | null, fallback: string, headers?: Record<string,string> | null) {
+    const retry = headers?.["retry-after"];
+    const retryAfterSeconds = retry ? (/^\d+(?:\.\d+)?$/.test(retry) ? Number(retry) : Math.max(0,(Date.parse(retry)-Date.now())/1000)) : undefined;
+    return new ResendIdentityError(error?.message ?? fallback, error?.statusCode ?? null, error?.name, retryAfterSeconds);
+
 }
 const eventMap: Record<string, CanonicalEventType> = {
     "email.sent": "accepted", "email.delivered": "delivered", "email.delivery_delayed": "deferred",
@@ -228,16 +240,26 @@ export const resendModule: ProviderModule = {
     identity: {
         async createIdentity(domain, context) {
             const resend = client(context.secret);
+            const existing = await resendModule.identity!.findIdentity!(domain, context);
+            if (existing) return existing;
+            const result = await resend.domains.create({ name: domain, region: "us-east-1" });
+            if (result.error || !result.data)
+                throw identityError(result.error, "Identity creation failed", result.headers);
+            return { externalIdentityId: result.data.id, status: resendIdentityStatus(result.data.status), dnsRecords: result.data.records ?? [] };
+        },
+        async findIdentity(domain, context) {
+            const resend = client(context.secret);
             let after: string | undefined;
             for (;;) {
                 const listed = await resend.domains.list({ limit: 100, ...(after ? { after } : {}) });
                 if (listed.error || !listed.data)
-                    throw new Error(listed.error?.message ?? "Domain lookup failed");
+                    throw identityError(listed.error, "Domain lookup failed", listed.headers);
                 const existing = listed.data.data.find(item => item.name.toLowerCase() === domain.toLowerCase());
                 if (existing) {
                     const result = await resend.domains.get(existing.id);
                     if (result.error || !result.data)
-                        throw new Error(result.error?.message ?? "Identity lookup failed");
+                        throw identityError(result.error, "Identity lookup failed", result.headers);
+                    if (result.data.id !== existing.id || !result.data.name || result.data.name.toLowerCase() !== domain.toLowerCase()) throw new Error("Resend returned a different domain");
                     return { externalIdentityId: result.data.id, status: resendIdentityStatus(result.data.status), dnsRecords: result.data.records ?? [] };
                 }
                 if (!listed.data.has_more)
@@ -247,16 +269,24 @@ export const resendModule: ProviderModule = {
                     throw new Error("Domain lookup returned an invalid pagination cursor");
                 after = next;
             }
-            const result = await resend.domains.create({ name: domain, region: "us-east-1" });
-            if (result.error || !result.data)
-                throw new Error(result.error?.message ?? "Identity creation failed");
-            return { externalIdentityId: result.data.id, status: resendIdentityStatus(result.data.status), dnsRecords: result.data.records ?? [] };
+            return null;
         },
-        async checkIdentity(id, context) {
+        async verifyIdentity(id, context) {
+            const result = await client(context.secret).domains.verify(id);
+            if (result.error || !result.data) throw identityError(result.error, "Verification request failed", result.headers);
+        },
+        async checkIdentity(id, context, domain) {
             const result = await client(context.secret).domains.get(id);
-            if (result.error || !result.data)
-                throw new Error(result.error?.message ?? "Identity lookup failed");
-            return { status: resendIdentityStatus(result.data.status), dnsRecords: result.data.records ?? [] };
+            if (result.error || !result.data) {
+                if (result.error?.statusCode === 404 && domain) {
+                    const found = await resendModule.identity!.findIdentity!(domain, context);
+                    if (found) return found;
+                    throw new IdentityMissingError("Domain not found in this Resend account. Check the account/team or create the domain in Resend, then sync again.");
+                }
+                throw identityError(result.error, "Identity lookup failed", result.headers);
+            }
+            if (result.data.id !== id || (domain && (!result.data.name || result.data.name.toLowerCase() !== domain.toLowerCase()))) throw new Error("Resend returned a different domain. Repair the binding before continuing.");
+            return { externalIdentityId: result.data.id, status: resendIdentityStatus(result.data.status), dnsRecords: result.data.records ?? [] };
         },
     },
     reconciliation: {

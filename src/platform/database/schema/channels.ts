@@ -76,6 +76,8 @@ export const sendingDomains = pgTable("sending_domains", {
 	status: text().default('active').notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+
+	archivedAt: timestamp("archived_at", {withTimezone:true,mode:"string"}),
 }, (table): PgTableExtraConfigValue[] => [
 	unique("sending_domains_domain_key").on(table.domain),
 	check("sending_domains_status_check", sql`status = ANY (ARRAY['active'::text, 'disabled'::text])`),
@@ -93,6 +95,7 @@ export const domainInboundSources = pgTable("domain_inbound_sources", {
 
 
 export const providerIdentities = pgTable("provider_identities", {
+
 	id: text().primaryKey().notNull(),
 	sendingDomainId: text("sending_domain_id").notNull(),
 	providerAccountId: text("provider_account_id").notNull(),
@@ -102,6 +105,13 @@ export const providerIdentities = pgTable("provider_identities", {
 	lastCheckedAt: timestamp("last_checked_at", { withTimezone: true, mode: 'string' }),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+    archivedAt: timestamp("archived_at", {withTimezone:true,mode:"string"}),
+    syncAfter: timestamp("sync_after", {withTimezone:true,mode:"string"}).defaultNow().notNull(),
+    syncLeaseUntil: timestamp("sync_lease_until", {withTimezone:true,mode:"string"}),
+    syncLeaseToken: text("sync_lease_token"),
+    syncFailures: integer("sync_failures").default(0).notNull(),
+    syncAttemptAt: timestamp("sync_attempt_at", {withTimezone:true,mode:"string"}),
+    syncError: text("sync_error"),
 }, (table): PgTableExtraConfigValue[] => [
 	foreignKey({
 			columns: [table.sendingDomainId],
@@ -116,6 +126,7 @@ export const providerIdentities = pgTable("provider_identities", {
 	unique("provider_identities_id_provider_account_id_key").on(table.id, table.providerAccountId),
 	unique("provider_identities_id_sending_domain_id_key").on(table.id, table.sendingDomainId),
 	unique("provider_identities_sending_domain_id_provider_account_id_key").on(table.sendingDomainId, table.providerAccountId),
+	check("provider_identities_sync_failures_check",sql`sync_failures >= 0`),
 	check("provider_identities_status_check", sql`status = ANY (ARRAY['pending'::text, 'verified'::text, 'failed'::text, 'disabled'::text])`),
 ]);
 

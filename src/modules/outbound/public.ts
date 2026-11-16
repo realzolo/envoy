@@ -20,3 +20,5 @@ export { listOutboundChanges } from "@/bootstrap/outbound";
 export { OutboundCursorError } from "./application/changes";
 
 export { projectDeliverySnapshot } from "./infrastructure/diagnostic.projection";
+export { getOutboundPreview, readOutboundPreviewResource } from "./infrastructure/preview";
+export { PreviewAccessError } from "./application/preview";

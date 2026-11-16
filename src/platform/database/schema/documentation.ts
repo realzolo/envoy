@@ -58,6 +58,7 @@ export const schemaDocumentation = {
     createdAt: created, updatedAt: updated,
   } },
   sendingDomains: { table: "Managed email domains shared by service bindings; inbound mail routes by recipient domain", columns: {
+    archivedAt: "Archive timestamp; restoration does not restore Service grants",
     id: "Unique email domain identifier", domain: "Globally unique normalized email domain",
     status: "Domain status: active (available) or disabled", createdAt: created, updatedAt: updated,
   } },
@@ -66,6 +67,13 @@ export const schemaDocumentation = {
     providerAccountId: "Authenticated provider account allowed to deliver mail for the domain",
   } },
   providerIdentities: { table: "Domain sending identities within provider accounts and their DNS verification status", columns: {
+    archivedAt: "Archive timestamp; archived identities remain disabled",
+    syncAfter: "Next scheduled provider synchronization time",
+    syncLeaseUntil: "Background synchronization lease expiry",
+    syncLeaseToken: "Fence for the current background synchronization lease",
+    syncFailures: "Consecutive background synchronization failures for retry backoff",
+    syncAttemptAt: "Last synchronization attempt timestamp",
+    syncError: "Content-free synchronization failure summary; null after success",
     id: "Unique provider sending identity identifier", sendingDomainId: "Managed email domain represented by this identity", providerAccountId: "Provider account that owns this identity",
     externalIdentityId: "Provider-side identity identifier; may be null before a remote identity is created", status: "Identity status: pending (awaiting verification), verified, failed or disabled",
     dnsRecords: "JSON array of required DNS records, including names, types, values and verification details; empty when unavailable",

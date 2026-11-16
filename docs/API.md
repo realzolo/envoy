@@ -519,3 +519,22 @@ opaque iframe, sanitization and a network-denying CSP. Sender-authored URL/base6
 The strict finite document schema is [contracts/inbound-document.schema.json](contracts/inbound-document.schema.json).
 [INBOUND_DOCUMENTS.md](INBOUND_DOCUMENTS.md) defines source recovery, media budgets, encryption, erasure and the
 supported passive CSS subset. `READY` is an Envoy fact, not approval for a caller's private copy or business scope.
+
+
+### Domain identity recovery
+
+All routes require an administrator session and use the standard `{ok,result}` response.
+
+| Route | Behavior |
+| --- | --- |
+| `POST /api/admin/provider-identities/:id/refresh` | Sync provider DNS and status. Resend discovers the exact domain in the same account if the saved ID is missing. Synchronization never creates a Resend domain. |
+| `POST /api/admin/provider-identities/:id/reconcile` | Explicitly discover and repair the Resend binding, retaining local IDs and Service references. |
+| `POST /api/admin/provider-identities/:id/verify` | Sync first, then submit asynchronous Resend verification. `verificationRequested=true` means submitted, not verified. |
+| `DELETE /api/admin/provider-identities/:id` | Remove an unused local association; Service/sending-history references block deletion. |
+| `DELETE /api/admin/domains/:id` | Remove an unused local domain; Service/message/file/sending-history references block deletion. |
+| `POST /api/admin/domains/:id/archive` | Disable and archive, invalidate background leases, clear Service sending/receiving grants, retain history. |
+| `POST /api/admin/provider-identities/:id/archive` | Disable and archive, clear Service sending grants, retain receiving grants/history. |
+
+Existing PATCH routes with `{enabled:true}` restore archived resources. Managed identities return to pending. Removed Service grants must be configured again. Delete/archive retain the remote provider domain. Retrying registration reuses existing resources; restore archived resources explicitly.
+
+DNS responses represent the provider's required records, including purpose, TTL and MX priority when reported. Sending eligibility remains conservative for partially verified/unknown provider states.

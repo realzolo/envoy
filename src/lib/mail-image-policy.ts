@@ -1,0 +1,5 @@
+export const MAX_IMAGE_BYTES = 5_000_000;
+export const MAX_IMAGE_PIXELS = 16_000_000;
+export const MAX_IMAGE_DIMENSION = 16_384;
+export const MAX_DOCUMENT_IMAGE_BYTES = 20_000_000;
+export const MAX_PREVIEW_IMAGE_CONCURRENCY = 3;

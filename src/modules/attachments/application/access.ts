@@ -11,7 +11,7 @@ class ByteAccessError extends AttachmentUseError {
   constructor(public id:string,public kind:"outbound"|"inbound",reason:string) {super("FILE_UNAVAILABLE",reason);}
 }
 
-async function rememberFailure(error:unknown) {
+async function rememberFailure(error:unknown): Promise<never> {
   if (!(error instanceof ByteAccessError)) throw error;
   await dependencies.unitOfWork.run(async client=>{
     const file=await client.lockAttachment(error.id,error.kind);

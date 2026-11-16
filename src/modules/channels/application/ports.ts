@@ -37,6 +37,13 @@ export interface ManagementRepository {
   insertManagedIdentity(input:{id:string;sendingDomainId:string;providerAccountId:string;externalIdentityId:string;status:string;dnsRecords:string}):Promise<RepositoryResult<InsertManagedIdentityRow>>;
   insertFailedIdentity(input:{id:string;sendingDomainId:string;providerAccountId:string}):Promise<RepositoryResult<InsertFailedIdentityRow>>;
   setDomainStatus(input:{id:string;status:string}):Promise<RepositoryResult<SetDomainStatusRow>>;
+  archiveDomain(input:{id:string}):Promise<void>;
+  archiveIdentity(input:{id:string}):Promise<void>;
+  recordIdentitySyncFailure(input:{id:string;version:string;credentialId:string|null;missing:boolean;leaseToken?:string}):Promise<RepositoryResult<{id:string}>>;
+  lockIdentity(input:{id:string}):Promise<RepositoryResult<{id:string}>>;
+  deleteUnusedDomain(input:{id:string}):Promise<RepositoryResult<{id:string}>>;
+  deleteUnusedIdentity(input:{id:string}):Promise<RepositoryResult<{id:string}>>;
+  saveIdentitySnapshot(input:{id:string;externalIdentityId:string;status:string;dnsRecords:string;version:string;credentialId:string|null;leaseToken?:string}):Promise<RepositoryResult<{status:string}>>;
   findIdentityAccount(input:{id:string}):Promise<RepositoryResult<FindIdentityAccountRow>>;
   saveCreatedIdentity(input:{id:string;externalIdentityId:string;status:string;dnsRecords:string}):Promise<RepositoryResult<SaveCreatedIdentityRow>>;
   saveIdentityVerification(input:{id:string;status:string;dnsRecords:string}):Promise<RepositoryResult<SaveIdentityVerificationRow>>;
@@ -88,7 +95,10 @@ export type InsertFailedIdentityRow=never;
 export type SetDomainStatusRow=never;
 export type FindIdentityAccountRow={
     provider_account_id: string;
+    sending_domain_id: string;
     external_identity_id: string | null;
+    version: string;
+    credential_id: string | null;
     domain: string;
     status: string;
   };

@@ -191,6 +191,9 @@ export type DnsRecord = {
     name: string;
     value: string;
     status?: string;
+    record?: string;
+    ttl?: string;
+    priority?: number;
 };
 export type WebhookRequest = {
     rawBody: Uint8Array;
@@ -240,13 +243,18 @@ export interface WebhookPort {
     verify(request: WebhookRequest, context: ProviderSendContext, securityConfig: Record<string, unknown>): Promise<WebhookVerification>;
     normalize(verified: WebhookVerification, context: ProviderSendContext): Promise<CanonicalEvent[]>;
 }
+export class IdentityMissingError extends Error {}
+export type IdentitySnapshot = { externalIdentityId: string; status: ManagedIdentityStatus; dnsRecords: DnsRecord[] };
 export interface IdentityPort {
+    findIdentity?(domain: string, context: ProviderSendContext): Promise<IdentitySnapshot | null>;
+    verifyIdentity?(id: string, context: ProviderSendContext): Promise<void>;
     createIdentity(domain: string, context: ProviderSendContext): Promise<{
         externalIdentityId: string;
         status: ManagedIdentityStatus;
         dnsRecords: DnsRecord[];
     }>;
-    checkIdentity(externalIdentityId: string, context: ProviderSendContext): Promise<{
+    checkIdentity(externalIdentityId: string, context: ProviderSendContext, domain?: string): Promise<{
+        externalIdentityId?: string;
         status: ManagedIdentityStatus;
         dnsRecords: DnsRecord[];
     }>;

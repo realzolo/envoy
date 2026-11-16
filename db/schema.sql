@@ -117,9 +117,17 @@ CREATE TABLE "provider_identities" (
 	"last_checked_at" timestamp with time zone,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"archived_at" timestamp with time zone,
+	"sync_after" timestamp with time zone DEFAULT now() NOT NULL,
+	"sync_lease_until" timestamp with time zone,
+	"sync_lease_token" text,
+	"sync_failures" integer DEFAULT 0 NOT NULL,
+	"sync_attempt_at" timestamp with time zone,
+	"sync_error" text,
 	CONSTRAINT "provider_identities_id_provider_account_id_key" UNIQUE("id","provider_account_id"),
 	CONSTRAINT "provider_identities_id_sending_domain_id_key" UNIQUE("id","sending_domain_id"),
 	CONSTRAINT "provider_identities_sending_domain_id_provider_account_id_key" UNIQUE("sending_domain_id","provider_account_id"),
+	CONSTRAINT "provider_identities_sync_failures_check" CHECK (sync_failures >= 0),
 	CONSTRAINT "provider_identities_status_check" CHECK (status = ANY (ARRAY['pending'::text, 'verified'::text, 'failed'::text, 'disabled'::text]))
 );
 
@@ -148,6 +156,7 @@ CREATE TABLE "sending_domains" (
 	"status" text DEFAULT 'active' NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"archived_at" timestamp with time zone,
 	CONSTRAINT "sending_domains_domain_key" UNIQUE("domain"),
 	CONSTRAINT "sending_domains_status_check" CHECK (status = ANY (ARRAY['active'::text, 'disabled'::text]))
 );
@@ -1068,6 +1077,13 @@ COMMENT ON COLUMN "provider_identities"."dns_records" IS 'JSON array of required
 COMMENT ON COLUMN "provider_identities"."last_checked_at" IS 'Last provider identity verification check (timestamptz)';
 COMMENT ON COLUMN "provider_identities"."created_at" IS 'Record creation time (timestamptz); defaults to the database transaction start time, now()';
 COMMENT ON COLUMN "provider_identities"."updated_at" IS 'Last update time (timestamptz); explicitly maintained by business writes, defaults to now()';
+COMMENT ON COLUMN "provider_identities"."archived_at" IS 'Archive timestamp; archived identities remain disabled';
+COMMENT ON COLUMN "provider_identities"."sync_after" IS 'Next scheduled provider synchronization time';
+COMMENT ON COLUMN "provider_identities"."sync_lease_until" IS 'Background synchronization lease expiry';
+COMMENT ON COLUMN "provider_identities"."sync_lease_token" IS 'Fence for the current background synchronization lease';
+COMMENT ON COLUMN "provider_identities"."sync_failures" IS 'Consecutive background synchronization failures for retry backoff';
+COMMENT ON COLUMN "provider_identities"."sync_attempt_at" IS 'Last synchronization attempt timestamp';
+COMMENT ON COLUMN "provider_identities"."sync_error" IS 'Content-free synchronization failure summary; null after success';
 COMMENT ON TABLE "provider_webhook_endpoints" IS 'Provider inbound webhook endpoints and encrypted verification configuration; at most one endpoint per provider account';
 COMMENT ON COLUMN "provider_webhook_endpoints"."id" IS 'Unique provider webhook endpoint identifier';
 COMMENT ON COLUMN "provider_webhook_endpoints"."provider_account_id" IS 'Provider account that owns this endpoint';
@@ -1129,6 +1145,7 @@ COMMENT ON COLUMN "sending_domains"."domain" IS 'Globally unique normalized emai
 COMMENT ON COLUMN "sending_domains"."status" IS 'Domain status: active (available) or disabled';
 COMMENT ON COLUMN "sending_domains"."created_at" IS 'Record creation time (timestamptz); defaults to the database transaction start time, now()';
 COMMENT ON COLUMN "sending_domains"."updated_at" IS 'Last update time (timestamptz); explicitly maintained by business writes, defaults to now()';
+COMMENT ON COLUMN "sending_domains"."archived_at" IS 'Archive timestamp; restoration does not restore Service grants';
 COMMENT ON TABLE "service_credentials" IS 'Service API credentials storing only a key digest and display prefix, never the original API key';
 COMMENT ON COLUMN "service_credentials"."id" IS 'Unique API credential identifier';
 COMMENT ON COLUMN "service_credentials"."service_id" IS 'Service that owns this credential';

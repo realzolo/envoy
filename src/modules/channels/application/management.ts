@@ -1,4 +1,5 @@
 import {
+IdentityMissingError,
 domainNameSchema,
 providerConfigSchema,
 providerSecretSchema,
@@ -258,24 +259,82 @@ async function toggleDomain(id: string, enabled: boolean, actor: string) {
     await client.recordAudit({actor,action:"sending_domain.toggle",resourceType:"sending_domain",resourceId:id,details:{enabled}});
   });
 }
-async function refreshIdentity(id: string, actor: string) {
-  const row = (await repository.findIdentityAccount({id:id})).rows[0];
+async function refreshIdentity(id: string, actor: string, repair = false, leaseToken?: string) {
+  const row = (await repository.findIdentityAccount({id})).rows[0];
   if (!row) throw new Error("Provider identity not found");
   if (row.status === "disabled") throw new Error("Enable this provider identity before refreshing it");
   const account = await loadProviderAccount(row.provider_account_id);
-  if (!account.module.identity) throw new Error("This domain is verified in the provider dashboard and cannot be refreshed by Envoy");
-  if (!row.external_identity_id) {
-    const result = await account.module.identity.createIdentity(row.domain, account.context);
-    const saved = await repository.saveCreatedIdentity({id:id,externalIdentityId:result.externalIdentityId,status:result.status,dnsRecords:JSON.stringify(result.dnsRecords)});
-    if (!saved.rows[0] || saved.rows[0].status === "disabled") throw new Error("Provider identity was disabled during refresh");
-    await audit(actor, "provider_identity.refresh", "provider_identity", id, { status: result.status });
-    return result
+  const identity = account.module.identity;
+  if (!identity) throw new Error("This domain is verified in the provider dashboard and cannot be refreshed by Envoy");
+  let result;
+  try {
+  result = identity.findIdentity && (repair || !row.external_identity_id)
+    ? await identity.findIdentity(row.domain, account.context)
+    : row.external_identity_id
+      ? await identity.checkIdentity(row.external_identity_id, account.context, row.domain)
+      : await identity.createIdentity(row.domain, account.context);
+  if (!result) throw new IdentityMissingError("Domain not found in this provider account. Create it in the provider dashboard or select the correct account, then sync again.");
+  } catch (error) {
+    await repository.recordIdentitySyncFailure({id,version:row.version,credentialId:row.credential_id,missing:error instanceof IdentityMissingError,leaseToken});
+    throw error;
   }
-  const result = await account.module.identity.checkIdentity(row.external_identity_id, account.context);
-  const saved = await repository.saveIdentityVerification({id:id,status:result.status,dnsRecords:JSON.stringify(result.dnsRecords)});
-  if (!saved.rowCount) throw new Error("Provider identity was disabled during refresh");
-  await audit(actor, "provider_identity.refresh", "provider_identity", id, { status: result.status });
-  return result
+  const externalIdentityId = result.externalIdentityId ?? row.external_identity_id;
+  if (!externalIdentityId) throw new Error("Provider did not return a domain ID");
+  await unitOfWork.run(async client => {
+    await client.lockProviderAccount({id:row.provider_account_id});
+    const saved = await client.saveIdentitySnapshot({id,externalIdentityId,status:result.status,dnsRecords:JSON.stringify(result.dnsRecords),version:row.version,credentialId:row.credential_id,leaseToken});
+    if (!saved.rowCount) throw new Error("Provider identity changed or was disabled during refresh. Sync again.");
+    await client.recordAudit({actor,action:repair ? "provider_identity.reconcile" : "provider_identity.refresh",resourceType:"provider_identity",resourceId:id,details:{status:result.status,previousExternalId:row.external_identity_id,externalIdentityId}});
+  });
+  return {...result,externalIdentityId,message:"Provider records and status synced."};
+}
+async function verifyIdentity(id: string, actor: string) {
+  // Sync first so a deleted/recreated remote domain cannot receive verification through an obsolete ID.
+  const synced = await refreshIdentity(id, actor);
+  const row = (await repository.findIdentityAccount({id})).rows[0];
+  if (!row || row.status === "disabled" || row.external_identity_id !== synced.externalIdentityId) throw new Error("Provider identity changed. Sync again.");
+  const account = await loadProviderAccount(row.provider_account_id);
+  if (!account.module.identity?.verifyIdentity) throw new Error("Start verification in the provider dashboard");
+  await account.module.identity.verifyIdentity(synced.externalIdentityId, account.context);
+  await audit(actor,"provider_identity.verify","provider_identity",id,{externalIdentityId:synced.externalIdentityId});
+  return {verificationRequested:true,message:"DNS verification submitted. Resend verifies asynchronously; sync again to see the result."};
+}
+async function archiveDomain(id:string,actor:string) {
+ return unitOfWork.run(async client => {
+   if (!(await client.lockDomain({id})).rowCount) throw new Error("Domain not found");
+   await client.archiveDomain({id});
+   await client.notifyDomainBindingsChanged({domainId:id,receiveOnly:false});
+   await client.recordAudit({actor,action:"sending_domain.archive",resourceType:"sending_domain",resourceId:id,details:{serviceGrantsRemoved:true,remoteDeleted:false}});
+   return {message:"Domain archived. Service sending and receiving grants were removed; history and provider domain were retained."};
+ });
+}
+async function archiveIdentity(id:string,actor:string) {
+ return unitOfWork.run(async client => {
+   const row=(await client.findIdentityAccount({id})).rows[0];
+   if (!row) throw new Error("Provider identity not found");
+   await client.lockDomain({id:row.sending_domain_id});
+   if (!(await client.lockIdentity({id})).rowCount) throw new Error("Provider identity not found");
+   await client.archiveIdentity({id});
+   await client.notifyDomainBindingsChanged({domainId:row.sending_domain_id,receiveOnly:false});
+   await client.recordAudit({actor,action:"provider_identity.archive",resourceType:"provider_identity",resourceId:id,details:{serviceSendingGrantsRemoved:true,remoteDeleted:false}});
+   return {message:"Provider association archived. Service sending grants were removed; history and provider domain were retained."};
+ });
+}
+async function deleteDomain(id:string,actor:string) {
+  return unitOfWork.run(async client => {
+    if (!(await client.lockDomain({id})).rowCount) throw new Error("Domain not found");
+    if (!(await client.deleteUnusedDomain({id})).rowCount) throw new Error("Domain is referenced by Services, messages, files or sending history. Remove unused bindings or disable the domain to retain history.");
+    await client.recordAudit({actor,action:"sending_domain.delete",resourceType:"sending_domain",resourceId:id,details:{remoteDeleted:false}});
+    return {message:"Domain removed from Envoy. The provider domain was retained."};
+  });
+}
+async function deleteIdentity(id:string,actor:string) {
+  return unitOfWork.run(async client => {
+    if (!(await client.lockIdentity({id})).rowCount) throw new Error("Provider identity not found");
+    if (!(await client.deleteUnusedIdentity({id})).rowCount) throw new Error("Provider identity is referenced by Services or sending history. Remove unused bindings or disable it to retain history.");
+    await client.recordAudit({actor,action:"provider_identity.delete",resourceType:"provider_identity",resourceId:id,details:{remoteDeleted:false}});
+    return {message:"Provider association removed from Envoy. The provider domain was retained."};
+  });
 }
 async function toggleIdentity(id: string, enabled: boolean, actor: string) {
   const identity = (await repository.findIdentityProviderType({id:id})).rows[0];
@@ -284,5 +343,5 @@ async function toggleIdentity(id: string, enabled: boolean, actor: string) {
   await audit(actor, "provider_identity.toggle", "provider_identity", id, { enabled })
 }
 
-return {createProviderAccount,testProviderAccount,toggleProvider,updateProviderQuota,rotateProviderCredential,configureProviderWebhook,toggleWebhookEndpoint,createDomain,setDomainInboundSources,toggleDomain,refreshIdentity,toggleIdentity};
+return {createProviderAccount,testProviderAccount,toggleProvider,updateProviderQuota,rotateProviderCredential,configureProviderWebhook,toggleWebhookEndpoint,createDomain,setDomainInboundSources,toggleDomain,refreshIdentity,verifyIdentity,deleteDomain,deleteIdentity,archiveDomain,archiveIdentity,toggleIdentity};
 }

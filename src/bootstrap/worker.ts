@@ -1,3 +1,4 @@
+import { syncProviderIdentities } from "@/modules/channels/public";
 import { purgeExpiredSensitiveContent } from "@/modules/outbound/public";
 import { processAttachmentScan, scheduleAttachmentScans } from "@/modules/attachments/public";
 import { scanPolicy } from "@/modules/attachments/public";
@@ -71,6 +72,7 @@ export async function runWorker() {
     schedule("Worker heartbeat", () => writeWorkerHeartbeat(workerId), 15_000);
     schedule("Sensitive content cleanup", purgeExpiredSensitiveContent, 10_000);
     schedule("Runtime cleanup", cleanupRuntimeStore, 60_000);
+    schedule("Provider identity sync", syncProviderIdentities, 10_000);
     console.log("Envoy PostgreSQL workers started");
     await Promise.all(workers.map(worker => worker.run()));
   } finally { await shutdown(); }
