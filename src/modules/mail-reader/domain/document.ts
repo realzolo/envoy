@@ -8,8 +8,14 @@ const MAX_READER_RESOURCES = 256;
 
 /** One passive document compiler for every reader. Author CSS and layout never inherit the admin theme. */
 export function compileReader(source: ReaderSource) {
-  const document = parseDocument(source.html ?? `<html><body><pre></pre></body></html>`);
-  if (!source.html) {
+  const hasHtml = Boolean(source.html?.trim());
+  const textDocument = `<html><head><style data-envoy-reader-text>
+html{background:#fff}
+body{margin:0;padding:24px;box-sizing:border-box;background:#fff;color:#111827;font:16px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif}
+pre{margin:0;max-width:72ch;white-space:pre-wrap;overflow-wrap:anywhere;word-break:normal;font:inherit}
+</style></head><body><pre></pre></body></html>`;
+  const document = parseDocument(hasHtml ? source.html! : textDocument);
+  if (!hasHtml) {
     const pre = DomUtils.getElementsByTagName("pre", document.children)[0];
     if (pre) pre.children = parseDocument((source.text ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")).children;
   }

@@ -2,7 +2,7 @@ import "server-only";
 import { ReaderError } from "@/modules/mail-reader/public";
 
 export const READER_HEADERS = {
-  "cache-control": "private, no-store",
+  "cache-control": "private, no-store, no-transform",
   "referrer-policy": "no-referrer",
   "x-content-type-options": "nosniff",
   "access-control-allow-origin": "*"

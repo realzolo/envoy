@@ -41,6 +41,30 @@ Finite failures: `404 READING_UNAVAILABLE` for unavailable authority/source iden
 `READING_RESOURCE_UNAVAILABLE`, `READING_RESOURCE_UNSUPPORTED`, `READING_RESOURCE_LIMIT`, `READING_FETCH_FAILED`.
 A terminal resource failure is reported per resource instead of leaving the document permanently “preparing”.
 
+## Intermediary transformations
+
+A rendered mail is a retained content artifact. Every reader response sends
+`Cache-Control: private, no-store, no-transform`; the HTML renderer also encloses the complete document in
+`<!--email_off-->` / `<!--/email_off-->` comments. These are delivery directives, not substitutions in the retained
+mail. The Cloudflare [Email Address Obfuscation contract](https://developers.cloudflare.com/waf/tools/scrape-shield/email-address-obfuscation/)
+explicitly supports both exclusions. Otherwise its HTML rewrite may replace visible email addresses with
+`[email protected]` and inject a decoding script that the reader's nonce-only CSP correctly refuses to execute.
+The CSP is not relaxed to accommodate scripts inserted by an intermediary.
+
+The deployment endpoint rule for `/mail-reader/*` should preserve the response artifact and disable Email Address
+Obfuscation and other HTML/script rewriting on that path. Cloudflare documents the endpoint-specific setting in
+[Configuration Rules](https://developers.cloudflare.com/rules/configuration-rules/settings/#email-obfuscation).
+The application headers and comments do not change a deployed edge rule or override a custom Worker that rewrites
+responses; such infrastructure changes follow the deployment owner's release procedure.
+
+To diagnose a deployed mail, distinguish the retained source, the origin reader response, and the edge response.
+An original address in the source/origin but `__cf_email__`, `data-cfemail`, `/cdn-cgi/l/email-protection` or an added
+`email-decode.min.js` in the edge HTML identifies a delivery transformation. If the original retained source
+already contains those markers, delivery exclusions do not reconstruct it: restoration must use the actual
+original MIME/provider source. The reader never reverse-decodes or replaces authored body text to conceal the
+problem. Plain-text JSON and rendered HTML following different edge processing paths can explain a normal address
+in the text panel alongside a protected address in the HTML panel.
+
 ## Original source and fidelity
 
 Inbound source order is retained canonical authored HTML/text, original raw MIME, then the verified retained
@@ -49,6 +73,12 @@ there is no manual “restore original layout” action. Successfully recovered 
 source under the original retention/erasure boundary. Old sanitized HTML is never treated as original source.
 When no original HTML remains, only the actually retained text can be displayed; no invented table or image is added.
 Outbound uses the original accepted message body and attachment snapshot for the precise delivery.
+
+The generated text-only document preserves exact text, paragraph breaks and literal addresses, uses a readable
+neutral presentation, and wraps long lines and URLs within the available frame width. These generated text styles
+are applied only when the HTML part is absent or blank; an authored HTML document retains its own typography.
+Literal filenames or Apple Mail CID placeholder spans without an actual image element or retained same-message
+attachment are source facts, not recoverable images. Do not infer a replacement from a filename or another mail.
 
 The compiler preserves the original document/body/style cascade, CSS variables and responsive rules, tables,
 backgrounds, inline dimensions and authored colors. An iframe isolates host application styling. The host adds no
@@ -83,6 +113,10 @@ Opaque iframe origins are expected; the channel/source checks are authoritative 
 
 Runtime messages: `envoy:mail-reader:layout` with `height`, `envoy:mail-reader:ready` with resource statuses,
 `envoy:mail-reader:expired`, and `envoy:mail-reader:unavailable`, each with `channelId`.
+Layout height follows actual body, rendered descendant boxes and text bounds, including nested positioned paint,
+ancestor overflow clipping, padding, margins and horizontal scrollbar space. It must not use the root scroll height as a minimum: that value is floored by the existing iframe
+viewport and would prevent the host from shrinking after content or width changes. The runtime observes body/root
+size changes, image loads and viewport resizing so wrapped text and asynchronously prepared resources resize the host.
 Hosts renew through the original authenticated POST 30 seconds before expiry. For an unchanged document revision,
 they send `{ type: "envoy:mail-reader:renew", channelId: oldChannelId, session: newDescriptor }` to the existing
 frame. The frame checks parent/channel, switches its own capability/channel and resource URLs, and retains DOM and

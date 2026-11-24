@@ -2,13 +2,78 @@
 "use strict";
 function readerRuntime(initial) {
     let session = initial, stopped = false, timer;
-    const heights = new Set();
+    let previousHeight = -1;
     const send = (type, extra = {}) => parent.postMessage({ type, channelId: session.channelId, ...extra }, "*");
     const height = () => {
-        const value = Math.ceil(Math.max(document.body?.scrollHeight ?? 0, document.documentElement.scrollHeight));
-        if (!heights.has(value)) {
-            heights.clear();
-            heights.add(value);
+        const body = document.body;
+        if (!body)
+            return;
+        const scrollTop = globalThis.scrollY || 0;
+        const bodyRectangle = body.getBoundingClientRect?.();
+        const computed = (element) => typeof getComputedStyle === "function" ? getComputedStyle(element) : {};
+        const length = (style, property) => Math.max(0, Number.parseFloat(style[property] || "0") || 0);
+        const bodyStyle = computed(body);
+        let bottom = bodyRectangle ? bodyRectangle.bottom : body.scrollHeight || 0;
+        const clips = new Map();
+        const unbounded = { top: -Infinity, bottom: Infinity, left: -Infinity, right: Infinity };
+        const include = (rectangle, clip) => {
+            if (!rectangle || !clip || rectangle.bottom <= rectangle.top || rectangle.right <= rectangle.left)
+                return;
+            const visible = { top: Math.max(rectangle.top, clip.top), bottom: Math.min(rectangle.bottom, clip.bottom),
+                left: Math.max(rectangle.left, clip.left), right: Math.min(rectangle.right, clip.right) };
+            if (visible.bottom > visible.top && visible.right > visible.left)
+                bottom = Math.max(bottom, visible.bottom + length(bodyStyle, "paddingBottom") + length(bodyStyle, "borderBottomWidth"));
+        };
+        // Preorder traversal lets each descendant inherit the actual overflow clips of its ancestors.
+        // Empty positioned elements can paint outside their parent while an enclosing Range has no box there.
+        for (const element of [body, ...Array.from(body.querySelectorAll?.("*") || [])]) {
+            const style = computed(element);
+            let ancestorClip = element === body ? unbounded : clips.get(element.parentElement);
+            if (element !== body && (style.position === "absolute" || style.position === "fixed")) {
+                // Positioned boxes escape overflow ancestors between themselves and their containing block.
+                // The browser also reports transformed/contained blocks through offsetParent.
+                const containingBlock = element.offsetParent;
+                ancestorClip = containingBlock && containingBlock !== body && containingBlock !== document.documentElement ? clips.get(containingBlock) : unbounded;
+            }
+            if (!ancestorClip) {
+                clips.set(element, null);
+                continue;
+            }
+            if (style.display === "none") {
+                clips.set(element, null);
+                continue;
+            }
+            const rectangle = element.getBoundingClientRect?.();
+            if (element !== body && style.visibility !== "hidden" && style.visibility !== "collapse")
+                include(rectangle, ancestorClip);
+            const clip = { ...ancestorClip };
+            // Body/root overflow may propagate to the viewport; only descendant boxes clip intrinsic content.
+            if (rectangle && element !== body && style.display !== "contents") {
+                if (/^(hidden|clip|auto|scroll)$/.test(style.overflowY || style.overflow || "")) {
+                    clip.top = Math.max(clip.top, rectangle.top + length(style, "borderTopWidth"));
+                    clip.bottom = Math.min(clip.bottom, rectangle.bottom - length(style, "borderBottomWidth"));
+                }
+                if (/^(hidden|clip|auto|scroll)$/.test(style.overflowX || style.overflow || "")) {
+                    clip.left = Math.max(clip.left, rectangle.left + length(style, "borderLeftWidth"));
+                    clip.right = Math.min(clip.right, rectangle.right - length(style, "borderRightWidth"));
+                }
+            }
+            clips.set(element, clip);
+            if (typeof document.createRange === "function" && style.visibility !== "hidden" && style.visibility !== "collapse") {
+                for (const child of Array.from(element.childNodes || [])) {
+                    if (child.nodeType !== 3 || !child.textContent)
+                        continue;
+                    const range = document.createRange();
+                    range.selectNodeContents(child);
+                    include(range.getBoundingClientRect(), clip);
+                }
+            }
+        }
+        // Root scrollHeight is floored by the iframe viewport; never feed it back into intrinsic content size.
+        const scrollbar = Math.max(0, (globalThis.innerHeight || 0) - (document.documentElement.clientHeight || globalThis.innerHeight || 0));
+        const value = Math.ceil(Math.max(0, bottom + scrollTop) + length(bodyStyle, "marginBottom") + scrollbar);
+        if (value !== previousHeight) {
+            previousHeight = value;
             send("envoy:mail-reader:layout", { height: value });
         }
     };
@@ -110,10 +175,14 @@ function readerRuntime(initial) {
             clearTimeout(timer);
         void check();
     });
-    addEventListener("pagehide", () => { stopped = true; if (timer)
+    addEventListener("pagehide", () => { stopped = true; observer.disconnect(); if (timer)
         clearTimeout(timer); });
     document.addEventListener("load", height, true);
-    new ResizeObserver(height).observe(document.documentElement);
+    const observer = new ResizeObserver(height);
+    observer.observe(document.documentElement);
+    if (document.body)
+        observer.observe(document.body);
+    addEventListener("resize", height);
     height();
     void check();
 }

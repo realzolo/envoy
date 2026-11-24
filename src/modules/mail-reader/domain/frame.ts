@@ -51,5 +51,6 @@ export function renderReader(document: ReturnType<typeof compileReader>, token: 
   if (/<head(?:\s[^>]*)?>/i.test(output)) output = output.replace(/<head(?:\s[^>]*)?>/i, match => match + metadata);
   else output = metadata + output;
   if (/<\/body\s*>/i.test(output)) output = output.replace(/<\/body\s*>/i, script + "</body>"); else output += script;
-  return "<!doctype html>" + output.replace(/<!doctype[^>]*>/ig, "");
+  // Reader content is a mail artifact, not a web page for edge email-address rewriting.
+  return "<!doctype html><!--email_off-->" + output.replace(/<!doctype[^>]*>/ig, "") + "<!--/email_off-->";
 }
