@@ -2,6 +2,7 @@
 
 This guide deploys Envoy from a server-side Git checkout using Docker Compose. Commands assume the repository is
 installed at `/data/envoy` and the current user can run Docker commands.
+Run Git as the checkout owner. If Docker requires elevation, use `sudo docker ...` for Docker commands only.
 
 The Compose configuration runs three services from the same application image:
 
@@ -35,7 +36,7 @@ docker compose version
 ## 1. Check Out the Repository
 
 ```bash
-git clone https://github.com/realzolo/envoy.git /data/envoy
+git clone https://github.com/realzolo/envoy.git /data/envoy &&
 cd /data/envoy
 ```
 
@@ -44,8 +45,8 @@ cd /data/envoy
 Run these commands once for a new installation:
 
 ```bash
-cp docker-compose.example.yml docker-compose.yml
-cp .env.example .env.production
+cp docker-compose.example.yml docker-compose.yml &&
+cp .env.example .env.production &&
 chmod 600 .env.production
 ```
 
@@ -117,16 +118,21 @@ use UTC by default. Keep `PORT=6178` unless you also update the Compose port map
 Validate the configuration first:
 
 ```bash
+sh scripts/check-deployment-source.sh &&
 docker compose config --quiet
 ```
 
 After validation succeeds, build and start the services:
 
 ```bash
-docker compose up -d --build
+sh scripts/check-deployment-source.sh &&
+docker compose config --quiet &&
+docker compose build web &&
+docker compose run --rm --no-deps migrate &&
+docker compose up -d --no-deps --force-recreate web worker
 ```
 
-Compose builds the shared `envoy:production` image, runs `migrate`, and starts Web and Worker only after migration
+Compose builds the shared `envoy:production` image once, runs `migrate`, and starts Web and Worker only after migration
 success. Setup initializes empty databases or validates and applies missing ordered application migrations, then
 initializes BullMQ through its official API. Each applied file has a SHA-256 record in `envoy_meta.migrations`.
 One transaction-scoped advisory lock serializes upgrades; full catalog comparison detects schema/comment drift before
@@ -182,16 +188,23 @@ Web and Worker processes. This reset V1 requires a newly initialized database; f
 Pull the source without overwriting the server's configuration files:
 
 ```bash
-cd /data/envoy
-git switch main
-git pull --ff-only
+cd /data/envoy &&
+git switch main &&
+git pull --ff-only &&
+sh scripts/check-deployment-source.sh
 ```
 
 Keep the deployment checkout on `main`; merge changes into `main` before deploying them.
+`git pull --ff-only` updates tracked files and rejects divergent history; it does not remove untracked files.
+Docker's `COPY . .` includes untracked source files unless `.dockerignore` excludes them. The read-only source check
+rejects tracked modifications and untracked files before building, while Git-ignored server configuration remains
+allowed. It never cleans files or changes permissions. Keep application changes in reviewed commits rather than
+editing or uploading source directly in the deployment checkout.
 
 Apply any required configuration changes, then run:
 
 ```bash
+sh scripts/check-deployment-source.sh &&
 docker compose config --quiet &&
 docker compose build web &&
 docker compose run --rm --no-deps migrate &&
@@ -239,6 +252,7 @@ in PostgreSQL or object storage.
 | Symptom | Checks |
 | --- | --- |
 | Build fails | Check Docker build output, registry access, package downloads, and available disk space and memory. |
+| Build refers to retired routes or missing exports | Run `git status --short --untracked-files=all`. Untracked old source can survive `git pull` and enter the Docker context; rebuilding without cache does not remove it. Review and delete only confirmed obsolete paths. |
 | `migrate` exits with a nonzero code | Read migration logs; check the database URL, database permissions, and schema compatibility before starting Web or Worker. |
 | Setup reports catalog or checksum drift | Inspect the mismatch and restore the expected recorded schema/source through a reviewed repair; do not delete the database or alter executed migration files. |
 | Web remains unhealthy or `/api/health` returns `503` | Inspect Web logs and verify database connectivity and both application and queue schemas. |
@@ -255,10 +269,18 @@ docker compose logs --tail=200 migrate
 When a migration was run with `docker compose run --rm`, inspect its terminal output because the temporary container
 is removed after exit.
 
+If removing a confirmed obsolete file reports `Permission denied`, inspect its file and parent directory ownership
+with `ls -ld`. Use `sudo rm -- 'exact/obsolete/path'` only for the confirmed paths when elevated access is needed,
+then rerun the source check and build. Do not use a repository-wide `git clean -fdx`, `git reset --hard`, or recursive
+permission changes to resolve an unexplained source mismatch; server configuration and other local data may be affected.
+
 ## Rollback
 
 Check out a known compatible source revision and repeat the build, migration, and container recreation steps above.
 Confirm that the older application and queue backend support the current database schema before rolling back. Application rollback does not reverse database
 structures. Restore backups only through a planned database recovery procedure.
+For a revision predating `scripts/check-deployment-source.sh`, use
+`source_status=$(git status --porcelain=v1 --untracked-files=all) && test -z "$source_status"` as the source check and inspect
+`git status --short --untracked-files=all` if it fails.
 
 For ongoing delivery, credential rotation, retention, and recovery procedures, see [Operations](OPERATIONS.md).

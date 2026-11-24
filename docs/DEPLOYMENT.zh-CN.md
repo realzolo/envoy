@@ -2,6 +2,7 @@
 
 生产服务器直接拉取源码，通过 Docker Compose 构建并运行。生产环境包含 Web、Worker 和一次性数据库迁移三个容器任务，统一加入
 `envoy-network` bridge 网络；PostgreSQL 和 R2 使用外部服务。
+Git 命令以源码目录所有者执行；Docker 需要管理员权限时，仅将 Docker 命令写成 `sudo docker ...`。
 
 ## 1. 环境要求
 
@@ -24,22 +25,27 @@ docker compose version
 首次部署：
 
 ```bash
-git clone REPLACE_WITH_REPOSITORY_URL /data/envoy
+git clone https://github.com/realzolo/envoy.git /data/envoy &&
 cd /data/envoy
 ```
 
 如果源码已经存在：
 
 ```bash
-cd /data/envoy
-git pull --ff-only
+cd /data/envoy &&
+git switch main &&
+git pull --ff-only &&
+sh scripts/check-deployment-source.sh
 ```
 
 ## 3. 配置环境变量
 
+以下复制命令仅用于首次安装；已有部署应编辑现有配置，不要重新复制示例覆盖服务器配置和密钥。
+
 ```bash
-cp docker-compose.example.yml docker-compose.yml
-cp .env.example .env.production
+cp docker-compose.example.yml docker-compose.yml &&
+cp .env.example .env.production &&
+chmod 600 .env.production &&
 vi .env.production
 ```
 
@@ -75,9 +81,11 @@ openssl rand -hex 32
 ## 4. 构建并启动
 
 ```bash
-docker compose build
-docker compose run --rm migrate
-docker compose up -d web worker
+sh scripts/check-deployment-source.sh &&
+docker compose config --quiet &&
+docker compose build web &&
+docker compose run --rm --no-deps migrate &&
+docker compose up -d --no-deps --force-recreate web worker
 ```
 
 此全新项目的 `db/migrations/001_initial.sql` 已包含完整应用结构和出站变更流。后续结构变更追加连续版本 SQL，并在 `db/migrations/checksums.json` 登记 SHA-256。
@@ -109,14 +117,32 @@ curl --fail http://127.0.0.1:6178/api/health
 ## 5. 更新版本
 
 ```bash
-cd /data/envoy
-git pull --ff-only
-docker compose build
-docker compose run --rm migrate
-docker compose up -d web worker
+cd /data/envoy &&
+git switch main &&
+git pull --ff-only &&
+sh scripts/check-deployment-source.sh &&
+docker compose config --quiet &&
+docker compose build web &&
+docker compose run --rm --no-deps migrate &&
+docker compose up -d --no-deps --force-recreate web worker
 ```
 
-数据库迁移或结构校验成功后才会更新 Web 和 Worker 容器。
+命令用 `&&` 串联，源码检查、配置检查、构建或迁移失败就停止，不会继续替换容器。
+镜像只构建一次；数据库迁移或结构校验成功后才会更新 Web 和 Worker，`--no-deps` 避免重复运行迁移。
+
+`git pull --ff-only` 可以继续使用：它更新受 Git 管理的文件，并在分支历史分叉时拒绝合并，但不会删除未跟踪文件。
+Docker 的 `COPY . .` 会将未被 `.dockerignore` 排除的旧源码一并加入构建。源码检查脚本只读检查已跟踪修改和未跟踪文件，
+发现差异立即拒绝部署；已被 Git 忽略的 `.env.production`、`docker-compose.yml` 等服务器配置仍可保留。
+脚本不会删除文件或修改权限。应用改动应先提交到仓库，不要直接在部署目录编辑或上传覆盖源码。
+
+### 构建仍引用已删除的旧接口
+
+先执行 `git status --short --untracked-files=all`。`??` 表示未跟踪文件，不会由 `git pull` 清理，
+`docker compose build --no-cache` 也不会删除它们。核实后只删除确认退役的精确路径，再重新运行源码检查和构建。
+
+如果删除时报 `Permission denied`，用 `ls -ld` 检查文件及父目录权限；确需管理员权限时，对已确认路径使用
+`sudo rm -- '精确的旧文件路径'`。不要用全仓库 `git clean -fdx`、`git reset --hard` 或递归修改权限来处理来源不明的差异，
+以免影响服务器配置和其他本地数据。
 
 ## 6. 常用命令
 
@@ -138,19 +164,24 @@ docker compose down
 修改 `.env.production` 后，重新创建容器：
 
 ```bash
-docker compose up -d --force-recreate web worker
+docker compose config --quiet &&
+docker compose up -d --no-deps --force-recreate web worker
 ```
 
 ## 7. 回滚
 
 ```bash
-cd /data/envoy
-git checkout REPLACE_WITH_PREVIOUS_COMMIT
-docker compose build
-docker compose run --rm migrate
-docker compose up -d web worker
+cd /data/envoy &&
+git checkout REPLACE_WITH_PREVIOUS_COMMIT &&
+source_status=$(git status --porcelain=v1 --untracked-files=all) &&
+test -z "$source_status" &&
+docker compose config --quiet &&
+docker compose build web &&
+docker compose run --rm --no-deps migrate &&
+docker compose up -d --no-deps --force-recreate web worker
 ```
 
 回滚只替换兼容当前数据库结构的应用代码，不会自动恢复数据库；如需恢复数据，请使用经过验证的备份恢复流程。
+回滚命令直接检查 Git 状态，兼容尚未包含源码检查脚本的旧提交；检查失败时用 `git status --short --untracked-files=all` 查看差异。
 
 默认一个 Web 与一个 Worker 的连接预算最多为 48（另留迁移、监控及余量）；增加副本时同步调整数据库连接上限。迁移命令按版本建立或升级业务结构，再调用 BullMQ 官方 API 初始化队列 schema；Web 和 Worker 不执行结构变更。R2 使用桶默认加密，不设置 AWS 专用 SSE 请求头。

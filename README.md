@@ -146,6 +146,8 @@ publishes it. Copy `docker-compose.example.yml` to the Git-ignored `docker-compo
 `.env.production` before deployment. Configure a database reachable from the containers and switch object storage to
 `s3` with your R2 settings. PostgreSQL, R2, and secrets are provided through `.env.production`. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) or the
 [Chinese guide](docs/DEPLOYMENT.zh-CN.md).
+Before each image build, run `sh scripts/check-deployment-source.sh` to reject modified or untracked source while
+preserving Git-ignored server configuration. A successful `git pull --ff-only` does not remove untracked old files.
 
 ## Commands
 
