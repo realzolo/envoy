@@ -7,6 +7,7 @@ import { Alert,Button,Card,Collapse,Descriptions,Space,Typography } from "@arco-
 import { useState } from "react";
 
 import { CopyableValue,type Data,DataTable,date,EmptyState,record,rows,StatusTag,TableCard,value } from "@/components/admin-console-shared";
+import { HostedMailReader } from "@/components/hosted-mail-reader";
 import { ResourceDetail } from "@/components/admin-resource-detail";
 
 export function Inbound({ data }: { data: Data }) {
@@ -59,9 +60,9 @@ export function Inbound({ data }: { data: Data }) {
           ? "This older mail was marked rejected because no Service was receiving its domain. After enabling Receive, replay its Provider Event while the verified receipt is retained. New mail without a receiving Service remains available in Envoy."
           : value(item, "rejection_reason")} showIcon /> : null}
         {item.content_purged_at ? <Alert type="info" content="Message content was removed under the retention policy." /> : <>
-          <Collapse defaultActiveKey={["text"]}>
+          <Collapse defaultActiveKey={["html"]}>
             <Collapse.Item name="text" header="Plain-text content"><pre className={styles.code}>{value(item, "text_body") || "No plain-text content."}</pre></Collapse.Item>
-            {item.sanitized_html ? <Collapse.Item name="html" header="Isolated HTML preview"><iframe title="Inbound HTML preview" className={styles.preview} sandbox="" referrerPolicy="no-referrer" srcDoc={`<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'">${value(item, "sanitized_html")}`} /></Collapse.Item> : null}
+            <Collapse.Item name="html" header="Mail content"><HostedMailReader kind="INBOUND" id={value(item,"id")} /></Collapse.Item>
           </Collapse>
         </>}
         <div className={styles.section}><Typography.Text bold>Attachments</Typography.Text>

@@ -5,7 +5,7 @@ import { LocalTime } from "@/components/local-time";
 import styles from "@/components/mail-views.module.css";
 import { PageHeader } from "@/components/page-header";
 import { RetryDeliveryButton } from "@/features/outbound/retry-delivery-button";
-import { MessageHtmlPreview } from "./message-html-preview";
+import { HostedMailReader } from "@/components/hosted-mail-reader";
 import type { DeliveryStatus } from "@/lib/types";
 import {
 Alert,Card,Collapse,Descriptions,Empty,Input,Space,Tabs,Tag,Timeline,Typography,
@@ -131,7 +131,7 @@ export function DeliveryDetailView({ detail, back = "/emails" }: { detail: Deliv
               {Object.keys(detail.content.headers).length > 0 && <Collapse><Collapse.Item name="headers" header="Custom mail headers"><JsonDetails value={detail.content.headers} /></Collapse.Item></Collapse>}
               {detail.content.html_body || detail.content.text_body ? <Tabs type="capsule" defaultActiveTab={detail.content.html_body ? "html" : "text"}>
                 {detail.content.html_body && <Tabs.TabPane key="html" title="HTML preview">
-                  <MessageHtmlPreview deliveryId={detail.id} />
+                  <HostedMailReader kind="OUTBOUND" id={detail.id} />
                 </Tabs.TabPane>}
                 {detail.content.text_body && <Tabs.TabPane key="text" title="Plain text">
                   <Input.TextArea autoSize={{ minRows: 8, maxRows: 24 }} readOnly value={detail.content.text_body} />

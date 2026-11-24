@@ -57,7 +57,8 @@ for (const [file, source] of sources) {
                 add(file, line, 'HTTP controllers must call public application capabilities, never database infrastructure.');
             if (target && owner(target) && owner(file) !== owner(target) && moduleFile(target)) {
                 const destination = relative(target);
-                const boundary = /^src\/modules\/[^/]+\/(?:public|contracts)\.ts$/.test(destination) || /^src\/modules\/[^/]+\/policy\.ts$/.test(destination);
+                const sourceAdapter = ["src/modules/inbound/sources.ts", "src/modules/outbound/sources.ts"].includes(destination);
+                const boundary = sourceAdapter || /^src\/modules\/[^/]+\/(?:public|contracts)\.ts$/.test(destination) || /^src\/modules\/[^/]+\/policy\.ts$/.test(destination);
                 const pureType = typeOnly && /^src\/modules\/[^/]+\/domain\//.test(destination);
                 const sqlPredicate = relative(file).includes('/infrastructure/') && destination === 'src/modules/identity/infrastructure/authorization.ts' && names.length > 0 && names.every(name => ['domainPermission', 'effectiveDomainGrants', 'outboundDomainAccess', 'inboundDomainAccess'].includes(name));
                 if (!boundary && !pureType && !sqlPredicate)

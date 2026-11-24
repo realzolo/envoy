@@ -278,6 +278,13 @@ export const schemaDocumentation = {
     windowStart: "Fixed rate limit window start (timestamptz), bucketed from database time using the configured seconds", count: "Non-negative bigint consumed quota: recipients for sending limits, requests for authentication limits",
     expiresAt: "Counter cleanup eligibility time (timestamptz); retains a short buffer after window end and does not reset the business limit",
   } },
+  mailReaderResources: { table: "Unified versioned mail reader resource cache and bounded preparation jobs; erased with the retained parent source", columns: {
+    sourceKind: "Source adapter: INBOUND or OUTBOUND", sourceId: "Inbound message ID or outbound delivery ID", sourceRevision: "SHA-256 of original source and reader policy", resourceId: "Stable resource identity within one reader source revision",
+    serviceId: "Requesting Service scope; null is an explicitly authenticated admin request", state: "Preparation state: PENDING, RUNNING, READY, RETRY_WAIT or UNAVAILABLE", reasonCode: "Content-free preparation outcome code",
+    cachedContent: "Envelope-encrypted verified original image bytes", contentType: "Verified original image MIME type", sizeBytes: "Verified image size with a 20000000 byte ceiling", sha256: "Verified SHA-256 of image bytes",
+    attemptCount: "Actual preparation attempts consumed in the bounded retry budget", availableAt: "Earliest next preparation time", leaseToken: "Exclusive resource preparation token", leaseExpiresAt: "Preparation lease expiry",
+    createdAt: created, updatedAt: updated,
+  } },
   inboundDocumentResources: { table: "Private versioned inbound bitmap resources; source and cache are envelope encrypted and erased with their parent message", columns: {
     id: "Unpredictable resource identity scoped to one inbound document revision", inboundMessageId: "Original private inbound message owner", documentRevision: "Frozen owning document revision", metadata: "Safe kind and MIME attachment identity, without source URL", source: "Envelope-encrypted original image URL or explicit embedded bitmap", cachedContent: "Envelope-encrypted verified bitmap bytes", contentType: "Byte-verified raster MIME type", sizeBytes: "Verified bitmap size, limited to 5000000 bytes", sha256: "Verified byte digest", scanPolicy: "Scanner configuration policy used for the cached bitmap", state: "Finite preparation/read state", reasonCode: "Finite content-free preparation reason", attemptCount: "Bounded preparation attempts", availableAt: "Earliest preparation retry time", leaseToken: "Exclusive preparation claim", leaseExpiresAt: "Preparation claim deadline", createdAt: "Resource registration time"
   } },

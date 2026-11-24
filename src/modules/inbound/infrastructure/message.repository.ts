@@ -1,3 +1,4 @@
+import { registerReadingSource } from "@/modules/mail-reader/public";
 import { saveDocument } from "./document.repository";
 import type { PoolClient } from "pg";
 import type { InboundRepository } from "../application/ports";
@@ -9,6 +10,7 @@ import { completeObjectUploads } from "@/platform/storage/object-cleanup/public"
 
 export function inboundRepository(client: Pick<PoolClient, "query"> = pool()): InboundRepository {
 return {
+    enqueueReaderSource: source=>registerReadingSource(source,transactionContext(client as PoolClient)),
     findDispatches(input: { endpointId: string; recipients: string[]; accountId: string }) { return client.query<InboundDispatch>(`
     SELECT b.service_id,array_agg(DISTINCT recipient ORDER BY recipient) AS recipients
     FROM provider_webhook_endpoints e

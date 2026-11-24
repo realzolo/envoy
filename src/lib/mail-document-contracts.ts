@@ -11,6 +11,3 @@ export type MailDocument = {
   textProvenance: "AUTHORED" | "DERIVED" | "NOT_RECORDED" | "UNAVAILABLE";
   state: "CURRENT" | "PARTIAL" | "SOURCE_UNAVAILABLE"; resources: MailDocumentResource[];
 };
-
-
-export type MailPreview = { html: string; revision: string; resources: { id: string; kind: MailDocumentResource["kind"]; available: boolean }[] };

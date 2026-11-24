@@ -7,6 +7,7 @@ const route: InboundDispatch = { service_id: "svc_test", recipients: ["support@e
 const now = new Date("2026-09-24T00:00:00.000Z");
 const result = () => Promise.resolve({ rows: [], rowCount: 1 });
 const repository: InboundRepository = {
+  enqueueReaderSource: vi.fn(async()=>{}),
   saveDocument: vi.fn(async()=>{}),
   findDispatches: vi.fn(), freezeReceipt: vi.fn(result), readReceipt: vi.fn(), findTombstone: vi.fn(), insertRejected: vi.fn(),
   allowedDomains: vi.fn(), findCopy: vi.fn(), insertCopy: vi.fn(result), findConcurrentCopy: vi.fn(), recordDates: vi.fn(result),

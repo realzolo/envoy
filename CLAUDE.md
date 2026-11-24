@@ -2,7 +2,7 @@
 
 # Business mail architecture
 
-Read `docs/ARCHITECTURE.md` and `docs/API.md` for the final domain-permission contract. For transport diagnostics, versioned reads, observation revisions and privacy normalization, read `docs/MAIL_DIAGNOSTICS.md`; finite wire schemas are under `docs/contracts/`. For passive inbound bodies, retained-source reprojection and protected image resources, read `docs/INBOUND_DOCUMENTS.md`. Envoy owns business Service identities, rotating Service Keys, domain sending/receiving grants and one unified callback per Service. Business APPs, exact mailbox purposes, templates and APP dispatch belong to callers.
+Read `docs/ARCHITECTURE.md` and `docs/API.md` for the final domain-permission contract. For transport diagnostics, versioned reads, observation revisions and privacy normalization, read `docs/MAIL_DIAGNOSTICS.md`; finite wire schemas are under `docs/contracts/`. For inbound source facts and MIME provenance, read `docs/INBOUND_DOCUMENTS.md`; for all visual reading and automatic source recovery, read `docs/MAIL_READER.md`. Envoy owns business Service identities, rotating Service Keys, domain sending/receiving grants and one unified callback per Service. Business APPs, exact mailbox purposes, templates and APP dispatch belong to callers.
 
 Envoy updates and test deployments use `main`. Merge reviewed changes into `main` before deployment; do not switch the deployment checkout to a feature branch.
 
@@ -63,3 +63,9 @@ confirmed identity is immutable. See `docs/API.md` for exact association and sou
 Callback delivery has one 10-second execution deadline from DNS through TLS, final authorization and response;
 expiry cancels the request and late asynchronous work cannot write it. A 2xx header acknowledges receipt immediately;
 failure summaries are limited to 500 bytes and connections are closed. The 2-minute work lease is independent.
+
+# Hosted mail reading
+
+For original-source recovery, shared inbound/outbound iframe rendering, short-lived reading sessions and durable
+image preparation, read `docs/MAIL_READER.md`. Both administration and business callers use this hosted reader;
+the older passive message projection remains a message fact, not a second frontend rendering implementation.

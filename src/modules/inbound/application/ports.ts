@@ -1,3 +1,4 @@
+import type { ReaderSource } from "@/modules/mail-reader/contracts";
 import type { DocumentWrite } from "./document";
 import type { DocumentSource } from "../domain/document";
 import type { InboundDispatch } from "../contracts";
@@ -32,6 +33,7 @@ export interface InboundRepository {
   registerAttachment(id: string, kind: "inbound", serviceId: string | null, digest: string): Promise<void>;
   completeUploads(keys: string[]): Promise<void>;
   saveDocument(id: string, write: DocumentWrite): Promise<void>;
+  enqueueReaderSource(source:ReaderSource):Promise<void>;
 }
 export interface InboundDependencies {
   repository: InboundRepository;

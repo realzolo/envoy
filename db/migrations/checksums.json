@@ -26,5 +26,9 @@
   {
     "file": "007_domain_identity_recovery.sql",
     "sha256": "5b13fbb6e04051cc1e5b9acb14fc710410f32017b9d2bb85fe291330c88aa0f0"
+  },
+  {
+    "file": "008_unified_mail_reader_cache.sql",
+    "sha256": "d7339f64c0c63be3e7e7a22fb4718586851292d3d1961319adac31a574e9333c"
   }
 ]

@@ -29,7 +29,7 @@ The structure follows the Next.js recommendation to use a server-side data acces
 - `suppressions`: scoped recipient protection and authorized management.
 - `admin`: explicit operator read contracts and cross-domain operational reports. Management writes live in the owning business modules.
 
-Modules import each other's `public.ts` or `contracts.ts`. A `policy.ts` facet may expose pure business policies only when the architecture checker verifies its entire runtime dependency tree has no application orchestration, infrastructure, database, framework, or I/O dependency. An explicit type-only import of a domain type is permitted. Infrastructure may import the four internal identity SQL predicate builders (`domainPermission`, `effectiveDomainBinding`, `outboundDomainAccess`, `inboundDomainAccess`) because they enforce consistent permissions inside locked queries; runtime authorization operations use the public identity service with an opaque transaction context. These are the only cross-module infrastructure exceptions.
+Modules import each other's `public.ts` or `contracts.ts`. The exact `inbound/sources.ts` and `outbound/sources.ts` public read-only source facets expose reader adapters without loading module bootstrap; these two explicit architecture-checker exceptions avoid a real inbound-ready/reader-bootstrap cycle. A `policy.ts` facet may expose pure business policies only when the architecture checker verifies its entire runtime dependency tree has no application orchestration, infrastructure, database, framework, or I/O dependency. An explicit type-only import of a domain type is permitted. Infrastructure may import the four internal identity SQL predicate builders (`domainPermission`, `effectiveDomainBinding`, `outboundDomainAccess`, `inboundDomainAccess`) because they enforce consistent permissions inside locked queries; runtime authorization operations use the public identity service with an opaque transaction context. These are the only cross-module infrastructure exceptions.
 
 ## Diagnostic ownership
 
@@ -62,7 +62,7 @@ The mailbox local part does not select a Service. Route ownership is frozen when
 Inbound also owns versioned passive reading documents, independent MIME text provenance, original-source
 reprojection and the protected image manifest. It exposes fixed resource IDs rather than an arbitrary image proxy;
 attachment safety, current full-envelope ownership and content erasure remain authoritative. See
-[INBOUND_DOCUMENTS.md](INBOUND_DOCUMENTS.md) for the owner/API/cache and bounded historical repair contract.
+[INBOUND_DOCUMENTS.md](INBOUND_DOCUMENTS.md) for retained source facts and [MAIL_READER.md](MAIL_READER.md) for the sole visual reader/cache/recovery contract.
 
 ### Outbound
 
@@ -139,3 +139,9 @@ Type checking verifies DTO and application-port contracts. Unit tests cover pure
 - [Spring Modulith module verification](https://docs.spring.io/spring-modulith/reference/verification.html)
 - [Drizzle transactions](https://orm.drizzle.team/docs/transactions)
 - [node-postgres transactions](https://node-postgres.com/features/transactions)
+
+## Hosted mail reader
+
+`mail-reader` owns the shared original-document compiler, capability sessions and prepared image cache. Inbound
+and outbound expose source adapters through their public module boundaries; administrator and Service facades
+issue the same hosted reader under their own authority. Hosts only embed and renew it. See [MAIL_READER.md](MAIL_READER.md).

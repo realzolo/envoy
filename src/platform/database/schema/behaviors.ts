@@ -1,5 +1,25 @@
 /** Native PostgreSQL invariants included in the generated schema snapshot. */
 export const databaseBehaviors = String.raw`
+CREATE FUNCTION erase_mail_reader_resources() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF TG_OP='DELETE' OR NEW.content_purged_at IS NOT NULL THEN
+   IF TG_TABLE_NAME='inbound_messages' THEN
+     DELETE FROM mail_reader_resources WHERE source_kind='INBOUND' AND source_id=OLD.id;
+   ELSE
+     DELETE FROM mail_reader_resources WHERE source_kind='OUTBOUND' AND source_id IN (SELECT id FROM deliveries WHERE message_id=OLD.id);
+   END IF;
+ END IF;
+ IF TG_OP='DELETE' THEN RETURN OLD; ELSE RETURN NEW; END IF;
+END $$;
+CREATE TRIGGER inbound_reader_erasure BEFORE DELETE OR UPDATE ON inbound_messages FOR EACH ROW EXECUTE FUNCTION erase_mail_reader_resources();
+CREATE TRIGGER outbound_reader_erasure BEFORE DELETE OR UPDATE ON messages FOR EACH ROW EXECUTE FUNCTION erase_mail_reader_resources();
+CREATE FUNCTION erase_delivery_reader_resources() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ DELETE FROM mail_reader_resources WHERE source_kind='OUTBOUND' AND source_id=OLD.id;
+ RETURN OLD;
+END $$;
+CREATE TRIGGER delivery_reader_erasure BEFORE DELETE ON deliveries FOR EACH ROW EXECUTE FUNCTION erase_delivery_reader_resources();
+
 CREATE FUNCTION erase_inbound_document() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   IF NEW.content_purged_at IS NOT NULL THEN

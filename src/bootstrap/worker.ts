@@ -1,3 +1,4 @@
+import { pendingReaderResources, prepareReaderResource, cancelUnauthorizedReaderDemand, deferReaderPreparationDemand, ReaderError } from "@/modules/mail-reader/public";
 import { syncProviderIdentities } from "@/modules/channels/public";
 import { purgeExpiredSensitiveContent } from "@/modules/outbound/public";
 import { processAttachmentScan, scheduleAttachmentScans } from "@/modules/attachments/public";
@@ -14,6 +15,8 @@ import { processEvent } from "@/worker/event";
 import { processCallback } from "@/worker/callback";
 import { processReconciliation } from "@/worker/reconciliation";
 
+const MAIL_READER_PREPARATION_BATCH_SIZE = 3;
+const MAIL_READER_PREPARATION_INTERVAL_MS = 1_000;
 
 export async function runWorker() {
   await applicationSchemaHealth();
@@ -66,6 +69,18 @@ export async function runWorker() {
   process.once("SIGTERM", stop);
   try {
     await Promise.all(workers.map(worker => worker.waitUntilReady()));
+    schedule("Mail reader preparation", async () => {
+      const outcomes = await Promise.allSettled((await pendingReaderResources(MAIL_READER_PREPARATION_BATCH_SIZE)).map(async job => {
+        try { await prepareReaderResource(job); }
+        catch (error) {
+          if (error instanceof ReaderError && error.status === 404) await cancelUnauthorizedReaderDemand(job);
+          else if (error instanceof ReaderError && error.status === 409) await deferReaderPreparationDemand(job);
+          else throw error;
+        }
+      }));
+      const failures = outcomes.filter(result => result.status === "rejected").length;
+      if (failures) throw new Error(`Mail reader preparation failed for ${failures} resources`);
+    }, MAIL_READER_PREPARATION_INTERVAL_MS);
     schedule("Attachment scan scheduler", scheduleAttachmentScans, 1000);
     schedule("Outbox dispatcher", dispatchOutboxBatch, 500);
     schedule("Work recovery", recoverWorkBatch, 30_000);

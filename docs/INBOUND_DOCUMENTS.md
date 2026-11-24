@@ -63,58 +63,25 @@ Sender-authored attachment placeholders such as `<span id="cid:logo">&lt;app-log
 an element ID or filename is not an image reference, MIME part or downloadable attachment. A reply which does not
 reattach original files must not obtain synthetic attachments or a current logo substituted into historical content.
 
-## Protected resource preparation
+## Original source recovery and reading
 
-`GET /api/v1/inbound-messages/{id}/document-resources/{resourceId}` resolves only a server-owned manifest row for
-that original message's current document revision and Service. It returns a raster response with verified MIME,
-byte length, hexadecimal `X-Content-SHA256`, no-store, nosniff and sandbox headers. No query accepts a raw URL.
-CID uses the existing protected attachment read, its byte digest, scanner and current full-envelope authorization.
-Remote/embedded images are byte-identified and checked against current scanner policy before encrypted caching.
-`require_clean` accepts clean only; `integrity_only` accepts verified only. Scanner changes reverify retained cache
-bytes instead of contacting the sender again, and invalidate the prior cache proof.
+The [hosted mail reader](MAIL_READER.md) is the only visual reader and resource preparer. Opening a reading
+session automatically resolves retained canonical source, raw MIME or verified original-provider source; no
+manual reproject operation is required. Source-less mail exposes only genuinely retained text, never invented
+HTML, current logos or guessed attachment/CID associations. Source reconstruction and parsed-image preparation
+have independent lifecycles: original source remains under the message retention/erasure boundary, prepared
+image bytes belong to the unified reader cache.
 
-Limits are 5,000,000 bytes/image, 16,000,000 canvas pixels, 16,384 pixels/edge, 20,000,000 cached bytes/document,
-64 manifest entries and three concurrent media preparations/process. Only PNG/JPEG/GIF/WebP are supported; SVG
-and AVIF are not accepted. These bitmap bounds are independent of the reusable outbound attachment contract.
-Each preparation is leased; transient failures wait at least 30 seconds, and after three attempts wait five minutes
-before a new demand can start a budget. There is no automatic media poller or history scan.
+New inbound ready copies register their reader manifest in the same transaction as completion. Registration is
+metadata-only and does not wait for image HTTP. The worker claims durable bounded image jobs; reading sessions
+use the same source/revision/resource identity and prepare ready images first without rescanning mail history.
+An existing successful inbound replay does not redispatch messages, generate callbacks or duplicate reader work.
 
-Remote reads accept only HTTP(S) on standard ports without URL credentials; every DNS answer must be public.
-IPv4/IPv6 local, private, loopback, link-local, reserved and transition ranges are rejected independently of any
-private-callback development override. Resolved addresses are pinned. At most three redirects are followed, with
-fresh DNS/address/permission checks at every hop. One 10-second wall-clock budget covers even unresolved DNS,
-TLS, authorization and response. Responses have byte limits, no decompression, cookies, authorization or Referer.
-The current original Service and **all** frozen private envelope domains are rechecked at the last HTTP write after
-DNS/TLS waits and again before cache publication/byte return. Parent erasure and document CAS/lease checks fence
-late results. Resource IDs or cached bytes from another Service, revision or erased copy cannot be read.
-
-Identified 1x1 remote images default to `BLOCKED/TRACKING_RISK`; explicit `allowTracking=true` is the only opt-in
-for that resource. Cache use does not promise anonymity: the first allowed fetch can still disclose a tracking hit
-or a sender-specific URL. Unknown tracking cannot be reliably identified. Consumers must keep iframe CSP from
-fetching arbitrary images/fonts even if their display feature supports safe resource replacement.
-
-## Bounded historical reprojection
-
-`POST /api/v1/inbound-messages/{id}/document-reprojection` takes the observed decimal-string expectedRevision.
-Legacy copies start at zero. The application rechecks original ownership, obtains a real retained source outside
-the write transaction, rebuilds the current safe document and publishes via locked CAS. At most two such repairs
-run concurrently/process. Repeating the current policy/current revision is idempotent; stale revisions conflict.
-The original inbound ID, Service, provider external ID, envelope, attachments, status/ready time, callbacks and change
-stream remain unchanged. An audit stores only old/new revision and resource identity, without body/source URLs.
-Ordinary ready-copy replay is intentionally unchanged; this is an independent read-projection operation.
-
-Source priority is encrypted canonical source, retained private raw MIME, then retained verified provider receipt.
-Postmark/SendGrid/Mailgun receipts can contain the original HTML/text or MIME. Resend uses only its fixed native
-received-message GET for the original stored provider account/external ID, with original-copy authorization and
-current provider credential rechecked after TLS immediately before writing. It fetches no attachments, follows no
-redirects and can use that frozen copy identity even when the earlier webhook receipt expired. Provider 404/410 is
-source unavailable; transient storage/provider errors defer instead of falsely claiming the source was lost.
-No raw MIME/verified receipt endpoint is exposed. No current logo substitutes for historical content.
-
-Callers request old repair on actual reading demand, apply their own persistent audit/lease/CAS, finite backoff,
-small shared recovery budgets and resumable markers. Do not scan all history or reproject at second-scale polling.
-Sources erased or no longer retained cannot reconstruct original tables, images or styling; readable residual text
-is kept honestly and no broader grant or current routing decision can repair a revoked private copy.
+The version-1 passive projection and resource metadata remain message synchronization facts. Its old standalone
+image preparation and manual reproject endpoints/orchestration are removed. Migration 008 clears only obsolete
+prepared bytes/hash/scan proofs/leases; original source, metadata, messages and callbacks are retained. The hosted
+reader compiles a new `mail-reader-v2` document directly from original source; it does not special-case or revive
+old tracking/failed resource states.
 
 ## Parser dependencies and provider evidence
 
@@ -129,10 +96,8 @@ when available. Provider-specific references: [SendGrid inbound fields](https://
 
 ## Verification
 
-Run `pnpm architecture:check`, `pnpm db:check`, `pnpm typecheck`, `pnpm lint`, and `pnpm build`.
-Run `TEST_DATABASE_ADMIN_URL=<isolated-local-admin-url> pnpm test` against a disposable PostgreSQL instance;
-the runner creates and drops uniquely named databases. Database suites allow 30 seconds per full catalog case.
-They cover empty setup, V5 legacy body preservation with revision zero, complete V6 rollback/retry, repeated
-validation and checksum/catalog drift refusal. Document cases exercise genuine retained MIME, source-less
-fallback, original provider identity without a receipt, late revocation, source erasure and encrypted image caches.
-Provider cases use real MIME and explicit part-key CID maps; network tests use isolated transports and do not send mail.
+Run architecture/db checks, typecheck, lint, production build and tests using an explicitly isolated PostgreSQL
+admin URL. [MAIL_READER.md](MAIL_READER.md) defines hosted rendering, resource and renewal acceptance. Inbound
+integration checks retain separate original HTML/text, atomic ready/manifest registration, same-reader revision
+identity, protected CID ownership and cache erasure/revocation; parser/provider checks retain genuine MIME and
+part-key CID evidence. No test sends mail or uses deployment data.

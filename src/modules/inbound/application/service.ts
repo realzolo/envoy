@@ -129,6 +129,8 @@ async function persistInboundCopy(input: InboundInput, scope: string, serviceId:
         await client.registerAttachment(attachmentId,"inbound",serviceId,file.sha256);
       }
       await client.saveDocument(id, document);
+      await client.enqueueReaderSource({kind:"INBOUND",id,serviceId,html:message.html??null,text:message.text??null,
+        attachments:attachments.map(file=>({id:file.id,contentId:file.contentId??null,contentType:file.contentType,size:file.content.byteLength,sha256:file.sha256}))});
       await client.completeUploads( writtenKeys);
       const callback = serviceId ? await client.subscribedCallbacks({ serviceId }) : { rows: [] };
       for (const {id:callbackEndpointId} of callback.rows) {

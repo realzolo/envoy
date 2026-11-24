@@ -1,3 +1,4 @@
+import { createGunzip,createInflate,createBrotliDecompress } from "node:zlib";
 import { lookup } from "node:dns/promises";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
@@ -21,7 +22,8 @@ export async function mediaTarget(raw: string, resolver: MediaResolver = host =>
 }
 
 /** Fixed manifest URL only; DNS pinned, every redirect revalidated, no ambient credentials or cookies. */
-export async function fetchDocumentImage(raw: string, authorize: () => Promise<void>, resolver?: MediaResolver, timeoutMs = MEDIA_EXECUTION_TIMEOUT_MS): Promise<Uint8Array> {
+export async function fetchDocumentImage(raw: string, authorize: () => Promise<void>, resolver?: MediaResolver, timeoutMs = MEDIA_EXECUTION_TIMEOUT_MS, options: {maximumBytes?:number;accept?:string;allowCompression?:boolean} = {}): Promise<Uint8Array> {
+  const maximumBytes=options.maximumBytes??MAX_IMAGE_BYTES;
   const controller=new AbortController(); let timer: ReturnType<typeof setTimeout>;
   const deadline=new Promise<never>((_,reject)=>{timer=setTimeout(()=>{controller.abort();reject(new DocumentResourceError("FETCH_FAILED"));},timeoutMs);});
   try { return await Promise.race([deadline,(async()=>{
@@ -35,16 +37,19 @@ export async function fetchDocumentImage(raw: string, authorize: () => Promise<v
           const selected=target.addresses.filter(item=>!options.family||options.family===item.family);const list=selected.length?selected:target.addresses;
           if(options.all)cb(null,list);else cb(null,list[0].address,list[0].family);
         }) as LookupFunction;
-        const request=transport(target.url,{method:"GET",agent:false,lookup:pinned,signal:controller.signal,headers:{accept:"image/png,image/jpeg,image/gif,image/webp","accept-encoding":"identity","user-agent":"Envoy-Mail-Media/1"}},response=>{
+        const request=transport(target.url,{method:"GET",agent:false,lookup:pinned,signal:controller.signal,headers:{accept:options.accept??"image/png,image/jpeg,image/gif,image/webp","accept-encoding":options.allowCompression?"gzip, deflate, br":"identity","user-agent":"Envoy-Mail-Media/1"}},response=>{
           const status=response.statusCode??0;
           if([301,302,303,307,308].includes(status)&&response.headers.location){response.destroy();resolve({location:response.headers.location});return;}
           if(status<200||status>=300){response.destroy();reject(new DocumentResourceError("FETCH_FAILED"));return;}
-          if(response.headers["content-encoding"]&&response.headers["content-encoding"]!=="identity"){response.destroy();reject(new DocumentResourceError("UNSUPPORTED_TYPE"));return;}
+          const encoding=response.headers["content-encoding"]?.toLowerCase()??"identity";
+          if(encoding!=="identity"&&(!options.allowCompression||!["gzip","deflate","br"].includes(encoding))){response.destroy();reject(new DocumentResourceError("UNSUPPORTED_TYPE"));return;}
+          const decoded=encoding==="gzip"?response.pipe(createGunzip()):encoding==="deflate"?response.pipe(createInflate()):encoding==="br"?response.pipe(createBrotliDecompress()):response;
+          response.on("error",reject);
           const length=Number(response.headers["content-length"]??0);
-          if(length>MAX_IMAGE_BYTES){response.destroy();reject(new DocumentResourceError("SIZE_LIMIT"));return;}
+          if(length>maximumBytes){response.destroy();reject(new DocumentResourceError("SIZE_LIMIT"));return;}
           let size=0;const chunks:Buffer[]=[];
-          response.on("data",(chunk:Buffer)=>{size+=chunk.length;if(size>MAX_IMAGE_BYTES){response.destroy();reject(new DocumentResourceError("SIZE_LIMIT"));}else chunks.push(chunk);});
-          response.on("end",()=>resolve({bytes:new Uint8Array(Buffer.concat(chunks))}));response.on("error",reject);
+          decoded.on("data",(chunk:Buffer)=>{size+=chunk.length;if(size>maximumBytes){decoded.destroy();response.destroy();reject(new DocumentResourceError("SIZE_LIMIT"));}else chunks.push(chunk);});
+          decoded.on("end",()=>resolve({bytes:new Uint8Array(Buffer.concat(chunks))}));decoded.on("error",reject);
         });
         request.on("error",reject);
         request.once("socket",socket=>socket.once(target.url.protocol==="https:"?"secureConnect":"connect",()=>{

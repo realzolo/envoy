@@ -7,3 +7,4 @@ export * from "./attachments";
 export * from "./callbacks";
 export * from "./suppressions";
 export * from "./operations";
+export * from "./mail-reader";

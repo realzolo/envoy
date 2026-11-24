@@ -496,30 +496,16 @@ provider call; queue-time changes can cause a determinate preparation failure, n
 Inbound body availability/callbacks do not assert that attachments are already safe. Poll detail for attachment changes;
 the inbound change feed records body availability and content erasure, not per-attachment scan completion.
 
-## Passive inbound reading documents
+## Inbound source facts
 
-Inbound detail now includes nullable `document` alongside independent `html` / `text`. New accepted copies use
-projection version 1 and policy `mail-passive-v1`; older copies remain `document: null` until explicitly repaired.
-HTML retains safe authored tables, classes and parsed styles. Resource attributes and CSS URLs use only
-`mail-resource:<opaqueResourceId>`; image source URLs, embedded bytes and private object keys never appear in the
-manifest. A consumer must replace only declared resources with its own authorized private copies and keep an
-opaque iframe, sanitization and a network-denying CSP. Sender-authored URL/base64 **text** is preserved.
+Inbound detail retains nullable `document` alongside independent `html` / `text`. These version-1
+`mail-passive-v1` facts support message synchronization and source provenance; historical copies may have no
+projection. Resource references are metadata, not browser URLs. The strict finite schema remains
+[contracts/inbound-document.schema.json](contracts/inbound-document.schema.json).
 
-- `POST /inbound-messages/{id}/document-reprojection` takes `{ "expectedRevision": "0" }` for an unprojected copy;
-  it returns the same complete inbound detail. Current-policy requests are idempotent at the current revision;
-  stale revisions return `409 DOCUMENT_REVISION_CONFLICT`. It reads retained genuine sources without redispatch,
-  callbacks or sends. Missing sources produce `SOURCE_UNAVAILABLE`, null HTML and any honestly retained text.
-- `GET /inbound-messages/{id}/document-resources/{resourceId}` reads/prepares one fixed owned raster and returns
-  verified `Content-Type` and `X-Content-SHA256`. It accepts no source URL. Missing, preparing and unavailable
-  resources return content-free 404/409 problems; callers apply finite backoff.
-- Default preparation blocks identified one-pixel remote images as `TRACKING_RISK`. Only explicit
-  `?allowTracking=true` permits that specific resource; it never overrides current authorization, private-address
-  restrictions, limits, scanner policy or erasure. Callers must not turn ordinary retry into tracking permission.
-
-The strict finite document schema is [contracts/inbound-document.schema.json](contracts/inbound-document.schema.json).
-[INBOUND_DOCUMENTS.md](INBOUND_DOCUMENTS.md) defines source recovery, media budgets, encryption, erasure and the
-supported passive CSS subset. `READY` is an Envoy fact, not approval for a caller's private copy or business scope.
-
+All visual reading, image preparation and original-layout recovery use the [hosted mail reader](MAIL_READER.md).
+The old independent image-byte preparation and manual document-reprojection endpoints are retired. Clients must
+not reinterpret the version-1 tracking classification or build a second HTML rendering pipeline from these facts.
 
 ### Domain identity recovery
 
@@ -538,3 +524,13 @@ All routes require an administrator session and use the standard `{ok,result}` r
 Existing PATCH routes with `{enabled:true}` restore archived resources. Managed identities return to pending. Removed Service grants must be configured again. Delete/archive retain the remote provider domain. Retrying registration reuses existing resources; restore archived resources explicitly.
 
 DNS responses represent the provider's required records, including purpose, TTL and MX priority when reported. Sending eligibility remains conservative for partially verified/unknown provider states.
+
+## Hosted mail reading sessions
+
+The full-fidelity reader is issued with `POST /inbound-messages/{id}/reading-session` (empty JSON), or
+`POST /messages/{id}/reading-session` with `{recipient}` identifying one exact delivery. Responses are
+`{url,expiresAt,documentRevision,channelId}`; the opaque HTTPS URL is usable by a sandboxed iframe without exposing
+Service credentials. Sessions expire after 120 seconds and are renewed through the original authenticated POST.
+The reader owns HTML/CSS/image resolution; clients do not rewrite the HTML or copy its images into business storage.
+See [the hosted reader contract](MAIL_READER.md) for original-source recovery, current authorization, cache lifetime,
+resource states, cross-origin iframe messages and deployment prerequisites.
