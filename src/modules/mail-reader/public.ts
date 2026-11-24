@@ -4,12 +4,13 @@ export { renderReader } from "./domain/frame";
 export type { ReadingSession, ReaderTarget, ReaderResourceTarget } from "./contracts";
 
 import { mailReader } from "@/bootstrap/mail-reader";
+import { readerCache } from "./infrastructure/cache.repository";
+
 export const prepareReaderResource = mailReader.prepareResource;
 
-import { readerCache } from "./infrastructure/cache.repository";
-export const pendingReaderResources=readerCache.pending;
+export const pendingReaderResources = readerCache.pending;
 
-export const cancelUnauthorizedReaderDemand=readerCache.cancelUnauthorizedDemand;
-export const deferReaderPreparationDemand=readerCache.deferPreparationDemand;
+export const cancelUnauthorizedReaderDemand = readerCache.cancelUnauthorizedDemand;
+export const deferReaderPreparationDemand = readerCache.deferPreparationDemand;
 
 export { registerReadingSource } from "./infrastructure/registration";

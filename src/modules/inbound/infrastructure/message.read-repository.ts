@@ -1,8 +1,7 @@
 import { readDocumentMetadata } from "./document.repository";
 import type { InboundDocument } from "../contracts";
 import { inboundDomainAccess } from "@/modules/identity/infrastructure/authorization";
-import { downloadAttachment } from "@/modules/attachments/public";
-import { attachmentUsage, type SafetyRow } from "@/modules/attachments/public";
+import { attachmentUsage, downloadAttachment, type SafetyRow } from "@/modules/attachments/public";
 import { query } from "@/platform/database";
 import { encodeCursor } from "@/lib/pagination";
 
@@ -87,8 +86,8 @@ export async function getInboundMessage(id: string, serviceId: string) {
     sha256: string; safety: SafetyRow | null;
     content_purged_at: Date | null;
   }>("SELECT a.id,a.file_name,a.content_type,a.size_bytes::text,a.content_id,a.sha256,a.content_purged_at,row_to_json(s) AS safety FROM inbound_attachments a LEFT JOIN attachment_safety s ON s.resource_id=a.id WHERE a.inbound_message_id=$1 ORDER BY a.created_at,a.id", [id])).rows;
-  const document=message.content_purged_at || message.status!=="ready" ? null:await readDocumentMetadata(id,serviceId,message.document_projection);
-  if(!(await query(`SELECT i.id FROM inbound_messages i WHERE i.id=$1 AND i.service_id=$2 AND ${inboundDomainAccess('i')} AND i.document_revision=$3 AND (i.content_purged_at IS NOT NULL)=$4::boolean`,[id,serviceId,message.document_revision,message.content_purged_at!==null])).rowCount)return null;
+  const document = message.content_purged_at || message.status !== "ready" ? null : await readDocumentMetadata(id, serviceId, message.document_projection);
+  if (!(await query(`SELECT i.id FROM inbound_messages i WHERE i.id=$1 AND i.service_id=$2 AND ${inboundDomainAccess('i')} AND i.document_revision=$3 AND (i.content_purged_at IS NOT NULL)=$4::boolean`, [id, serviceId, message.document_revision, message.content_purged_at !== null])).rowCount) return null;
   return {
     id: message.id,
     messageId: message.message_id ?? null,
@@ -101,8 +100,8 @@ export async function getInboundMessage(id: string, serviceId: string) {
     cc: message.cc_emails,
     bcc: message.bcc_emails,
     subject: message.subject,
-    html: message.content_purged_at || message.status!=="ready" ? null : message.sanitized_html,
-    text: message.content_purged_at || message.status!=="ready" ? null : message.text_body,
+    html: message.content_purged_at || message.status !== "ready" ? null : message.sanitized_html,
+    text: message.content_purged_at || message.status !== "ready" ? null : message.text_body,
     document,
     contentPurgedAt: message.content_purged_at?.toISOString() ?? null,
     status: message.status,
@@ -117,7 +116,7 @@ export async function getInboundMessage(id: string, serviceId: string) {
       contentType: item.content_type,
       size: Number(item.size_bytes),
       contentId: item.content_id,
-      usage: attachmentUsage(item.content_purged_at === null,item.sha256,item.safety,"inbound"),
+      usage: attachmentUsage(item.content_purged_at === null, item.sha256, item.safety, "inbound"),
       contentAvailable: item.content_purged_at === null,
     })),
   };
@@ -126,7 +125,7 @@ export async function getInboundMessage(id: string, serviceId: string) {
 // serviceId is mandatory for service callers; administrators call without it
 // only after their own session authorization. Object keys never leave the server.
 export async function getInboundAttachment(id: string, attachmentId: string, serviceId?: string) {
-  return downloadAttachment("inbound",attachmentId,serviceId,id);
+  return downloadAttachment("inbound", attachmentId, serviceId, id);
 }
 
 export async function ownsInboundAttachment(id: string, attachmentId: string, serviceId: string) {

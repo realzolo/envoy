@@ -9,7 +9,13 @@ export async function queuePermissionsChanged(client: PoolClient, serviceId: str
   )).rows[0];
   if (!row) return;
   const id = createId("cbx");
-  const payload = { id: createId("evt"), apiVersion: "v1", type: "service.permissions_changed", occurredAt: new Date().toISOString(), data: { serviceId } };
+  const payload = {
+    id: createId("evt"),
+    apiVersion: "v1",
+    type: "service.permissions_changed",
+    occurredAt: new Date().toISOString(),
+    data: { serviceId }
+  };
   await client.query("INSERT INTO callback_deliveries(id,endpoint_id,event_type,payload) VALUES($1,$2,'service.permissions_changed',$3)", [id, row.id, payload]);
   await client.query("INSERT INTO outbox_events(id,aggregate_type,aggregate_id,event_type,payload) VALUES($1,'callback',$2,'callback.requested',$3)", [createId("out"), id, { callbackDeliveryId: id }]);
 }

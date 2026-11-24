@@ -1,4 +1,5 @@
 import type { CanonicalInboundMessage } from "@/integrations/providers/contracts";
+
 export type InboundInput = {
   providerAccountId: string;
   webhookEndpointId: string;
@@ -12,6 +13,11 @@ export type InboundDispatch = {
 };
 
 
-export type { MailResourceState as InboundResourceState, MailResourceReason as InboundResourceReason, MailDocumentResource as InboundDocumentResource, MailDocument as InboundDocument } from "@/lib/mail-document-contracts";
+export type {
+  MailResourceState as InboundResourceState,
+  MailResourceReason as InboundResourceReason,
+  MailDocumentResource as InboundDocumentResource,
+  MailDocument as InboundDocument
+} from "@/lib/mail-document-contracts";
 
 export { inboundDocumentSchema, inboundDocumentResourceSchema } from "./domain/document-wire";

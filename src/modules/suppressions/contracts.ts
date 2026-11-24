@@ -6,10 +6,41 @@ export const adminSuppressionSchema = z.object({
   email: z.string().trim().email().max(320), scope: z.enum(["global", "service", "list"]),
   serviceId: optionalId, listId: optionalId, reason: z.string().trim().min(1).max(240), expiresAt: optionalDate,
 }).strict().superRefine((v, ctx) => {
-  if (v.scope === "global" && (v.serviceId || v.listId)) ctx.addIssue({ code: "custom", path: ["scope"], message: "Global suppressions cannot target a service or list" });
-  if (v.scope === "service" && (!v.serviceId || v.listId)) ctx.addIssue({ code: "custom", path: ["scope"], message: "Service suppressions require a service and cannot target a list" });
-  if (v.scope === "list" && (!v.serviceId || !v.listId)) ctx.addIssue({ code: "custom", path: ["scope"], message: "List suppressions require both a service and list ID" });
+  if (v.scope === "global" && (v.serviceId || v.listId)) ctx.addIssue({
+    code: "custom",
+    path: ["scope"],
+    message: "Global suppressions cannot target a service or list"
+  });
+  if (v.scope === "service" && (!v.serviceId || v.listId)) ctx.addIssue({
+    code: "custom",
+    path: ["scope"],
+    message: "Service suppressions require a service and cannot target a list"
+  });
+  if (v.scope === "list" && (!v.serviceId || !v.listId)) ctx.addIssue({
+    code: "custom",
+    path: ["scope"],
+    message: "List suppressions require both a service and list ID"
+  });
 });
-export type SuppressionInput = { serviceId: string; email: string; scope: "service" | "list"; listId?: string; reason: string; expiresAt?: string };
-export type AdminSuppressionInput = Omit<SuppressionInput, "serviceId" | "scope"> & { serviceId?: string; scope: "global" | "service" | "list" };
-export type SuppressionDto = { id: string; scope: string; listId: string | null; email: string; reason: string; source: string; expiresAt: string | null; createdAt: string };
+export type SuppressionInput = {
+  serviceId: string;
+  email: string;
+  scope: "service" | "list";
+  listId?: string;
+  reason: string;
+  expiresAt?: string
+};
+export type AdminSuppressionInput = Omit<SuppressionInput, "serviceId" | "scope"> & {
+  serviceId?: string;
+  scope: "global" | "service" | "list"
+};
+export type SuppressionDto = {
+  id: string;
+  scope: string;
+  listId: string | null;
+  email: string;
+  reason: string;
+  source: string;
+  expiresAt: string | null;
+  createdAt: string
+};

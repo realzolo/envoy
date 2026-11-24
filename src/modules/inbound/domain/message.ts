@@ -14,8 +14,8 @@ export function address(value: string) {
   return (match?.[1] ?? value).trim().toLowerCase()
 }
 
-export function authorDate(value:Date|null|undefined) {
+export function authorDate(value: Date | null | undefined) {
   // RFC content dates outside PostgreSQL's portable four-digit ISO range stay unknown.
-  return value && Number.isFinite(value.getTime()) && value.getUTCFullYear()>=1 && value.getUTCFullYear()<=9999 ? value.toISOString() : null;
+  return value && Number.isFinite(value.getTime()) && value.getUTCFullYear() >= 1 && value.getUTCFullYear() <= 9999 ? value.toISOString() : null;
 }
 

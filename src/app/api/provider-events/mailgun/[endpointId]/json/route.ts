@@ -3,5 +3,10 @@ import { POST as receiveProviderEvent } from "../../../[provider]/[endpointId]/r
 export const runtime = "nodejs";
 
 export function POST(request: Request, { params }: { params: Promise<{ endpointId: string }> }) {
-  return receiveProviderEvent(request, { params: params.then(({ endpointId }) => ({ provider: "mailgun", endpointId })) });
+  return receiveProviderEvent(request, {
+    params: params.then(({ endpointId }) => ({
+      provider: "mailgun",
+      endpointId
+    }))
+  });
 }

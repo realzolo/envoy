@@ -1,6 +1,8 @@
-import type { DomainDto,ProviderAccountDto,ProviderWebhookDto } from '@/modules/admin/contracts';
+import type { DomainDto, ProviderAccountDto, ProviderWebhookDto } from '@/modules/admin/contracts';
 import { query } from '@/platform/database';
-export const channelsAdminReads={providers: () => query<ProviderAccountDto>(`SELECT a.id,a.type,a.name,a.status,a.public_config,
+
+export const channelsAdminReads = {
+  providers: () => query<ProviderAccountDto>(`SELECT a.id,a.type,a.name,a.status,a.public_config,
     coalesce(a.health->>'status','unknown') AS health,a.health AS health_details,a.quota,a.created_at,
     c.credential_version,e.id AS webhook_endpoint_id,e.opaque_token,e.status AS webhook_status,
     e.security_configured,e.expected_topic_arn,e.ip_allowlist,
@@ -9,7 +11,7 @@ export const channelsAdminReads={providers: () => query<ProviderAccountDto>(`SEL
     JOIN provider_credentials c ON c.provider_account_id=a.id AND c.status='active'
     JOIN provider_webhook_endpoints e ON e.provider_account_id=a.id
     ORDER BY a.name`),
-domains: () => query<DomainDto>(`SELECT sd.id,sd.domain,sd.status,sd.archived_at,
+  domains: () => query<DomainDto>(`SELECT sd.id,sd.domain,sd.status,sd.archived_at,
 	    ARRAY(SELECT source.provider_account_id FROM domain_inbound_sources source WHERE source.sending_domain_id=sd.id ORDER BY source.provider_account_id) AS inbound_source_account_ids,
     (SELECT count(*)::int FROM service_domain_bindings b
       JOIN services s ON s.id=b.service_id AND s.status='active'
@@ -23,5 +25,6 @@ domains: () => query<DomainDto>(`SELECT sd.id,sd.domain,sd.status,sd.archived_at
     LEFT JOIN provider_identities pi ON pi.sending_domain_id=sd.id
     LEFT JOIN provider_accounts pa ON pa.id=pi.provider_account_id
     GROUP BY sd.id ORDER BY sd.domain`),
-webhooks: () => query<ProviderWebhookDto>(`SELECT e.id,e.opaque_token,e.status,e.security_configured,e.expected_topic_arn,e.ip_allowlist,e.created_at,pa.id AS provider_account_id,pa.name AS account,pa.type
-    FROM provider_webhook_endpoints e JOIN provider_accounts pa ON pa.id=e.provider_account_id ORDER BY e.created_at DESC`)};
+  webhooks: () => query<ProviderWebhookDto>(`SELECT e.id,e.opaque_token,e.status,e.security_configured,e.expected_topic_arn,e.ip_allowlist,e.created_at,pa.id AS provider_account_id,pa.name AS account,pa.type
+    FROM provider_webhook_endpoints e JOIN provider_accounts pa ON pa.id=e.provider_account_id ORDER BY e.created_at DESC`)
+};

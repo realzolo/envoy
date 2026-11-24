@@ -3,13 +3,17 @@ import { createUnitOfWork } from "@/platform/database";
 import { createId } from "@/platform/ids";
 import { openSecret, sealSecret } from "@/platform/crypto/envelope";
 import { callbackRepository } from "@/modules/callbacks/infrastructure/callback.repository";
-import { sendCallback, resolveCallbackTarget } from "@/modules/callbacks/infrastructure/http-transport";
+import { resolveCallbackTarget, sendCallback } from "@/modules/callbacks/infrastructure/http-transport";
 import { createCallbackService } from "@/modules/callbacks/application/service";
 
-export async function validateCallbackUrl(url: string) { return (await resolveCallbackTarget(url)).url.toString(); }
+export async function validateCallbackUrl(url: string) {
+  return (await resolveCallbackTarget(url)).url.toString();
+}
 
 export const callbackService = createCallbackService({
-  get repository() { return callbackRepository(); }, unitOfWork: createUnitOfWork(callbackRepository), id: createId, now: () => new Date(Date.now()),
+  get repository() {
+    return callbackRepository();
+  }, unitOfWork: createUnitOfWork(callbackRepository), id: createId, now: () => new Date(Date.now()),
   transport: {
     validate: validateCallbackUrl,
     send: sendCallback,

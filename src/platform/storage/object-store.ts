@@ -1,4 +1,4 @@
-import { mkdir, writeFile, rm } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
@@ -22,16 +22,19 @@ export function objectStorageKey(key: string, configuredPrefix = process.env.OBJ
 }
 
 
-async function boundedBytes(stream: AsyncIterable<Uint8Array> & {destroy?:()=>void},maximum=30_000_000) {
-  const chunks:Buffer[]=[];let length=0;
+async function boundedBytes(stream: AsyncIterable<Uint8Array> & { destroy?: () => void }, maximum = 30_000_000) {
+  const chunks: Buffer[] = [];
+  let length = 0;
   try {
     for await (const chunk of stream) {
-      length+=chunk.byteLength;
-      if(length>maximum) throw new Error("Object exceeds the permitted size");
+      length += chunk.byteLength;
+      if (length > maximum) throw new Error("Object exceeds the permitted size");
       chunks.push(Buffer.from(chunk));
     }
     return new Uint8Array(Buffer.concat(chunks));
-  } finally { stream.destroy?.(); }
+  } finally {
+    stream.destroy?.();
+  }
 }
 
 class LocalObjectStore implements ObjectStore {
@@ -44,7 +47,7 @@ class LocalObjectStore implements ObjectStore {
   }
 
   async get(key: string, maximum?: number) {
-    return boundedBytes(createReadStream(this.path(key)),maximum);
+    return boundedBytes(createReadStream(this.path(key)), maximum);
   }
 
   async delete(key: string) {
@@ -102,7 +105,7 @@ class S3ObjectStore implements ObjectStore {
   async get(key: string, maximum?: number) {
     const result = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: objectStorageKey(key) }));
     if (!result.Body) throw new Error("Object body is empty");
-    return boundedBytes(result.Body as AsyncIterable<Uint8Array> & {destroy?:()=>void},maximum);
+    return boundedBytes(result.Body as AsyncIterable<Uint8Array> & { destroy?: () => void }, maximum);
   }
 }
 

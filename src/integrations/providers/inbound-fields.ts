@@ -1,58 +1,65 @@
-import { simpleParser, type AddressObject } from "mailparser";
+import { type AddressObject, simpleParser } from "mailparser";
+
 export function smtpRecipients(input: unknown): string[] | undefined {
-    return Array.isArray(input) && input.every(item => typeof item === "string") ? input : undefined;
+  return Array.isArray(input) && input.every(item => typeof item === "string") ? input : undefined;
 }
+
 export function mailAddresses(value: AddressObject | AddressObject[] | undefined) {
-    return (value ? (Array.isArray(value) ? value : [value]) : []).flatMap(group => group.value.flatMap(item => item.address ? [item.address] : []));
+  return (value ? (Array.isArray(value) ? value : [value]) : []).flatMap(group => group.value.flatMap(item => item.address ? [item.address] : []));
 }
+
 /** mailparser replaces invalid Date values with now(); validate the original header instead. */
 export function declaredAuthorDate(parsed: {
-    headerLines: readonly {
-        key: string;
-        line: string;
-    }[];
+  headerLines: readonly {
+    key: string;
+    line: string;
+  }[];
 }) {
-    const dates = parsed.headerLines.filter(header => header.key.toLowerCase() === "date");
-    if (dates.length !== 1)
-        return null;
-    const raw = dates[0].line.replace(/^date:/i, "").replace(/\r?\n[ \t]+/g, " ").trim();
-    const value = new Date(raw);
-    return raw && Number.isFinite(value.getTime()) ? value : null;
+  const dates = parsed.headerLines.filter(header => header.key.toLowerCase() === "date");
+  if (dates.length !== 1)
+    return null;
+  const raw = dates[0].line.replace(/^date:/i, "").replace(/\r?\n[ \t]+/g, " ").trim();
+  const value = new Date(raw);
+  return raw && Number.isFinite(value.getTime()) ? value : null;
 }
+
 /** Parse standard content headers only. They are never evidence of SMTP ownership. */
 export async function inboundHeaders(input: unknown) {
-    const raw = typeof input === "string" ? input : (Array.isArray(input) ? input.map(item => Array.isArray(item) ? item : [item?.Name, item?.Value]) : Object.entries((input ?? {}) as object))
-        .filter(([name, value]) => typeof name === "string" && typeof value === "string")
-        .map(([name, value]) => `${name}: ${String(value).replace(/\r?\n(?![ \t])/g, " ")}`).join("\r\n");
-    const parsed = await simpleParser(`${raw}\r\n\r\n`);
-    return {
-        authorDate: declaredAuthorDate(parsed),
-        messageId: parsed.messageId,
-        replyTo: mailAddresses(parsed.replyTo),
-        inReplyTo: parsed.inReplyTo,
-        references: typeof parsed.references === "string" ? [parsed.references] : parsed.references ?? [],
-        to: mailAddresses(parsed.to), cc: mailAddresses(parsed.cc),
-    };
+  const raw = typeof input === "string" ? input : (Array.isArray(input) ? input.map(item => Array.isArray(item) ? item : [item?.Name, item?.Value]) : Object.entries((input ?? {}) as object))
+    .filter(([name, value]) => typeof name === "string" && typeof value === "string")
+    .map(([name, value]) => `${name}: ${String(value).replace(/\r?\n(?![ \t])/g, " ")}`).join("\r\n");
+  const parsed = await simpleParser(`${raw}\r\n\r\n`);
+  return {
+    authorDate: declaredAuthorDate(parsed),
+    messageId: parsed.messageId,
+    replyTo: mailAddresses(parsed.replyTo),
+    inReplyTo: parsed.inReplyTo,
+    references: typeof parsed.references === "string" ? [parsed.references] : parsed.references ?? [],
+    to: mailAddresses(parsed.to), cc: mailAddresses(parsed.cc),
+  };
 }
 
 const MAX_CID_METADATA_CHARACTERS = 262_144;
 const MAX_CID_METADATA_ENTRIES = 1024;
+
 /** Provider form-part keys establish the mapping; filenames never establish CID ownership. */
 export function inboundContentIds(raw: unknown, rawAttachmentInfo?: unknown): ReadonlyMap<string, string> {
-    const object = (value: unknown): Record<string, unknown> => {
-        try {
-            if (typeof value === "string") value = value.length <= MAX_CID_METADATA_CHARACTERS ? JSON.parse(value) : null;
-            return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
-        } catch { return {}; }
-    };
-    const ids = new Map<string, string>(), conflicts = new Set<string>();
-    const add = (part: unknown, cid: unknown) => {
-        if (typeof part !== "string" || !/^attachment-?\d+$/.test(part) || typeof cid !== "string" || !cid || cid.length > 998) return;
-        if (ids.has(part) && ids.get(part) !== cid) conflicts.add(part);
-        else ids.set(part, cid);
-    };
-    for (const [cid, part] of Object.entries(object(raw)).slice(0, MAX_CID_METADATA_ENTRIES)) add(part, cid);
-    for (const [part, info] of Object.entries(object(rawAttachmentInfo)).slice(0, MAX_CID_METADATA_ENTRIES)) add(part, object(info)["content-id"]);
-    for (const part of conflicts) ids.delete(part);
-    return ids;
+  const object = (value: unknown): Record<string, unknown> => {
+    try {
+      if (typeof value === "string") value = value.length <= MAX_CID_METADATA_CHARACTERS ? JSON.parse(value) : null;
+      return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+    } catch {
+      return {};
+    }
+  };
+  const ids = new Map<string, string>(), conflicts = new Set<string>();
+  const add = (part: unknown, cid: unknown) => {
+    if (typeof part !== "string" || !/^attachment-?\d+$/.test(part) || typeof cid !== "string" || !cid || cid.length > 998) return;
+    if (ids.has(part) && ids.get(part) !== cid) conflicts.add(part);
+    else ids.set(part, cid);
+  };
+  for (const [cid, part] of Object.entries(object(raw)).slice(0, MAX_CID_METADATA_ENTRIES)) add(part, cid);
+  for (const [part, info] of Object.entries(object(rawAttachmentInfo)).slice(0, MAX_CID_METADATA_ENTRIES)) add(part, object(info)["content-id"]);
+  for (const part of conflicts) ids.delete(part);
+  return ids;
 }

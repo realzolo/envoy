@@ -1,4 +1,4 @@
-import { serviceRoute, apiProblem } from "@/server/service-api";
+import { apiProblem, serviceRoute } from "@/server/service-api";
 import { cancelMessage } from "@/modules/outbound/public";
 
 export const POST = serviceRoute(async (request, identity, context: { params: Promise<{ id: string }> }) => {

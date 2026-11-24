@@ -1,4 +1,5 @@
 import type { DeliverySnapshot, MailDiagnostic } from "@/contracts/mail-diagnostics";
+
 export type DeliveryStatus =
   | "delivered"
   | "accepted"

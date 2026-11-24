@@ -1,6 +1,5 @@
-import { projectDeliverySnapshot } from "@/modules/outbound/public";
-import { serviceRoute, apiProblem } from "@/server/service-api";
-import { getMessage } from "@/modules/outbound/public";
+import { getMessage, projectDeliverySnapshot } from "@/modules/outbound/public";
+import { apiProblem, serviceRoute } from "@/server/service-api";
 
 export const runtime = "nodejs";
 
@@ -26,7 +25,15 @@ export const GET = serviceRoute(async (request, identity, context: { params: Pro
     headers: message.headers,
     inReplyTo: message.in_reply_to,
     references: message.references_ids,
-    attachments: (message.content_policy === "sensitive" ? [] : message.attachment_snapshot).map(attachment => ({ fileId: attachment.fileId, fileName: attachment.fileName, contentType: attachment.contentType, size: attachment.size, sha256: attachment.sha256, disposition: attachment.disposition, contentId: attachment.contentId })),
+    attachments: (message.content_policy === "sensitive" ? [] : message.attachment_snapshot).map(attachment => ({
+      fileId: attachment.fileId,
+      fileName: attachment.fileName,
+      contentType: attachment.contentType,
+      size: attachment.size,
+      sha256: attachment.sha256,
+      disposition: attachment.disposition,
+      contentId: attachment.contentId
+    })),
     service: message.service,
     category: message.category,
     subject: message.subject,

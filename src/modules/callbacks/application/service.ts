@@ -1,18 +1,25 @@
-import { callbackInputSchema, type CallbackInput, type CallbackClaim } from "../contracts";
-import { CallbackUrlPolicyError, callbackFailure } from "../domain/policy";
+import { type CallbackClaim, type CallbackInput, callbackInputSchema } from "../contracts";
+import { callbackFailure, CallbackUrlPolicyError } from "../domain/policy";
 import type { CallbackDependencies } from "./ports";
 
 export function createCallbackService(deps: CallbackDependencies) {
   const { unitOfWork, transport, secrets, id, now } = deps;
   const scheduleFailure = (row: CallbackClaim, message: string, responseCode: number | null = null, terminal = false) => unitOfWork.run(async repo => {
     const failure = callbackFailure(row.attempt, terminal);
-    const availableAt = await repo.recordFailure(row.id, row.attempt, { ...failure, message: message.slice(0, 2000), responseCode });
+    const availableAt = await repo.recordFailure(row.id, row.attempt, {
+      ...failure,
+      message: message.slice(0, 2000),
+      responseCode
+    });
     if (!failure.dead && availableAt) await repo.enqueue(row.id, id("out"), availableAt);
   });
   return {
     async deliverCallback(deliveryId: string) {
       const row = await deps.repository.claim(deliveryId);
-      if (!row) { await deps.repository.recoverPausedClaim(deliveryId); return; }
+      if (!row) {
+        await deps.repository.recoverPausedClaim(deliveryId);
+        return;
+      }
       try {
         if (!row.eligible) throw new CallbackUrlPolicyError("CALLBACK_BINDING_OR_SUBSCRIPTION_INVALID");
         const body = JSON.stringify(row.payload), timestamp = Math.floor(now().getTime() / 1000).toString();
@@ -62,14 +69,23 @@ export function createCallbackService(deps: CallbackDependencies) {
       await repo.audit(actor, "callback_endpoint.replace_secret", "callback_endpoint", endpointId);
       return { secret };
     }),
-    replayDeadLetters: (actor: string, scope: { endpointId?: string; deliveryId?: string } = {}) => unitOfWork.run(async repo => {
+    replayDeadLetters: (actor: string, scope: {
+      endpointId?: string;
+      deliveryId?: string
+    } = {}) => unitOfWork.run(async repo => {
       const deliveries = await repo.resetDeadLetters(scope);
       for (const deliveryId of deliveries) await repo.enqueue(deliveryId, id("out"));
       await repo.audit(actor, "callback_delivery.replay_dead_letters", "callback_delivery", null, { count: deliveries.length, ...scope });
       return deliveries.length;
     }),
     async testCallback(endpointId: string, actor: string) {
-      const deliveryId = id("cbx"), payload = { id: id("event"), apiVersion: "2026-09-01", type: "endpoint.test", occurredAt: now().toISOString(), data: { message: "Envoy callback endpoint test" } };
+      const deliveryId = id("cbx"), payload = {
+        id: id("event"),
+        apiVersion: "2026-09-01",
+        type: "endpoint.test",
+        occurredAt: now().toISOString(),
+        data: { message: "Envoy callback endpoint test" }
+      };
       await unitOfWork.run(async repo => {
         if (!await repo.isActive(endpointId)) throw new Error("An active callback endpoint is required for a test delivery");
         await repo.createTest(deliveryId, endpointId, payload);

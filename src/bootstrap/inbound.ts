@@ -18,15 +18,30 @@ import { createInboundManagement } from "@/modules/inbound/application/managemen
 import { inboundManagementRepository } from "@/modules/inbound/infrastructure/management.repository";
 
 export const inbound = createInboundService({
-  get repository() { return inboundRepository(); }, unitOfWork: createUnitOfWork(inboundRepository), id: createId,
+  get repository() {
+    return inboundRepository();
+  },
+  unitOfWork: createUnitOfWork(inboundRepository),
+  id: createId,
   digest,
-  prepareDocument: documentWriter({id:()=>createId("idr"),digest,seal:(value,id)=>sealSecret(value,id,1)}), uploads: { register: registerObjectUpload, put: (key, bytes, contentType) => objectStore().put(key, bytes, contentType) },
+  prepareDocument: documentWriter({ id: () => createId("idr"), digest, seal: (value, id) => sealSecret(value, id, 1) }),
+  uploads: {
+    register: registerObjectUpload,
+    put: (key, bytes, contentType) => objectStore().put(key, bytes, contentType)
+  },
 });
 export const listInboundChanges = createInboundChanges(createUnitOfWork(inboundChangesRepository));
 export const inboundManagement = createInboundManagement(createUnitOfWork(inboundManagementRepository), { id: createId });
 
 export const webhookIngress = createWebhookIngress({
-  loadEndpoint: loadWebhookEndpoint, unitOfWork: createUnitOfWork(webhookRepository), id: createId,
-  digest: bytes => createHash("sha256").update(bytes).digest("hex"), seal: sealSecret, encodeVerification: serializeVerification,
-  uploads: { register: registerObjectUpload, put: (key, bytes, contentType) => objectStore().put(key, bytes, contentType) },
+  loadEndpoint: loadWebhookEndpoint,
+  unitOfWork: createUnitOfWork(webhookRepository),
+  id: createId,
+  digest: bytes => createHash("sha256").update(bytes).digest("hex"),
+  seal: sealSecret,
+  encodeVerification: serializeVerification,
+  uploads: {
+    register: registerObjectUpload,
+    put: (key, bytes, contentType) => objectStore().put(key, bytes, contentType)
+  },
 });

@@ -1,13 +1,26 @@
-import { pendingReaderResources, prepareReaderResource, cancelUnauthorizedReaderDemand, deferReaderPreparationDemand, ReaderError } from "@/modules/mail-reader/public";
+import {
+  cancelUnauthorizedReaderDemand,
+  deferReaderPreparationDemand,
+  pendingReaderResources,
+  prepareReaderResource,
+  ReaderError
+} from "@/modules/mail-reader/public";
 import { syncProviderIdentities } from "@/modules/channels/public";
 import { purgeExpiredSensitiveContent } from "@/modules/outbound/public";
-import { processAttachmentScan, scheduleAttachmentScans } from "@/modules/attachments/public";
-import { scanPolicy } from "@/modules/attachments/public";
+import { processAttachmentScan, scanPolicy, scheduleAttachmentScans } from "@/modules/attachments/public";
 import { randomUUID } from "node:crypto";
-import { ATTACHMENT_QUEUE, CALLBACK_QUEUE, closeQueues, createQueueWorker, DELIVERY_QUEUE, EVENT_QUEUE, queueSchemaHealth, RECONCILIATION_QUEUE } from "@/platform/queues";
+import {
+  ATTACHMENT_QUEUE,
+  CALLBACK_QUEUE,
+  closeQueues,
+  createQueueWorker,
+  DELIVERY_QUEUE,
+  EVENT_QUEUE,
+  queueSchemaHealth,
+  RECONCILIATION_QUEUE
+} from "@/platform/queues";
 import { cleanupRuntimeStore, removeWorkerHeartbeat, writeWorkerHeartbeat } from "@/platform/runtime-store";
-import { dispatchOutboxBatch, markOutboxJobFailed } from "@/platform/outbox/public";
-import { recoverWorkBatch } from "@/platform/outbox/public";
+import { dispatchOutboxBatch, markOutboxJobFailed, recoverWorkBatch } from "@/platform/outbox/public";
 import { applicationSchemaHealth, db } from "@/platform/database";
 import { deadLetterCallback } from "@/modules/callbacks/public";
 import { processDelivery } from "@/worker/delivery";
@@ -37,7 +50,10 @@ export async function runWorker() {
     const tick = () => {
       if (stopping || running) return;
       running = true;
-      const task = work().catch(error => console.error(`${name} error`, error)).finally(() => { running = false; active.delete(task); });
+      const task = work().catch(error => console.error(`${name} error`, error)).finally(() => {
+        running = false;
+        active.delete(task);
+      });
       active.add(task);
     };
     tick();
@@ -48,7 +64,9 @@ export async function runWorker() {
     worker.on("failed", (job, error) => {
       if (!job || job.attemptsMade < Number(job.opts.attempts ?? 1)) return;
       const task = (async () => {
-        if (worker.name === CALLBACK_QUEUE) await deadLetterCallback((job.data as { callbackDeliveryId: string }).callbackDeliveryId, error.message);
+        if (worker.name === CALLBACK_QUEUE) await deadLetterCallback((job.data as {
+          callbackDeliveryId: string
+        }).callbackDeliveryId, error.message);
         if (job.id) await markOutboxJobFailed(job.id, error);
       })().catch(failure => console.error("Failed to record exhausted task", failure)).finally(() => active.delete(task));
       active.add(task);
@@ -64,15 +82,19 @@ export async function runWorker() {
     await closeQueues();
     await db().end();
   };
-  const stop = () => void shutdown().catch(error => { console.error("Shutdown error", error); process.exitCode = 1; });
+  const stop = () => void shutdown().catch(error => {
+    console.error("Shutdown error", error);
+    process.exitCode = 1;
+  });
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
   try {
     await Promise.all(workers.map(worker => worker.waitUntilReady()));
     schedule("Mail reader preparation", async () => {
       const outcomes = await Promise.allSettled((await pendingReaderResources(MAIL_READER_PREPARATION_BATCH_SIZE)).map(async job => {
-        try { await prepareReaderResource(job); }
-        catch (error) {
+        try {
+          await prepareReaderResource(job);
+        } catch (error) {
           if (error instanceof ReaderError && error.status === 404) await cancelUnauthorizedReaderDemand(job);
           else if (error instanceof ReaderError && error.status === 409) await deferReaderPreparationDemand(job);
           else throw error;
@@ -90,6 +112,8 @@ export async function runWorker() {
     schedule("Provider identity sync", syncProviderIdentities, 10_000);
     console.log("Envoy PostgreSQL workers started");
     await Promise.all(workers.map(worker => worker.run()));
-  } finally { await shutdown(); }
+  } finally {
+    await shutdown();
+  }
 }
 

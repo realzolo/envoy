@@ -12,8 +12,16 @@ export const serviceDomainBindings = pgTable("service_domain_bindings", {
   createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" }).defaultNow().notNull(),
 }, table => [
-  foreignKey({ columns: [table.serviceId], foreignColumns: [services.id], name: "service_domain_bindings_service_id_fkey" }).onDelete("cascade"),
-  foreignKey({ columns: [table.sendingDomainId], foreignColumns: [sendingDomains.id], name: "service_domain_bindings_sending_domain_id_fkey" }).onDelete("cascade"),
+  foreignKey({
+    columns: [table.serviceId],
+    foreignColumns: [services.id],
+    name: "service_domain_bindings_service_id_fkey"
+  }).onDelete("cascade"),
+  foreignKey({
+    columns: [table.sendingDomainId],
+    foreignColumns: [sendingDomains.id],
+    name: "service_domain_bindings_sending_domain_id_fkey"
+  }).onDelete("cascade"),
   foreignKey({
     columns: [table.outboundProviderIdentityId, table.sendingDomainId],
     foreignColumns: [providerIdentities.id, providerIdentities.sendingDomainId],

@@ -1,12 +1,25 @@
 export type IdentitySyncClaim = { id: string; accountId: string; failures: number; token: string };
+
 export interface IdentitySyncRepository {
   claim(token: string): Promise<IdentitySyncClaim | null>;
-  finish(input: { id: string; token: string; delaySeconds: number; failed: boolean; deferred?: boolean; error: string | null }): Promise<void>;
+
+  finish(input: {
+    id: string;
+    token: string;
+    delaySeconds: number;
+    failed: boolean;
+    deferred?: boolean;
+    error: string | null
+  }): Promise<void>;
 }
+
 export interface IdentitySyncDependencies {
   repository: IdentitySyncRepository;
+
   token(): string;
+
   allowAccount(accountId: string): Promise<boolean>;
+
   refresh(id: string, token: string): Promise<{ status: string }>;
 }
 
@@ -49,8 +62,8 @@ export function createIdentitySyncService(dependencies: IdentitySyncDependencies
         delaySeconds = identitySyncDelay(claim.failures, failure);
       }
       // Token fencing also makes a delayed completion harmless after lease reclamation.
-      await dependencies.repository.finish({id:claim.id,token:claim.token,delaySeconds,failed,deferred,error});
+      await dependencies.repository.finish({ id: claim.id, token: claim.token, delaySeconds, failed, deferred, error });
     }
-    return {synced};
+    return { synced };
   };
 }

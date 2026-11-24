@@ -1,15 +1,27 @@
 import type { UnitOfWork } from "@/platform/transactions";
-import { adminSuppressionSchema, type AdminSuppressionInput, type SuppressionDto, type SuppressionInput } from "../contracts";
+import {
+  type AdminSuppressionInput,
+  adminSuppressionSchema,
+  type SuppressionDto,
+  type SuppressionInput
+} from "../contracts";
 
 export interface SuppressionRepository {
   list(serviceId: string, email?: string | null): Promise<SuppressionDto[]>;
+
   lockScope(input: SuppressionInput): Promise<void>;
+
   existing(input: SuppressionInput): Promise<string | null>;
+
   insert(id: string, input: AdminSuppressionInput, source: "admin" | "service_api"): Promise<void>;
+
   serviceExists(id: string): Promise<boolean>;
+
   deactivate(id: string, serviceId?: string): Promise<{ id: string } | null>;
+
   audit(actor: string, action: string, id: string, details?: Record<string, unknown>): Promise<void>;
 }
+
 export function createSuppressionService(repository: () => SuppressionRepository, unitOfWork: UnitOfWork<SuppressionRepository>, id: () => string) {
   return {
     listSuppressions: (serviceId: string, email?: string | null) => repository().list(serviceId, email),

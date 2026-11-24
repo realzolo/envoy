@@ -35,7 +35,11 @@ export async function scanBytes(bytes: Uint8Array): Promise<Verdict> {
     let streamWritten = false;
     const finish = (status: Verdict["status"], reason: string | null) => {
       if (done) return;
-      done = true; clearTimeout(timer); active--; socket.destroy(); resolve(result(status, reason));
+      done = true;
+      clearTimeout(timer);
+      active--;
+      socket.destroy();
+      resolve(result(status, reason));
     };
     // Wall-clock deadline includes connect, writes/backpressure, and the entire response.
     const timer = setTimeout(() => finish("unavailable", "SCAN_TIMEOUT"), policy.timeout);
@@ -43,12 +47,18 @@ export async function scanBytes(bytes: Uint8Array): Promise<Verdict> {
     socket.on("close", () => finish("unavailable", "SCAN_CONNECTION_CLOSED"));
     socket.on("data", chunk => {
       length += chunk.length;
-      if (length > 4096) { finish("unavailable", "SCAN_PROTOCOL_INVALID"); return; }
+      if (length > 4096) {
+        finish("unavailable", "SCAN_PROTOCOL_INVALID");
+        return;
+      }
       chunks.push(chunk);
     });
     socket.on("end", () => {
       const raw = Buffer.concat(chunks), response = raw.toString("utf8");
-      if (!streamWritten || !Buffer.from(response,"utf8").equals(raw)) {finish("unavailable","SCAN_PROTOCOL_INVALID");return;}
+      if (!streamWritten || !Buffer.from(response, "utf8").equals(raw)) {
+        finish("unavailable", "SCAN_PROTOCOL_INVALID");
+        return;
+      }
       if (response === "stream: OK\0") finish("clean", null);
       else if (/^stream: [^\x00\r\n]{1,1024} FOUND\x00$/.test(response)) finish("malicious", "FILE_MALICIOUS");
       else finish("unavailable", "SCAN_PROTOCOL_INVALID");
@@ -61,9 +71,14 @@ export async function scanBytes(bytes: Uint8Array): Promise<Verdict> {
         for (let offset = 0; offset < bytes.byteLength; offset += 8192) {
           if (done) return;
           const chunk = bytes.subarray(offset, offset + 8192), size = Buffer.alloc(4);
-          size.writeUInt32BE(chunk.byteLength); await write(size); await write(chunk);
+          size.writeUInt32BE(chunk.byteLength);
+          await write(size);
+          await write(chunk);
         }
-        if (!done) {await write(Buffer.alloc(4));streamWritten=true;}
+        if (!done) {
+          await write(Buffer.alloc(4));
+          streamWritten = true;
+        }
       })().catch(() => finish("unavailable", "SCAN_CONNECTION_FAILED"));
     });
   });

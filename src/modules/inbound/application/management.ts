@@ -1,17 +1,30 @@
 import type { UnitOfWork } from "@/platform/transactions";
+
 export interface InboundManagementRepository {
   resetRaw(id: string): Promise<boolean>;
+
   recoverUnroutedReceipt(id: string): Promise<boolean>;
+
   enqueueRaw(id: string, outboxId: string): Promise<void>;
+
   lockCopies(rawEventId: string): Promise<void>;
+
   exhaustedRaw(id: string): Promise<{ providerAccountId: string } | null>;
+
   activeCopy(rawEventId: string): Promise<boolean>;
+
   terminateReceipt(rawEventId: string, providerAccountId: string): Promise<void>;
+
   rejectPendingCopies(rawEventId: string): Promise<void>;
+
   terminateRaw(id: string): Promise<void>;
+
   audit(actor: string, action: string, type: string, id: string, details?: Record<string, unknown>): Promise<void>;
 }
-export function createInboundManagement(unitOfWork: UnitOfWork<InboundManagementRepository>, deps: { id(prefix: string): string }) {
+
+export function createInboundManagement(unitOfWork: UnitOfWork<InboundManagementRepository>, deps: {
+  id(prefix: string): string
+}) {
   return {
     replayRawEvent: (id: string, actor: string) => unitOfWork.run(async repo => {
       if (!await repo.resetRaw(id)) throw new Error("Raw event not found or its content has expired.");

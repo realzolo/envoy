@@ -1,5 +1,5 @@
 import { getInboundMessage } from "@/modules/inbound/public";
-import { serviceRoute, apiProblem } from "@/server/service-api";
+import { apiProblem, serviceRoute } from "@/server/service-api";
 
 export const GET = serviceRoute(async (request, identity, context: { params: Promise<{ id: string }> }) => {
   const message = await getInboundMessage((await context.params).id, identity.serviceId);

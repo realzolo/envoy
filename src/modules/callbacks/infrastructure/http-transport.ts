@@ -2,6 +2,8 @@ import { lookup as dnsLookup } from "node:dns/promises";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { isIP, type LookupFunction } from "node:net";
+import { CallbackUrlPolicyError } from "../domain/policy";
+import { isPrivateOrReservedAddress } from "@/platform/network-address";
 
 type CallbackAddress = { address: string; family: 4 | 6 };
 
@@ -12,8 +14,6 @@ export type ResolvedCallbackTarget = {
 
 type HostResolver = (hostname: string) => Promise<CallbackAddress[]>;
 
-import { CallbackUrlPolicyError } from "../domain/policy";
-
 function privateCallbacksAllowed() {
   return process.env.ENVOY_ALLOW_PRIVATE_CALLBACKS === "true";
 }
@@ -23,7 +23,6 @@ function hostname(url: URL) {
 }
 
 export { isPrivateOrReservedAddress } from "@/platform/network-address";
-import { isPrivateOrReservedAddress } from "@/platform/network-address";
 
 async function resolveHost(host: string): Promise<CallbackAddress[]> {
   const addresses = await dnsLookup(host, { all: true, verbatim: true });
@@ -61,7 +60,10 @@ export async function resolveCallbackTarget(value: string, resolver: HostResolve
 }
 
 function pinnedLookup(target: ResolvedCallbackTarget): LookupFunction {
-  return ((_: string, options: { all?: boolean; family?: number }, callback: (error: Error | null, address: string | CallbackAddress[], family?: number) => void) => {
+  return ((_: string, options: {
+    all?: boolean;
+    family?: number
+  }, callback: (error: Error | null, address: string | CallbackAddress[], family?: number) => void) => {
     const addresses = target.addresses.filter(item => !options.family || item.family === options.family);
     const selected = addresses.length ? addresses : target.addresses;
     if (options.all) callback(null, selected);
@@ -92,16 +94,30 @@ export async function postCallback(target: ResolvedCallbackTarget, body: string,
         response.destroy();
       };
       // HTTP success acknowledges receipt; the target body has no protocol meaning.
-      if (status >= 200 && status < 300) { finish(); return; }
+      if (status >= 200 && status < 300) {
+        finish();
+        return;
+      }
       response.on("data", (chunk: Buffer) => {
         const part = chunk.subarray(0, 500 - length);
-        chunks.push(part); length += part.length;
+        chunks.push(part);
+        length += part.length;
         if (length >= 500) finish();
       });
       response.on("end", finish);
-      response.on("error", error => { if (!settled) { settled = true; reject(error); } });
+      response.on("error", error => {
+        if (!settled) {
+          settled = true;
+          reject(error);
+        }
+      });
     });
-    client.on("error", error => { if (!settled) { settled = true; reject(error); } });
+    client.on("error", error => {
+      if (!settled) {
+        settled = true;
+        reject(error);
+      }
+    });
     client.once("socket", socket => {
       socket.once(target.url.protocol === "https:" ? "secureConnect" : "connect", () => {
         void (async () => {
@@ -117,13 +133,14 @@ export async function postCallback(target: ResolvedCallbackTarget, body: string,
 
 /** One execution budget covers resolution, connection, authorization and response. */
 export async function sendCallback(url: string, body: string, headers: Record<string, string>, beforeSend: () => Promise<void>,
-  options: { timeoutMs?: number; resolver?: HostResolver } = {}) {
+                                   options: { timeoutMs?: number; resolver?: HostResolver } = {}) {
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout>;
   const expired = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
       const error = new Error("Callback execution deadline exceeded");
-      controller.abort(error); reject(error);
+      controller.abort(error);
+      reject(error);
     }, options.timeoutMs ?? CALLBACK_TIMEOUT_MS);
   });
   try {
@@ -132,5 +149,7 @@ export async function sendCallback(url: string, body: string, headers: Record<st
       controller.signal.throwIfAborted();
       return postCallback(target, body, headers, { signal: controller.signal, beforeSend });
     })()]);
-  } finally { clearTimeout(timer!); }
+  } finally {
+    clearTimeout(timer!);
+  }
 }

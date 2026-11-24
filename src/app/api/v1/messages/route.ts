@@ -1,7 +1,7 @@
 import { validationDiagnostic } from "@/server/validation-diagnostic";
-import { createMessageSchema, processingStates, messageOutcomes } from "@/lib/contracts";
+import { createMessageSchema, messageOutcomes, processingStates } from "@/lib/contracts";
 import { acceptMessage, listMessages } from "@/modules/outbound/public";
-import { validationErrors, apiProblem, pagination, readJson, serviceRoute, getRequestId } from "@/server/service-api";
+import { apiProblem, getRequestId, pagination, readJson, serviceRoute, validationErrors } from "@/server/service-api";
 
 export const runtime = "nodejs";
 
@@ -13,7 +13,13 @@ export const GET = serviceRoute(async (request, identity) => {
   const outcome = page.url.searchParams.get("outcome");
   if (processingState && !processingStates.includes(processingState as typeof processingStates[number])) return apiProblem("Invalid query", 400, "processingState is not supported.");
   if (outcome && !messageOutcomes.includes(outcome as typeof messageOutcomes[number])) return apiProblem("Invalid query", 400, "outcome is not supported.");
-  return Response.json(await listMessages(identity.serviceId, { limit: page.limit, cursor: page.cursor, processingState, outcome, referenceId: page.url.searchParams.get("referenceId") }));
+  return Response.json(await listMessages(identity.serviceId, {
+    limit: page.limit,
+    cursor: page.cursor,
+    processingState,
+    outcome,
+    referenceId: page.url.searchParams.get("referenceId")
+  }));
 });
 
 export const POST = serviceRoute(async (request, identity) => {
@@ -21,6 +27,17 @@ export const POST = serviceRoute(async (request, identity) => {
   if (!idempotencyKey || idempotencyKey.length > 256) return apiProblem("Invalid idempotency key", 400, "Idempotency-Key is required and must be at most 256 characters.");
   const parsed = createMessageSchema.safeParse(await readJson(request));
   if (!parsed.success) return apiProblem("Validation failed", 422, "The message does not match the API contract.", validationErrors(parsed.error), "VALIDATION_FAILED", validationDiagnostic(parsed.error));
-  const accepted = await acceptMessage({ identity, idempotencyKey, input: parsed.data, requestId: getRequestId(request) });
-  return Response.json(accepted.message, { status: 202, headers: { Location: `/api/v2/messages/${accepted.message.id}`, "X-Envoy-Idempotent-Replay": String(accepted.duplicate) } });
+  const accepted = await acceptMessage({
+    identity,
+    idempotencyKey,
+    input: parsed.data,
+    requestId: getRequestId(request)
+  });
+  return Response.json(accepted.message, {
+    status: 202,
+    headers: {
+      Location: `/api/v2/messages/${accepted.message.id}`,
+      "X-Envoy-Idempotent-Replay": String(accepted.duplicate)
+    }
+  });
 });

@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { PoolClient } from "pg";
 import { assertSchemaCompatibility, runMigrations } from "bullmq";
-import { loadApplicationMigrations, type ApplicationMigration } from "../../../db/migrations";
+import { type ApplicationMigration, loadApplicationMigrations } from "../../../db/migrations";
 
 /** Compare complete application objects independently of their deployment namespace. */
 async function catalog(client: PoolClient, namespace: string) {
@@ -73,9 +73,13 @@ async function expectedCatalog(client: PoolClient, sql: string) {
   await client.query("SET LOCAL search_path TO public, pg_catalog");
   return result;
 }
+
 function equalCatalog(actual: string[], expected: string[]) {
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
-    if (process.env.DEBUG_DATABASE_SCHEMA) console.error({ missing: expected.filter(x => !actual.includes(x)), extra: actual.filter(x => !expected.includes(x)) });
+    if (process.env.DEBUG_DATABASE_SCHEMA) console.error({
+      missing: expected.filter(x => !actual.includes(x)),
+      extra: actual.filter(x => !expected.includes(x))
+    });
     throw new Error("Database does not match its recorded application schema; migration refused without changing existing objects");
   }
 }
@@ -86,7 +90,10 @@ export async function initializeApplicationSchema(client: PoolClient, migrations
     await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", ["envoy:application-migrations"]);
     const actual = await catalog(client, "public"), empty = !actual.length;
     const hasJournal = (await client.query("SELECT to_regclass('envoy_meta.migrations') AS journal")).rows[0].journal;
-    const applied: { file: string; sha256: string }[] = hasJournal ? (await client.query<{ file: string; sha256: string }>("SELECT file,sha256 FROM envoy_meta.migrations ORDER BY file")).rows : [];
+    const applied: { file: string; sha256: string }[] = hasJournal ? (await client.query<{
+      file: string;
+      sha256: string
+    }>("SELECT file,sha256 FROM envoy_meta.migrations ORDER BY file")).rows : [];
     if (applied.length > migrations.length || applied.some((row, index) => row.file !== migrations[index].file || row.sha256 !== migrations[index].sha256)) throw new Error("Applied migration checksum or order differs from the repository");
     if (!empty && !applied.length) throw new Error("Non-empty application schema has no migration journal");
     let count = applied.length;
@@ -108,12 +115,16 @@ export async function initializeApplicationSchema(client: PoolClient, migrations
     equalCatalog(result, await expectedCatalog(client, snapshot));
     await client.query("COMMIT");
     return empty ? "initialized" : count > start ? "upgraded" : "validated";
-  } catch (error) { await client.query("ROLLBACK"); throw error; }
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  }
 }
 
 /** Setup owns DDL; running Web and Worker processes only check readiness. */
 export async function initializeDatabase(client: PoolClient, root = process.cwd()) {
-  const migrations = await loadApplicationMigrations(root), snapshot = await readFile(join(root, "db/schema.sql"), "utf8");
+  const migrations = await loadApplicationMigrations(root),
+    snapshot = await readFile(join(root, "db/schema.sql"), "utf8");
   const status = await initializeApplicationSchema(client, migrations, snapshot);
   await runMigrations(client, "bullmq");
   await assertSchemaCompatibility(client, "bullmq");

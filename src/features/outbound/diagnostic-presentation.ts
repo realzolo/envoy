@@ -86,11 +86,23 @@ const deliveryStates: Record<DeliveryStatus, DeliveryPresentation> = {
   submitting: { title: "Submitting to the provider", followUp: "Wait for the submission result before sending again." },
   accepted: { title: "Provider accepted the message", followUp: "Wait for the final delivery result." },
   deferred: { title: "Delivery is deferred", followUp: "Delivery processing is delayed. Check the current schedule." },
-  unknown: { title: "Delivery outcome is not confirmed", followUp: "Check the original submission before sending again." },
-  bounced: { title: "Delivery bounced", followUp: "Detailed bounce information was not recorded. Review the original message." },
-  failed: { title: "Delivery failed", followUp: "Detailed failure information was not recorded. Review the original message." },
+  unknown: {
+    title: "Delivery outcome is not confirmed",
+    followUp: "Check the original submission before sending again."
+  },
+  bounced: {
+    title: "Delivery bounced",
+    followUp: "Detailed bounce information was not recorded. Review the original message."
+  },
+  failed: {
+    title: "Delivery failed",
+    followUp: "Detailed failure information was not recorded. Review the original message."
+  },
   canceled: { title: "Delivery canceled", followUp: "No further delivery processing is scheduled." },
-  suppressed: { title: "Recipient is suppressed", followUp: "Review the suppression source before taking further action." },
+  suppressed: {
+    title: "Recipient is suppressed",
+    followUp: "Review the suppression source before taking further action."
+  },
 };
 
 export function deliveryPresentation(value: Pick<EmailRecord, "status" | "diagnostic" | "transport">): DeliveryPresentation {

@@ -1,4 +1,4 @@
-import { OutboundCursorError, listOutboundChanges } from "@/modules/outbound/public";
+import { listOutboundChanges, OutboundCursorError } from "@/modules/outbound/public";
 import { apiProblem, serviceRoute } from "@/server/service-api";
 
 export const GET = serviceRoute(async (request, identity) => {
@@ -9,8 +9,7 @@ export const GET = serviceRoute(async (request, identity) => {
   try {
     if (cursor && cursor.length > 1024) throw new OutboundCursorError("INVALID_OUTBOUND_CURSOR", (await listOutboundChanges(identity.serviceId, 1)).retention.earliestCursor);
     return Response.json(await listOutboundChanges(identity.serviceId, limit, cursor));
-  }
-  catch (error) {
+  } catch (error) {
     if (error instanceof OutboundCursorError) return apiProblem("Outbound cursor unavailable", error.code === "OUTBOUND_CURSOR_EXPIRED" ? 410 : 400,
       error.code === "OUTBOUND_CURSOR_EXPIRED" ? "History gap: reconcile retained outbound messages, then resume from resetCursor." : "Invalid Service stream cursor.",
       { resetCursor: error.resetCursor, ...(error.code === "OUTBOUND_CURSOR_EXPIRED" ? { gap: true } : {}) }, error.code);

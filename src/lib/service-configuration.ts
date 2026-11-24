@@ -15,7 +15,11 @@ export const serviceConfigurationSchema = z.object({
   domains: z.array(serviceDomainBindingSchema).superRefine((bindings, context) => {
     const seen = new Set<string>();
     bindings.forEach((binding, index) => {
-      if (seen.has(binding.domainId)) context.addIssue({ code: "custom", path: [index, "domainId"], message: "Domain is already bound" });
+      if (seen.has(binding.domainId)) context.addIssue({
+        code: "custom",
+        path: [index, "domainId"],
+        message: "Domain is already bound"
+      });
       seen.add(binding.domainId);
     });
   }),

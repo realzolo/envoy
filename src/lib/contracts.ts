@@ -1,5 +1,5 @@
 import { inboundDocumentSchema } from "@/modules/inbound/contracts";
-import { mailDiagnosticSchema, deliverySnapshotSchema } from "@/contracts/mail-diagnostics";
+import { deliverySnapshotSchema, mailDiagnosticSchema } from "@/contracts/mail-diagnostics";
 import { z } from "zod";
 
 export const MAX_REQUEST_BYTES = 4_200_000;
@@ -20,8 +20,14 @@ export const outboundAttachmentInputSchema = z.object({
   fileName: headerSafe.min(1).max(255).refine(value => !/[\\/]/.test(value), "Use a plain file name").optional(),
   disposition: z.enum(["attachment", "inline"]).default("attachment"),
   contentId: z.string().min(1).max(200).regex(/^[^<>\s\x00-\x1f\x7f]+$/).optional(),
-}).strict().refine(value => value.disposition !== "inline" || Boolean(value.contentId), { message: "Inline attachments require contentId", path: ["contentId"] })
-  .refine(value => value.disposition === "inline" || value.contentId === undefined, { message: "contentId is only allowed for inline attachments", path: ["contentId"] });
+}).strict().refine(value => value.disposition !== "inline" || Boolean(value.contentId), {
+  message: "Inline attachments require contentId",
+  path: ["contentId"]
+})
+  .refine(value => value.disposition === "inline" || value.contentId === undefined, {
+    message: "contentId is only allowed for inline attachments",
+    path: ["contentId"]
+  });
 const reservedHeader = /^(?:from|to|cc|bcc|subject|reply-to|sender|return-path|received(?:-.*)?|date|message-id|mime-version|content-.*|dkim-.*|authentication-results|arc-.*|in-reply-to|references|resent-.*|x-envoy-.*|x-ses-.*|x-sg-.*|x-mailgun-.*|x-pm-.*|x-smtpapi|disposition-notification-to|return-receipt-to)$/i;
 export const createMessageSchema = z.object({
   category: z.string().min(2).max(80).regex(/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/, "category must be a stable lowercase key").default("transactional"),
@@ -42,19 +48,38 @@ export const createMessageSchema = z.object({
   tags: z.record(z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/), z.string().max(256)).refine(value => Object.keys(value).length <= 20, "tags must contain at most 20 entries").optional(),
   referenceId: z.string().trim().min(1).max(160).optional(),
   metadata: z.record(z.string().regex(/^[a-zA-Z0-9_.-]{1,64}$/), z.string().max(500)).refine(value => Object.keys(value).length <= 20, "metadata must contain at most 20 entries").optional(),
-}).strict().refine(input => Boolean(input.html || input.text), { message: "At least one of html or text must be nonempty", path: ["html"] }).superRefine((input, context) => {
+}).strict().refine(input => Boolean(input.html || input.text), {
+  message: "At least one of html or text must be nonempty",
+  path: ["html"]
+}).superRefine((input, context) => {
   const count = input.to.length + input.cc.length + input.bcc.length;
-  if (count < 1 || count > 50) context.addIssue({ code: "custom", path: ["to"], message: "To, Cc and Bcc must contain between 1 and 50 total recipients" });
+  if (count < 1 || count > 50) context.addIssue({
+    code: "custom",
+    path: ["to"],
+    message: "To, Cc and Bcc must contain between 1 and 50 total recipients"
+  });
   const recipients = new Set<string>();
   for (const role of ["to", "cc", "bcc"] as const) input[role].forEach((recipient, index) => {
     const normalized = recipient.email.toLowerCase();
-    if (recipients.has(normalized)) context.addIssue({ code: "custom", path: [role, index, "email"], message: "Each recipient email can appear only once across To, Cc and Bcc" });
+    if (recipients.has(normalized)) context.addIssue({
+      code: "custom",
+      path: [role, index, "email"],
+      message: "Each recipient email can appear only once across To, Cc and Bcc"
+    });
     recipients.add(normalized);
   });
   const names = Object.keys(input.headers).map(key => key.toLowerCase());
-  if (new Set(names).size !== names.length) context.addIssue({ code: "custom", path: ["headers"], message: "Header names are case-insensitive and must be unique" });
+  if (new Set(names).size !== names.length) context.addIssue({
+    code: "custom",
+    path: ["headers"],
+    message: "Header names are case-insensitive and must be unique"
+  });
   const ids = input.attachments.flatMap(item => item.contentId ? [item.contentId] : []);
-  if (new Set(ids).size !== ids.length) context.addIssue({ code: "custom", path: ["attachments"], message: "Attachment content IDs must be unique" });
+  if (new Set(ids).size !== ids.length) context.addIssue({
+    code: "custom",
+    path: ["attachments"],
+    message: "Attachment content IDs must be unique"
+  });
 });
 
 export type CreateMessageInput = z.infer<typeof createMessageSchema>;
@@ -97,75 +122,265 @@ export const processingStates = ["queued", "processing", "finished"] as const;
 export const messageOutcomes = ["pending", "succeeded", "partially_failed", "failed", "canceled", "unknown"] as const;
 export const diagnosticSchema = mailDiagnosticSchema;
 export const deliverySummarySchema = deliverySnapshotSchema.extend({
-  id: z.string(), messageId: z.string(), recipient: z.string(), recipientName: nullableText, recipientRole: z.enum(["to", "cc", "bcc"]),
-  subject: z.string(), category: z.string(), lifecycle: z.enum(deliveryStatuses),
-  engagement: z.enum(["unopened", "opened", "clicked"]), compliance: z.enum(["clean", "complained", "unsubscribed", "suppressed"]),
-  diagnostic: diagnosticSchema.nullable(), queuedAt: iso, updatedAt: iso,
+  id: z.string(),
+  messageId: z.string(),
+  recipient: z.string(),
+  recipientName: nullableText,
+  recipientRole: z.enum(["to", "cc", "bcc"]),
+  subject: z.string(),
+  category: z.string(),
+  lifecycle: z.enum(deliveryStatuses),
+  engagement: z.enum(["unopened", "opened", "clicked"]),
+  compliance: z.enum(["clean", "complained", "unsubscribed", "suppressed"]),
+  diagnostic: diagnosticSchema.nullable(),
+  queuedAt: iso,
+  updatedAt: iso,
 });
 export const publicEventSchema = z.object({
   id: z.string(), messageId: z.string(), deliveryId: z.string().nullable(), submissionId: z.string().optional(),
   type: z.string(), scope: z.enum(["recipient", "submission"]), occurredAt: iso,
-  data: z.object({ attemptId: z.string().optional(), recipient: z.string().optional(), diagnostic: diagnosticSchema.optional(),
-    bounce: z.object({ classification: z.enum(["HARD", "SOFT", "UNKNOWN"]) }).strict().optional() }),
+  data: z.object({
+    attemptId: z.string().optional(), recipient: z.string().optional(), diagnostic: diagnosticSchema.optional(),
+    bounce: z.object({ classification: z.enum(["HARD", "SOFT", "UNKNOWN"]) }).strict().optional()
+  }),
 });
 export const submissionAttemptSchema = z.object({
-  id: z.string(), submissionId: z.string(), number: z.number().int().positive(), status: z.enum(["submitting","accepted","failed","unknown","reconciling","reconciled"]),
-  outcomeDeterminate: z.boolean(), diagnostic: diagnosticSchema.nullable(),
-  rfcMessageId: nullableText, rfcMessageIdStatus: z.enum(["confirmed","unknown"]),
-  startedAt: iso, finishedAt: iso.nullable(),
+  id: z.string(),
+  submissionId: z.string(),
+  number: z.number().int().positive(),
+  status: z.enum(["submitting", "accepted", "failed", "unknown", "reconciling", "reconciled"]),
+  outcomeDeterminate: z.boolean(),
+  diagnostic: diagnosticSchema.nullable(),
+  rfcMessageId: nullableText,
+  rfcMessageIdStatus: z.enum(["confirmed", "unknown"]),
+  startedAt: iso,
+  finishedAt: iso.nullable(),
   recipients: z.array(z.object({ deliveryId: z.string(), email: z.string(), role: z.enum(["to", "cc", "bcc"]) })),
 });
 export const attachmentUsageSchema = z.object({
-  state:z.enum(["processing","usable","unavailable"]),safetyState:z.enum(["pending","scanning","clean","verified","malicious","unavailable","unscanned","purged","blocked"]),processing:z.boolean(),canSend:z.boolean(),canDownload:z.boolean(),
-  reasonCode:z.string().nullable(),retryable:z.boolean(),recovery:z.enum(["poll","retry","none"]),
+  state: z.enum(["processing", "usable", "unavailable"]),
+  safetyState: z.enum(["pending", "scanning", "clean", "verified", "malicious", "unavailable", "unscanned", "purged", "blocked"]),
+  processing: z.boolean(),
+  canSend: z.boolean(),
+  canDownload: z.boolean(),
+  reasonCode: z.string().nullable(),
+  retryable: z.boolean(),
+  recovery: z.enum(["poll", "retry", "none"]),
 });
-export const attachmentSchema = z.object({ id: z.string(), fileName: z.string(), contentType: z.string(), size: z.number(), contentId: nullableText,
-  contentAvailable:z.boolean().describe("Whether content is retained, independent of use permission."),usage:attachmentUsageSchema });
-export const outboundFileSchema = z.object({ id: z.string(), fileName: z.string(), contentType: z.string(), size: z.number(), sha256: z.string(), contentAvailable: z.boolean(),usage:attachmentUsageSchema, createdAt: iso });
-export const outboundAttachmentSchema = z.object({ fileId: z.string(), fileName: z.string(), contentType: z.string(), size: z.number(), sha256: z.string(), disposition: z.enum(["attachment", "inline"]), contentId: nullableText });
-export const inboundSummarySchema = z.object({ id: z.string(), from: z.string(), to: z.array(z.string()), subject: z.string(), status: z.enum(["scanning", "ready", "rejected"]), attachmentCount: z.number(), authorDate: iso.nullable(), ingressReceivedAt: iso.nullable(), readyAt: iso.nullable(), receivedAt: iso });
-export const inboundDetailSchema = inboundSummarySchema.omit({ attachmentCount: true }).extend({ messageId: nullableText, envelopeRecipients: z.array(z.string()), replyTo: z.array(z.string()), inReplyTo: nullableText, references: z.array(z.string()), cc: z.array(z.string()), bcc: z.array(z.string()), html: nullableText, text: nullableText, document: inboundDocumentSchema.nullable(), contentPurgedAt: iso.nullable(), rejectionReason: nullableText, attachments: z.array(attachmentSchema) });
-export const acceptedMessageSchema = z.object({ id: z.string(), processingState: z.literal("queued"), outcome: z.literal("pending"), service: z.string(), category: z.string(), recipientCount: z.number(), acceptedAt: iso, referenceId: z.string().optional() });
+export const attachmentSchema = z.object({
+  id: z.string(),
+  fileName: z.string(),
+  contentType: z.string(),
+  size: z.number(),
+  contentId: nullableText,
+  contentAvailable: z.boolean().describe("Whether content is retained, independent of use permission."),
+  usage: attachmentUsageSchema
+});
+export const outboundFileSchema = z.object({
+  id: z.string(),
+  fileName: z.string(),
+  contentType: z.string(),
+  size: z.number(),
+  sha256: z.string(),
+  contentAvailable: z.boolean(),
+  usage: attachmentUsageSchema,
+  createdAt: iso
+});
+export const outboundAttachmentSchema = z.object({
+  fileId: z.string(),
+  fileName: z.string(),
+  contentType: z.string(),
+  size: z.number(),
+  sha256: z.string(),
+  disposition: z.enum(["attachment", "inline"]),
+  contentId: nullableText
+});
+export const inboundSummarySchema = z.object({
+  id: z.string(),
+  from: z.string(),
+  to: z.array(z.string()),
+  subject: z.string(),
+  status: z.enum(["scanning", "ready", "rejected"]),
+  attachmentCount: z.number(),
+  authorDate: iso.nullable(),
+  ingressReceivedAt: iso.nullable(),
+  readyAt: iso.nullable(),
+  receivedAt: iso
+});
+export const inboundDetailSchema = inboundSummarySchema.omit({ attachmentCount: true }).extend({
+  messageId: nullableText,
+  envelopeRecipients: z.array(z.string()),
+  replyTo: z.array(z.string()),
+  inReplyTo: nullableText,
+  references: z.array(z.string()),
+  cc: z.array(z.string()),
+  bcc: z.array(z.string()),
+  html: nullableText,
+  text: nullableText,
+  document: inboundDocumentSchema.nullable(),
+  contentPurgedAt: iso.nullable(),
+  rejectionReason: nullableText,
+  attachments: z.array(attachmentSchema)
+});
+export const acceptedMessageSchema = z.object({
+  id: z.string(),
+  processingState: z.literal("queued"),
+  outcome: z.literal("pending"),
+  service: z.string(),
+  category: z.string(),
+  recipientCount: z.number(),
+  acceptedAt: iso,
+  referenceId: z.string().optional()
+});
 export const messageCountsSchema = z.object(Object.fromEntries([...deliveryStatuses, "suppressed"].map(key => [key, z.number().int().nonnegative()])));
-export const messageSummarySchema = acceptedMessageSchema.extend({ contentPolicy: z.enum(["normal", "sensitive"]), sendBefore: iso.nullable(), processingState: z.enum(processingStates), outcome: z.enum(messageOutcomes), from: emailAddressSchema, subject: z.string(), referenceId: nullableText, counts: messageCountsSchema });
-export const messageDetailSchema = messageSummarySchema.extend({
-  requestId: nullableText, to: z.array(emailAddressSchema), cc: z.array(emailAddressSchema), bcc: z.array(emailAddressSchema),
-  html: nullableText, text: nullableText, contentPurgedAt: iso.nullable(), replyTo: z.array(emailAddressSchema),
-  headers: z.record(z.string(), z.string()), inReplyTo: nullableText, references: z.array(z.string()), attachments: z.array(outboundAttachmentSchema),
-  metadata: z.record(z.string(), z.string()), tags: z.record(z.string(), z.string()),
-  deliveries: z.array(deliverySnapshotSchema.extend({recipient:z.string(),recipientName:nullableText,recipientRole:z.enum(["to","cc","bcc"]),engagement:z.enum(["unopened","opened","clicked"]),compliance:z.enum(["clean","complained","unsubscribed","suppressed"])})),
+export const messageSummarySchema = acceptedMessageSchema.extend({
+  contentPolicy: z.enum(["normal", "sensitive"]),
+  sendBefore: iso.nullable(),
+  processingState: z.enum(processingStates),
+  outcome: z.enum(messageOutcomes),
+  from: emailAddressSchema,
+  subject: z.string(),
+  referenceId: nullableText,
+  counts: messageCountsSchema
 });
-export const deliveryDetailSchema = deliverySummarySchema.extend({ referenceId: nullableText, acceptedAt: iso.nullable(), deliveredAt: iso.nullable(), attempts: z.array(submissionAttemptSchema), events: z.array(publicEventSchema) });
-export const problemDetailsSchema = z.object({ type: z.string(), title: z.string(), status: z.number(), detail: z.string(), code: z.string(), requestId: z.string(), diagnostic:mailDiagnosticSchema.nullable(), errors: z.record(z.string(), z.array(z.string())).optional() });
-export const requestDiagnosticSchema = z.object({ requestId: z.string(), method: z.string(), path: z.string(), statusCode: z.number(), durationMs: z.number(), messageId: nullableText, createdAt: iso, problem: problemDetailsSchema.nullable() });
-export const suppressionSchema = z.object({ id: z.string(), scope: z.enum(["global", "service", "list"]), listId: nullableText, email: z.string(), reason: z.string(), source: z.string(), expiresAt: iso.nullable(), createdAt: iso });
+export const messageDetailSchema = messageSummarySchema.extend({
+  requestId: nullableText,
+  to: z.array(emailAddressSchema),
+  cc: z.array(emailAddressSchema),
+  bcc: z.array(emailAddressSchema),
+  html: nullableText,
+  text: nullableText,
+  contentPurgedAt: iso.nullable(),
+  replyTo: z.array(emailAddressSchema),
+  headers: z.record(z.string(), z.string()),
+  inReplyTo: nullableText,
+  references: z.array(z.string()),
+  attachments: z.array(outboundAttachmentSchema),
+  metadata: z.record(z.string(), z.string()),
+  tags: z.record(z.string(), z.string()),
+  deliveries: z.array(deliverySnapshotSchema.extend({
+    recipient: z.string(),
+    recipientName: nullableText,
+    recipientRole: z.enum(["to", "cc", "bcc"]),
+    engagement: z.enum(["unopened", "opened", "clicked"]),
+    compliance: z.enum(["clean", "complained", "unsubscribed", "suppressed"])
+  })),
+});
+export const deliveryDetailSchema = deliverySummarySchema.extend({
+  referenceId: nullableText,
+  acceptedAt: iso.nullable(),
+  deliveredAt: iso.nullable(),
+  attempts: z.array(submissionAttemptSchema),
+  events: z.array(publicEventSchema)
+});
+export const problemDetailsSchema = z.object({
+  type: z.string(),
+  title: z.string(),
+  status: z.number(),
+  detail: z.string(),
+  code: z.string(),
+  requestId: z.string(),
+  diagnostic: mailDiagnosticSchema.nullable(),
+  errors: z.record(z.string(), z.array(z.string())).optional()
+});
+export const requestDiagnosticSchema = z.object({
+  requestId: z.string(),
+  method: z.string(),
+  path: z.string(),
+  statusCode: z.number(),
+  durationMs: z.number(),
+  messageId: nullableText,
+  createdAt: iso,
+  problem: problemDetailsSchema.nullable()
+});
+export const suppressionSchema = z.object({
+  id: z.string(),
+  scope: z.enum(["global", "service", "list"]),
+  listId: nullableText,
+  email: z.string(),
+  reason: z.string(),
+  source: z.string(),
+  expiresAt: iso.nullable(),
+  createdAt: iso
+});
 
 // Public discovery contains configuration facts separately from transport evidence.
-const mailStateSchema=z.object({state:z.enum(["configured","unavailable"]),reasonCodes:z.array(z.string())});
-export const mailDiscoverySchema=z.object({
-  kind:z.literal("domain_permissions"),
-  domains:z.array(z.object({id:z.string(),domain:z.string(),authorization:z.enum(["granted","revoked"]),revision:z.number().int().optional(),
-    permissions:z.object({send:z.boolean(),receive:z.boolean()}),sending:mailStateSchema,receiving:mailStateSchema,
-    notification:mailStateSchema.extend({mode:z.enum(["polling","callback_and_polling"])}),
-    evidence:z.object({lastAcceptedAt:iso.nullable(),lastDeliveredAt:iso.nullable(),lastReceivedAt:iso.nullable()})})),
-  callbacks:z.object({configuration:z.enum(["configured","unavailable"]),businessProcessing:z.literal("unknown"),lastDeliveredAt:iso.nullable(),
-    latest:z.object({status:z.enum(["pending","delivering","delivered","retrying","dead_letter","terminated"]),attemptCount:z.number().int(),deliveredAt:iso.nullable()}).nullable()})
+const mailStateSchema = z.object({ state: z.enum(["configured", "unavailable"]), reasonCodes: z.array(z.string()) });
+export const mailDiscoverySchema = z.object({
+  kind: z.literal("domain_permissions"),
+  domains: z.array(z.object({
+    id: z.string(),
+    domain: z.string(),
+    authorization: z.enum(["granted", "revoked"]),
+    revision: z.number().int().optional(),
+    permissions: z.object({ send: z.boolean(), receive: z.boolean() }),
+    sending: mailStateSchema,
+    receiving: mailStateSchema,
+    notification: mailStateSchema.extend({ mode: z.enum(["polling", "callback_and_polling"]) }),
+    evidence: z.object({
+      lastAcceptedAt: iso.nullable(),
+      lastDeliveredAt: iso.nullable(),
+      lastReceivedAt: iso.nullable()
+    })
+  })),
+  callbacks: z.object({
+    configuration: z.enum(["configured", "unavailable"]),
+    businessProcessing: z.literal("unknown"),
+    lastDeliveredAt: iso.nullable(),
+    latest: z.object({
+      status: z.enum(["pending", "delivering", "delivered", "retrying", "dead_letter", "terminated"]),
+      attemptCount: z.number().int(),
+      deliveredAt: iso.nullable()
+    }).nullable()
+  })
 });
 
 export const inboundReceivedEventSchema = z.object({
   id: z.string(), apiVersion: z.literal("2026-09-01"), type: z.literal("inbound.received"), occurredAt: iso,
-  data: z.object({ authorDate: iso.nullable(), ingressReceivedAt: iso.nullable(), readyAt: iso.nullable(), inboundMessageId: z.string(), serviceId: z.string(),
-    envelopeRecipients: z.array(z.string()), messageId: nullableText, replyTo: z.array(z.string()), inReplyTo: nullableText, references: z.array(z.string()),
-    from: z.string(), to: z.array(z.string()), cc: z.array(z.string()), subject: z.string(),
+  data: z.object({
+    authorDate: iso.nullable(),
+    ingressReceivedAt: iso.nullable(),
+    readyAt: iso.nullable(),
+    inboundMessageId: z.string(),
+    serviceId: z.string(),
+    envelopeRecipients: z.array(z.string()),
+    messageId: nullableText,
+    replyTo: z.array(z.string()),
+    inReplyTo: nullableText,
+    references: z.array(z.string()),
+    from: z.string(),
+    to: z.array(z.string()),
+    cc: z.array(z.string()),
+    subject: z.string(),
     attachments: z.array(z.object({ fileName: z.string(), contentType: z.string(), size: z.number() })),
   }),
 });
 
-export const inboundChangeSchema = z.object({ id:z.string(),inboundMessageId:z.string(),type:z.enum(["inbound.available","inbound.content_purged"]),recordedAt:iso,cursor:z.string() });
-export const inboundChangePageSchema = z.object({ data:z.array(inboundChangeSchema),nextCursor:z.string(),hasMore:z.boolean(),watermark:z.string(),
-  retention:z.object({ earliestCursor:z.string(),historyTruncated:z.boolean(),days:z.literal(90) }) });
-export const contentPurgeSchema = z.object({ id:z.string(),contentPurgedAt:iso,objectDeletion:z.literal("pending_or_complete") });
+export const inboundChangeSchema = z.object({
+  id: z.string(),
+  inboundMessageId: z.string(),
+  type: z.enum(["inbound.available", "inbound.content_purged"]),
+  recordedAt: iso,
+  cursor: z.string()
+});
+export const inboundChangePageSchema = z.object({
+  data: z.array(inboundChangeSchema), nextCursor: z.string(), hasMore: z.boolean(), watermark: z.string(),
+  retention: z.object({ earliestCursor: z.string(), historyTruncated: z.boolean(), days: z.literal(90) })
+});
+export const contentPurgeSchema = z.object({
+  id: z.string(),
+  contentPurgedAt: iso,
+  objectDeletion: z.literal("pending_or_complete")
+});
 
-export const outboundChangeSchema = z.object({ id: z.string(), messageId: z.string(), type: z.enum(eventTypes), recordedAt: iso, cursor: z.string() });
-export const outboundChangePageSchema = z.object({ data: z.array(outboundChangeSchema), nextCursor: z.string(), hasMore: z.boolean(), watermark: z.string(),
-  retention: z.object({ earliestCursor: z.string(), historyTruncated: z.boolean(), days: z.literal(90) }) });
+export const outboundChangeSchema = z.object({
+  id: z.string(),
+  messageId: z.string(),
+  type: z.enum(eventTypes),
+  recordedAt: iso,
+  cursor: z.string()
+});
+export const outboundChangePageSchema = z.object({
+  data: z.array(outboundChangeSchema), nextCursor: z.string(), hasMore: z.boolean(), watermark: z.string(),
+  retention: z.object({ earliestCursor: z.string(), historyTruncated: z.boolean(), days: z.literal(90) })
+});

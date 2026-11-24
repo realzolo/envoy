@@ -1,5 +1,7 @@
-import { query } from "@/platform/database";
+import { query, transactionClient } from "@/platform/database";
 import type { PoolClient } from "pg";
+import type { TransactionContext } from '@/platform/transactions';
+import type { AuthorizationRepository } from '../application/authorization';
 
 /** SQL expressions passed here come from internal queries, never request input. */
 export function domainPermission(serviceId: string, domainId: string, permission: "send" | "receive") {
@@ -26,6 +28,7 @@ export function effectiveDomainBinding(serviceId: string, domainId: string) {
 export function outboundDomainAccess(alias: string) {
   return domainPermission(`${alias}.service_id`, `${alias}.sending_domain_id`, "send");
 }
+
 /** Inbound access follows the Service's current domain permission, regardless of past ingress provider. */
 export function inboundDomainAccess(alias: string) {
   // A multi-domain resource is indivisible: fail closed if any private envelope domain was revoked.
@@ -34,19 +37,23 @@ export function inboundDomainAccess(alias: string) {
       SELECT 1 FROM sending_domains d WHERE d.domain=split_part(er,'@',2)
         AND ${domainPermission(`${alias}.service_id`, "d.id", "receive")})))`;
 }
+
 export async function authorizedSendingDomain(serviceId: string, domain: string, client?: PoolClient) {
   const sql = `SELECT d.id FROM sending_domains d WHERE d.domain=$2 AND ${domainPermission("$1", "d.id", "send")}`;
-  return (await (client?client.query<{id:string}>(sql,[serviceId,domain.toLowerCase()]):query<{id:string}>(sql,[serviceId,domain.toLowerCase()]))).rows[0]?.id ?? null;
-}
-export async function canAccessInbound(id:string, serviceId:string, client?:PoolClient) {
-  const sql=`SELECT i.id FROM inbound_messages i WHERE i.id=$1 AND i.service_id=$2 AND ${inboundDomainAccess('i')}`;
-  return Boolean((await (client?client.query(sql,[id,serviceId]):query(sql,[id,serviceId]))).rowCount);
+  return (await (client ? client.query<{ id: string }>(sql, [serviceId, domain.toLowerCase()]) : query<{
+    id: string
+  }>(sql, [serviceId, domain.toLowerCase()]))).rows[0]?.id ?? null;
 }
 
-import { transactionClient } from '@/platform/database';
-import type { TransactionContext } from '@/platform/transactions';
-import type { AuthorizationRepository } from '../application/authorization';
-export function createAuthorizationRepository(context?:TransactionContext):AuthorizationRepository {
-  const client=context?transactionClient(context):undefined;
-  return {authorizedSendingDomain:(serviceId,domain)=>authorizedSendingDomain(serviceId,domain,client),canAccessInbound:(id,serviceId)=>canAccessInbound(id,serviceId,client)};
+export async function canAccessInbound(id: string, serviceId: string, client?: PoolClient) {
+  const sql = `SELECT i.id FROM inbound_messages i WHERE i.id=$1 AND i.service_id=$2 AND ${inboundDomainAccess('i')}`;
+  return Boolean((await (client ? client.query(sql, [id, serviceId]) : query(sql, [id, serviceId]))).rowCount);
+}
+
+export function createAuthorizationRepository(context?: TransactionContext): AuthorizationRepository {
+  const client = context ? transactionClient(context) : undefined;
+  return {
+    authorizedSendingDomain: (serviceId, domain) => authorizedSendingDomain(serviceId, domain, client),
+    canAccessInbound: (id, serviceId) => canAccessInbound(id, serviceId, client)
+  };
 }

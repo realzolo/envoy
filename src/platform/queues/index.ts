@@ -1,6 +1,12 @@
-import { Queue, Worker, type Processor } from "bullmq";
-import { assertSchemaCompatibility, createPostgresBackend, type PostgresQueueBackend } from "bullmq";
-import { getDatabaseUrl, db } from "@/platform/database";
+import {
+  assertSchemaCompatibility,
+  createPostgresBackend,
+  type PostgresQueueBackend,
+  type Processor,
+  Queue,
+  Worker
+} from "bullmq";
+import { db, getDatabaseUrl } from "@/platform/database";
 
 export const ATTACHMENT_QUEUE = "envoy-attachments";
 export const DELIVERY_QUEUE = "envoy-delivery";
@@ -22,6 +28,7 @@ function connection() {
 
 type Payload = Record<string, string>;
 export type PostgresQueue = Queue<Payload, unknown, string, Payload, unknown, string, PostgresQueueBackend>;
+
 function createQueue(name: string): PostgresQueue {
   const queue = new Queue<Payload, unknown, string, Payload, unknown, string, PostgresQueueBackend>(name, { connection: connection() }, createPostgresBackend);
   queue.on("error", error => console.error("Queue error", name, error));
@@ -29,9 +36,17 @@ function createQueue(name: string): PostgresQueue {
 }
 
 const globalQueues = globalThis as typeof globalThis & { __envoyQueues?: ReturnType<typeof createQueues> };
+
 function createQueues() {
-  return { attachments: createQueue(ATTACHMENT_QUEUE), delivery: createQueue(DELIVERY_QUEUE), events: createQueue(EVENT_QUEUE), callbacks: createQueue(CALLBACK_QUEUE), reconciliation: createQueue(RECONCILIATION_QUEUE) };
+  return {
+    attachments: createQueue(ATTACHMENT_QUEUE),
+    delivery: createQueue(DELIVERY_QUEUE),
+    events: createQueue(EVENT_QUEUE),
+    callbacks: createQueue(CALLBACK_QUEUE),
+    reconciliation: createQueue(RECONCILIATION_QUEUE)
+  };
 }
+
 export function queues() {
   return globalQueues.__envoyQueues ??= createQueues();
 }

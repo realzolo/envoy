@@ -81,5 +81,8 @@ export function openSecret<T>(envelope: Envelope, resourceId: string, version: n
 
 /** Keyed digests prevent offline guessing of short sensitive values from durable receipts. */
 export function secretDigest(value: string, purpose: string, version = currentKeyVersion()) {
-  return { digest: createHmac("sha256", rootKey(version)).update(`${purpose}\0${value}`).digest("hex"), keyVersion: version };
+  return {
+    digest: createHmac("sha256", rootKey(version)).update(`${purpose}\0${value}`).digest("hex"),
+    keyVersion: version
+  };
 }

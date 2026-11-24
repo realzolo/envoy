@@ -17,7 +17,7 @@ export const identitySyncRepository: IdentitySyncRepository = {
     ) UPDATE provider_identities pi SET sync_lease_token=$1,
       sync_lease_until=clock_timestamp()+interval '2 minutes',sync_attempt_at=clock_timestamp()
       FROM candidate WHERE pi.id=candidate.id
-      RETURNING pi.id,pi.provider_account_id AS "accountId",pi.sync_failures AS failures,pi.sync_lease_token AS token`,[token]);
+      RETURNING pi.id,pi.provider_account_id AS "accountId",pi.sync_failures AS failures,pi.sync_lease_token AS token`, [token]);
     return result.rows[0] ?? null;
   },
   async finish(input) {
@@ -26,6 +26,6 @@ export const identitySyncRepository: IdentitySyncRepository = {
       sync_error=CASE WHEN $6 THEN sync_error ELSE $5 END,
       sync_lease_until=NULL,sync_lease_token=NULL
       WHERE id=$1 AND sync_lease_token=$2 AND sync_lease_until>clock_timestamp()`,
-      [input.id,input.token,input.delaySeconds,input.failed,input.error,input.deferred ?? false]);
+      [input.id, input.token, input.delaySeconds, input.failed, input.error, input.deferred ?? false]);
   },
 };

@@ -15,8 +15,8 @@ export function getDatabaseUrl() {
 }
 
 export function pool() {
-  const max=Number(process.env.DATABASE_POOL_SIZE ?? 10);
-  if (!Number.isInteger(max) || max<1 || max>100) throw new Error("DATABASE_POOL_SIZE must be between 1 and 100");
+  const max = Number(process.env.DATABASE_POOL_SIZE ?? 10);
+  if (!Number.isInteger(max) || max < 1 || max > 100) throw new Error("DATABASE_POOL_SIZE must be between 1 and 100");
   globalDatabase.__envoyPool ??= new Pool({
     connectionString: getDatabaseUrl(),
     max,
@@ -41,7 +41,10 @@ export async function transaction<T>(work: (client: PoolClient) => Promise<T>) {
     await client.query("COMMIT");
     return result;
   } catch (error) {
-    try { await client.query("ROLLBACK"); } catch { /* Preserve the original failure after a broken connection. */ }
+    try {
+      await client.query("ROLLBACK");
+    } catch { /* Preserve the original failure after a broken connection. */
+    }
     throw error;
   } finally {
     const context = contexts.get(client);
@@ -53,7 +56,10 @@ export async function transaction<T>(work: (client: PoolClient) => Promise<T>) {
 
 export async function applicationSchemaHealth() {
   const expected = await loadApplicationMigrations();
-  const actual = (await query<{ file: string; sha256: string }>("SELECT file,sha256 FROM envoy_meta.migrations ORDER BY file")).rows;
+  const actual = (await query<{
+    file: string;
+    sha256: string
+  }>("SELECT file,sha256 FROM envoy_meta.migrations ORDER BY file")).rows;
   if (actual.length !== expected.length || actual.some((row, index) => row.file !== expected[index].file || row.sha256 !== expected[index].sha256)) throw new Error("Application database migrations are required before starting this release");
 }
 

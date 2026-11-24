@@ -16,25 +16,34 @@ export const mailDiagnosticSchema = z.object({
   reasonCode: z.enum(diagnosticReasons).nullable(), stage: z.enum(diagnosticStages),
   detailAvailability: z.enum(["SPECIFIC", "CATEGORY_ONLY", "NOT_RECORDED", "PROVIDER_NOT_SUPPLIED"]),
   evidence: diagnosticEvidenceSchema, occurredAt: z.iso.datetime({ offset: true }).nullable(),
-}).strict().superRefine((value,context)=>{
-  if ((value.detailAvailability === "SPECIFIC") !== (value.reasonCode !== null)) context.addIssue({code:"custom",path:["detailAvailability"],message:"Specific detail requires a known reasonCode"});
+}).strict().superRefine((value, context) => {
+  if ((value.detailAvailability === "SPECIFIC") !== (value.reasonCode !== null)) context.addIssue({
+    code: "custom",
+    path: ["detailAvailability"],
+    message: "Specific detail requires a known reasonCode"
+  });
 });
 export const retryDispositionSchema = z.object({
   owner: z.enum(["ENVOY", "PROVIDER", "NONE", "UNKNOWN"]),
   action: z.enum(["SCHEDULED", "WAITING_PROVIDER", "STOPPED", "MANUAL_REVIEW"]),
   nextAttemptAt: z.iso.datetime({ offset: true }).nullable(),
-}).strict().superRefine((value,context)=>{
-  const valid = value.owner === "ENVOY" ? ["SCHEDULED","MANUAL_REVIEW"].includes(value.action) : value.owner === "PROVIDER" ? value.action === "WAITING_PROVIDER" : value.owner === "NONE" ? value.action === "STOPPED" : value.action === "MANUAL_REVIEW";
-  if (!valid || (value.nextAttemptAt !== null && value.action !== "SCHEDULED")) context.addIssue({code:"custom",message:"Retry responsibility and action must describe the same disposition"});
+}).strict().superRefine((value, context) => {
+  const valid = value.owner === "ENVOY" ? ["SCHEDULED", "MANUAL_REVIEW"].includes(value.action) : value.owner === "PROVIDER" ? value.action === "WAITING_PROVIDER" : value.owner === "NONE" ? value.action === "STOPPED" : value.action === "MANUAL_REVIEW";
+  if (!valid || (value.nextAttemptAt !== null && value.action !== "SCHEDULED")) context.addIssue({
+    code: "custom",
+    message: "Retry responsibility and action must describe the same disposition"
+  });
 });
 export type MailDiagnostic = z.infer<typeof mailDiagnosticSchema>;
 export type DiagnosticReason = z.infer<typeof mailDiagnosticSchema>["reasonCode"];
 export type DiagnosticEvidence = z.infer<typeof diagnosticEvidenceSchema>;
 export type RetryDisposition = z.infer<typeof retryDispositionSchema>;
+
 export function projectDiagnostic(value: unknown): MailDiagnostic | null {
   if (value === null || value === undefined) return null;
   return mailDiagnosticSchema.parse(value);
 }
+
 export const stoppedRetry: RetryDisposition = { owner: "NONE", action: "STOPPED", nextAttemptAt: null };
 export const deliverySnapshotSchema = z.object({
   id: z.string(), messageId: z.string(), revision: z.string().regex(/^[1-9][0-9]*$/),

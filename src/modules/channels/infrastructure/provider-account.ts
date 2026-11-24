@@ -1,8 +1,8 @@
 import {
-providerConfigSchema,
-providerSecretSchema,
-type ProviderSendContext,
-type ProviderType
+  providerConfigSchema,
+  providerSecretSchema,
+  type ProviderSendContext,
+  type ProviderType
 } from "@/integrations/providers/contracts";
 import { providerRegistry } from "@/integrations/providers/public";
 import { openSecret } from "@/platform/crypto/envelope";

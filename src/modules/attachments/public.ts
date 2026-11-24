@@ -1,4 +1,16 @@
-export { readAttachment, uploadOutboundFile, getOutboundFile, resolveOutboundAttachments, registerAttachment, scheduleAttachmentScans, processAttachmentScan, retryAttachmentScan, withSafeOutboundAttachments, attachmentUsage, assertUsable } from "./infrastructure/services";
+export {
+  readAttachment,
+  uploadOutboundFile,
+  getOutboundFile,
+  resolveOutboundAttachments,
+  registerAttachment,
+  scheduleAttachmentScans,
+  processAttachmentScan,
+  retryAttachmentScan,
+  withSafeOutboundAttachments,
+  attachmentUsage,
+  assertUsable
+} from "./infrastructure/services";
 export { AttachmentUseError } from "./domain/safety";
 export { FileValidationError } from "./contracts";
 export type { AttachmentSnapshot, SafetyRow } from "./contracts";

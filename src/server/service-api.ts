@@ -1,8 +1,12 @@
-import { projectDiagnostic, type MailDiagnostic } from "@/contracts/mail-diagnostics";
-import { AttachmentUseError } from "@/modules/attachments/public";
-import { FileValidationError } from "@/modules/attachments/public";
+import { type MailDiagnostic, projectDiagnostic } from "@/contracts/mail-diagnostics";
+import { AttachmentUseError, FileValidationError } from "@/modules/attachments/public";
 import type { ZodError } from "zod";
-import { decodeCursor, DuplicateRiskError, IdempotencyConflictError, MessageValidationError } from "@/modules/outbound/public";
+import {
+  decodeCursor,
+  DuplicateRiskError,
+  IdempotencyConflictError,
+  MessageValidationError
+} from "@/modules/outbound/public";
 import { authenticateService, type ServiceIdentity } from "@/server/auth";
 import { enforceRateLimit } from "@/platform/runtime-store";
 import { createId } from "@/platform/ids";
@@ -11,29 +15,49 @@ import { BodyTooLargeError, readRequestBytes } from "@/server/request-body";
 import { MAX_REQUEST_BYTES } from "@/lib/contracts";
 
 const requestIds = new WeakMap<Request, string>();
-export function getRequestId(request: Request) { return requestIds.get(request); }
 
-export function apiProblem(title: string, status: number, detail = title, errors?: unknown, code = title.toUpperCase().replace(/[^A-Z0-9]+/g, "_"), diagnostic:MailDiagnostic|null = null) {
-  return Response.json({ type: `https://envoy.local/problems/${title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`, title, status, detail, code, diagnostic:projectDiagnostic(diagnostic), ...(errors ? { errors } : {}) }, {
-    status, headers: { "content-type": "application/problem+json", ...(status === 401 ? { "www-authenticate": 'Bearer realm="Envoy"' } : {}) },
+export function getRequestId(request: Request) {
+  return requestIds.get(request);
+}
+
+export function apiProblem(title: string, status: number, detail = title, errors?: unknown, code = title.toUpperCase().replace(/[^A-Z0-9]+/g, "_"), diagnostic: MailDiagnostic | null = null) {
+  return Response.json({
+    type: `https://envoy.local/problems/${title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
+    title,
+    status,
+    detail,
+    code,
+    diagnostic: projectDiagnostic(diagnostic), ...(errors ? { errors } : {})
+  }, {
+    status,
+    headers: { "content-type": "application/problem+json", ...(status === 401 ? { "www-authenticate": 'Bearer realm="Envoy"' } : {}) },
   });
 }
 
 class RequestBodyError extends Error {
-  constructor(public status: number, message: string) { super(message); }
+  constructor(public status: number, message: string) {
+    super(message);
+  }
 }
 
 export async function readJson(request: Request, optional = false, maximum = MAX_REQUEST_BYTES): Promise<unknown> {
   if (request.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase() !== "application/json" && (!optional || request.body)) throw new RequestBodyError(415, "Content-Type must be application/json.");
   let bytes: Uint8Array;
-  try { bytes = await readRequestBytes(request, maximum); }
-  catch (error) {
+  try {
+    bytes = await readRequestBytes(request, maximum);
+  } catch (error) {
     if (error instanceof BodyTooLargeError) throw new RequestBodyError(413, error.message);
     throw error;
   }
-  if (!bytes.byteLength) { if (optional) return {}; throw new RequestBodyError(400, "A JSON body is required."); }
-  try { return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)); }
-  catch { throw new RequestBodyError(400, "The request body must contain valid JSON."); }
+  if (!bytes.byteLength) {
+    if (optional) return {};
+    throw new RequestBodyError(400, "A JSON body is required.");
+  }
+  try {
+    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+  } catch {
+    throw new RequestBodyError(400, "The request body must contain valid JSON.");
+  }
 }
 
 export function serviceRoute<T = unknown>(handler: (request: Request, identity: ServiceIdentity, context: T) => Promise<Response>) {
@@ -58,30 +82,56 @@ export function serviceRoute<T = unknown>(handler: (request: Request, identity: 
         headers.set("RateLimit-Remaining", String(rate.remaining));
         const seconds = Math.max(1, Math.ceil((rate.resetAt.getTime() - Date.now()) / 1000));
         headers.set("RateLimit-Reset", String(seconds));
-        if (!rate.allowed) { headers.set("Retry-After", String(seconds)); response = apiProblem("Rate limit exceeded", 429, "Service request quota exceeded."); }
-        else response = await handler(request, identity, context as T);
+        if (!rate.allowed) {
+          headers.set("Retry-After", String(seconds));
+          response = apiProblem("Rate limit exceeded", 429, "Service request quota exceeded.");
+        } else response = await handler(request, identity, context as T);
       }
     } catch (error) {
-      if (error instanceof AttachmentUseError) response = apiProblem("Attachment unavailable",409,error.reasonCode,undefined,error.code);
+      if (error instanceof AttachmentUseError) response = apiProblem("Attachment unavailable", 409, error.reasonCode, undefined, error.code);
       else if (error instanceof BodyTooLargeError) response = apiProblem("Payload too large", 413, error.message);
       else if (error instanceof FileValidationError) response = apiProblem("Invalid attachment", 422, error.message);
       else if (error instanceof RequestBodyError) response = apiProblem(error.status === 413 ? "Payload too large" : error.status === 415 ? "Unsupported media type" : "Invalid JSON", error.status, error.message);
       else if (error instanceof DuplicateRiskError || error instanceof IdempotencyConflictError) response = apiProblem("Conflict", 409, error.message, undefined, error instanceof DuplicateRiskError ? "DUPLICATE_RISK_ACKNOWLEDGEMENT_REQUIRED" : "IDEMPOTENCY_CONFLICT");
       else if (error instanceof MessageValidationError) response = apiProblem("Validation failed", 422, error.issues.join(" "), undefined, error.code);
-      else { console.error("Service API failed", { requestId, error }); response = apiProblem("Service unavailable", 503, "The request could not be completed. Retry with the same idempotency key when applicable."); }
+      else {
+        console.error("Service API failed", { requestId, error });
+        response = apiProblem("Service unavailable", 503, "The request could not be completed. Retry with the same idempotency key when applicable.");
+      }
     }
     if (response.status >= 400) {
       const content = await response.json().catch(() => ({}));
-      const problem = { type: "about:blank", title: "Request failed", detail: content.title ?? "Request failed", code: "REQUEST_FAILED", ...content, diagnostic:projectDiagnostic(content.diagnostic), status: response.status, requestId };
+      const problem = {
+        type: "about:blank",
+        title: "Request failed",
+        detail: content.title ?? "Request failed",
+        code: "REQUEST_FAILED", ...content,
+        diagnostic: projectDiagnostic(content.diagnostic),
+        status: response.status,
+        requestId
+      };
       details = { problem };
-      response = Response.json(problem, { status: response.status, headers: { ...Object.fromEntries(response.headers), "content-type": "application/problem+json" } });
+      response = Response.json(problem, {
+        status: response.status,
+        headers: { ...Object.fromEntries(response.headers), "content-type": "application/problem+json" }
+      });
     }
     if (response.status === 202 && request.method === "POST" && new URL(request.url).pathname === "/api/v1/messages") {
       const accepted = await response.clone().json().catch(() => ({}));
       messageId = typeof accepted.id === "string" ? accepted.id : null;
     }
     headers.forEach((value, key) => response.headers.set(key, value));
-    await recordRequest({ requestId, method: request.method, path: new URL(request.url).pathname, statusCode: response.status, durationMs: Date.now() - started, actor, serviceId, messageId, details });
+    await recordRequest({
+      requestId,
+      method: request.method,
+      path: new URL(request.url).pathname,
+      statusCode: response.status,
+      durationMs: Date.now() - started,
+      actor,
+      serviceId,
+      messageId,
+      details
+    });
     return response;
   };
 }
@@ -97,6 +147,9 @@ export function pagination(request: Request) {
 
 export function validationErrors(error: ZodError) {
   const fields: Record<string, string[]> = {};
-  for (const issue of error.issues) { const path = issue.path.join(".") || "body"; (fields[path] ??= []).push(issue.message); }
+  for (const issue of error.issues) {
+    const path = issue.path.join(".") || "body";
+    (fields[path] ??= []).push(issue.message);
+  }
   return fields;
 }

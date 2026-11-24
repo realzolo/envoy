@@ -1,6 +1,6 @@
 import { eventTypes } from "@/lib/contracts";
 import { listEvents } from "@/modules/outbound/public";
-import { serviceRoute, apiProblem, pagination } from "@/server/service-api";
+import { apiProblem, pagination, serviceRoute } from "@/server/service-api";
 
 export const GET = serviceRoute(async (request, identity) => {
   const page = pagination(request);

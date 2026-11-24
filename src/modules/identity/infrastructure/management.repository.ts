@@ -1,37 +1,130 @@
 import { queuePermissionsChanged } from '@/modules/identity/infrastructure/permission-notifications';
-import { database,query,transaction } from '@/platform/database';
-import { services,serviceCredentials } from '@/platform/database/schema/identity';
-import { eq,sql } from 'drizzle-orm';
+import { database, query, transaction } from '@/platform/database';
+import { serviceCredentials, services } from '@/platform/database/schema/identity';
+import { eq, sql } from 'drizzle-orm';
 import type { PoolClient } from 'pg';
 import type * as RepositoryRows from '../application/ports';
-import type { ManagementRepository,ManagementUnitOfWork } from '../application/ports';
-export function createManagementRepository(client?:PoolClient):ManagementRepository { return {
-async setServiceStatus(input) { const result=await database(client).update(services).set({status:input.status,configurationRevision:sql`configuration_revision+1`,updatedAt:sql`now()`}).where(eq(services.id,input.id)); return {rows:[],rowCount:result.rowCount}; },
-recordAudit(input:{actor:string;action:string;resourceType:string;resourceId:null|string;details:unknown}) { return client ? client.query<RepositoryRows.RecordAuditRow>("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES ($1,$2,$3,$4,$5)", [input.actor,input.action,input.resourceType,input.resourceId,input.details]) : query<RepositoryRows.RecordAuditRow>("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES ($1,$2,$3,$4,$5)", [input.actor,input.action,input.resourceType,input.resourceId,input.details]); },
-lockActiveCredential(input:{id:string}) { return client ? client.query<RepositoryRows.LockActiveCredentialRow>("SELECT c.service_id FROM service_credentials c JOIN services s ON s.id=c.service_id WHERE c.id=$1 AND c.status='active' AND s.status='active' AND (c.valid_to IS NULL OR c.valid_to>now()) FOR UPDATE OF c,s", [input.id]) : query<RepositoryRows.LockActiveCredentialRow>("SELECT c.service_id FROM service_credentials c JOIN services s ON s.id=c.service_id WHERE c.id=$1 AND c.status='active' AND s.status='active' AND (c.valid_to IS NULL OR c.valid_to>now()) FOR UPDATE OF c,s", [input.id]); },
-limitCredentialOverlap(input:{id:string}) { return client ? client.query<RepositoryRows.LimitCredentialOverlapRow>("UPDATE service_credentials SET valid_to=LEAST(COALESCE(valid_to,now()+interval '24 hours'),now()+interval '24 hours') WHERE id=$1 RETURNING valid_to", [input.id]) : query<RepositoryRows.LimitCredentialOverlapRow>("UPDATE service_credentials SET valid_to=LEAST(COALESCE(valid_to,now()+interval '24 hours'),now()+interval '24 hours') WHERE id=$1 RETURNING valid_to", [input.id]); },
-insertRotatedCredential(input:{id:string;serviceId:string;keyPrefix:string;keyHash:string}) { return client ? client.query<RepositoryRows.InsertRotatedCredentialRow>("INSERT INTO service_credentials(id,service_id,key_prefix,key_hash) VALUES($1,$2,$3,$4)", [input.id,input.serviceId,input.keyPrefix,input.keyHash]) : query<RepositoryRows.InsertRotatedCredentialRow>("INSERT INTO service_credentials(id,service_id,key_prefix,key_hash) VALUES($1,$2,$3,$4)", [input.id,input.serviceId,input.keyPrefix,input.keyHash]); },
-recordCredentialRotation(input:{actor:string;resourceId:string;details:unknown}) { return client ? client.query<RepositoryRows.RecordCredentialRotationRow>("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES($1,'service_credential.rotate','service_credential',$2,$3)", [input.actor,input.resourceId,input.details]) : query<RepositoryRows.RecordCredentialRotationRow>("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES($1,'service_credential.rotate','service_credential',$2,$3)", [input.actor,input.resourceId,input.details]); },
-async revokeCredential(input:{id:string})  {const result=await database(client).update(serviceCredentials).set({status:"revoked",validTo:sql`now()`}).where(eq(serviceCredentials.id,input.id));return {rows:[],rowCount:result.rowCount};},
-	findRegisteredDomains(input:{selectedIds:string[]}) { const sql="SELECT id FROM sending_domains WHERE id=ANY($1::text[])"; return client ? client.query<RepositoryRows.FindRegisteredDomainsRow>(sql,[input.selectedIds]) : query<RepositoryRows.FindRegisteredDomainsRow>(sql,[input.selectedIds]); },
-	findProviderIdentities(input:{identityIds:string[]}) { const sql="SELECT id,sending_domain_id FROM provider_identities WHERE id=ANY($1::text[])"; return client ? client.query<RepositoryRows.FindProviderIdentityRow>(sql,[input.identityIds]) : query<RepositoryRows.FindProviderIdentityRow>(sql,[input.identityIds]); },
-	deleteServiceBindings(input:{serviceId:string}) { const sql="DELETE FROM service_domain_bindings WHERE service_id=$1"; return client ? client.query<never>(sql,[input.serviceId]) : query<never>(sql,[input.serviceId]); },
-	insertServiceBinding(input:{id:string;serviceId:string;domainId:string;receive:boolean;outboundIdentityId:string|null}) { const sql="INSERT INTO service_domain_bindings(id,service_id,sending_domain_id,receive_enabled,outbound_provider_identity_id) VALUES($1,$2,$3,$4,$5)"; const args=[input.id,input.serviceId,input.domainId,input.receive,input.outboundIdentityId]; return client ? client.query<never>(sql,args) : query<never>(sql,args); },
-lockServiceCallback(input:{serviceId:string}) { return client ? client.query<RepositoryRows.LockServiceCallbackRow>("SELECT id,url,status FROM callback_endpoints WHERE service_id=$1 FOR UPDATE", [input.serviceId]) : query<RepositoryRows.LockServiceCallbackRow>("SELECT id,url,status FROM callback_endpoints WHERE service_id=$1 FOR UPDATE", [input.serviceId]); },
-saveServiceCallback(input:{id:string;name:string;url:null|string;status:string}) { return client ? client.query<RepositoryRows.SaveServiceCallbackRow>("UPDATE callback_endpoints SET name=$2,url=$3,status=$4,updated_at=now() WHERE id=$1", [input.id,input.name,input.url,input.status]) : query<RepositoryRows.SaveServiceCallbackRow>("UPDATE callback_endpoints SET name=$2,url=$3,status=$4,updated_at=now() WHERE id=$1", [input.id,input.name,input.url,input.status]); },
-stopPendingCallbackDeliveries(input:{endpointId:string}) { return client ? client.query<RepositoryRows.StopPendingCallbackDeliveriesRow>("UPDATE callback_deliveries SET status='dead_letter',last_error='Event callback URL removed from service configuration',updated_at=now() WHERE endpoint_id=$1 AND status IN ('pending','retrying')", [input.endpointId]) : query<RepositoryRows.StopPendingCallbackDeliveriesRow>("UPDATE callback_deliveries SET status='dead_letter',last_error='Event callback URL removed from service configuration',updated_at=now() WHERE endpoint_id=$1 AND status IN ('pending','retrying')", [input.endpointId]); },
-insertServiceCallback(input:{id:string;serviceId:string;name:string;url:string;secretCiphertext:string;encryptedDek:string;keyVersion:string;subscribedEvents:string[]}) { return client ? client.query<RepositoryRows.InsertServiceCallbackRow>("INSERT INTO callback_endpoints(id,service_id,name,url,secret_ciphertext,encrypted_dek,key_version,subscribed_events) VALUES($1,$2,$3,$4,$5,$6,$7,$8)", [input.id,input.serviceId,input.name,input.url,input.secretCiphertext,input.encryptedDek,input.keyVersion,input.subscribedEvents]) : query<RepositoryRows.InsertServiceCallbackRow>("INSERT INTO callback_endpoints(id,service_id,name,url,secret_ciphertext,encrypted_dek,key_version,subscribed_events) VALUES($1,$2,$3,$4,$5,$6,$7,$8)", [input.id,input.serviceId,input.name,input.url,input.secretCiphertext,input.encryptedDek,input.keyVersion,input.subscribedEvents]); },
-insertServiceCredential(input:{id:string;serviceId:string;keyPrefix:string;keyHash:string}) { return client ? client.query<RepositoryRows.InsertServiceCredentialRow>("INSERT INTO service_credentials(id,service_id,key_prefix,key_hash) VALUES($1,$2,$3,$4)", [input.id,input.serviceId,input.keyPrefix,input.keyHash]) : query<RepositoryRows.InsertServiceCredentialRow>("INSERT INTO service_credentials(id,service_id,key_prefix,key_hash) VALUES($1,$2,$3,$4)", [input.id,input.serviceId,input.keyPrefix,input.keyHash]); },
-recordCredentialIssue(input:{actor:string;resourceId:string;details:unknown}) { return client ? client.query<RepositoryRows.RecordCredentialIssueRow>("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES($1,'service_credential.issue','service_credential',$2,$3)", [input.actor,input.resourceId,input.details]) : query<RepositoryRows.RecordCredentialIssueRow>("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES($1,'service_credential.issue','service_credential',$2,$3)", [input.actor,input.resourceId,input.details]); },
-insertService(input:{id:string;name:string;suppressionManagementAllowed:boolean}) { return client ? client.query<RepositoryRows.InsertServiceRow>("INSERT INTO services(id,name,suppression_management_allowed) VALUES($1,$2,$3)", [input.id,input.name,input.suppressionManagementAllowed]) : query<RepositoryRows.InsertServiceRow>("INSERT INTO services(id,name,suppression_management_allowed) VALUES($1,$2,$3)", [input.id,input.name,input.suppressionManagementAllowed]); },
-recordServiceCreation(input:{actor:string;resourceId:string;details:unknown}) { return client ? client.query<RepositoryRows.RecordServiceCreationRow>("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES($1,'service.create','service',$2,$3)", [input.actor,input.resourceId,input.details]) : query<RepositoryRows.RecordServiceCreationRow>("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES($1,'service.create','service',$2,$3)", [input.actor,input.resourceId,input.details]); },
-lockServiceConfiguration(input:{id:string}) { return client ? client.query<RepositoryRows.LockServiceConfigurationRow>("SELECT s.* FROM services s WHERE s.id=$1 FOR UPDATE OF s", [input.id]) : query<RepositoryRows.LockServiceConfigurationRow>("SELECT s.* FROM services s WHERE s.id=$1 FOR UPDATE OF s", [input.id]); },
-	findServiceBindings(input:{serviceId:string}) { const sql="SELECT sending_domain_id,receive_enabled,outbound_provider_identity_id FROM service_domain_bindings WHERE service_id=$1 ORDER BY sending_domain_id"; return client ? client.query<RepositoryRows.FindServiceBindingRow>(sql,[input.serviceId]) : query<RepositoryRows.FindServiceBindingRow>(sql,[input.serviceId]); },
-findServiceCallback(input:{serviceId:string}) { return client ? client.query<RepositoryRows.FindServiceCallbackRow>("SELECT url,status FROM callback_endpoints WHERE service_id=$1", [input.serviceId]) : query<RepositoryRows.FindServiceCallbackRow>("SELECT url,status FROM callback_endpoints WHERE service_id=$1", [input.serviceId]); },
-updateServiceConfiguration(input:{id:string;name:string;suppressionManagementAllowed:boolean}) { return client ? client.query<RepositoryRows.UpdateServiceConfigurationRow>("UPDATE services SET name=$2,suppression_management_allowed=$3,configuration_revision=configuration_revision+1,updated_at=now() WHERE id=$1", [input.id,input.name,input.suppressionManagementAllowed]) : query<RepositoryRows.UpdateServiceConfigurationRow>("UPDATE services SET name=$2,suppression_management_allowed=$3,configuration_revision=configuration_revision+1,updated_at=now() WHERE id=$1", [input.id,input.name,input.suppressionManagementAllowed]); },
-recordServiceUpdate(input:{actor:string;resourceId:string;details:unknown}) { return client ? client.query<RepositoryRows.RecordServiceUpdateRow>("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES($1,'service.update','service',$2,$3)", [input.actor,input.resourceId,input.details]) : query<RepositoryRows.RecordServiceUpdateRow>("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES($1,'service.update','service',$2,$3)", [input.actor,input.resourceId,input.details]); },
-lockActiveService(input:{id:string}) { return client ? client.query<RepositoryRows.LockActiveServiceRow>("SELECT s.id FROM services s WHERE s.id=$1 AND s.status='active' FOR SHARE OF s", [input.id]) : query<RepositoryRows.LockActiveServiceRow>("SELECT s.id FROM services s WHERE s.id=$1 AND s.status='active' FOR SHARE OF s", [input.id]); },
-async queuePermissionsChanged(serviceId:string) {if(!client) throw new Error('Permissions notification requires a transaction');await queuePermissionsChanged(client,serviceId);}
-}; }
-export const managementRepository=createManagementRepository();
-export const managementUnitOfWork:ManagementUnitOfWork={run:work=>transaction(client=>work(createManagementRepository(client)))};
+import type { ManagementRepository, ManagementUnitOfWork } from '../application/ports';
+
+export function createManagementRepository(client?: PoolClient): ManagementRepository {
+  return {
+    async setServiceStatus(input) {
+      const result = await database(client).update(services).set({
+        status: input.status,
+        configurationRevision: sql`configuration_revision+1`,
+        updatedAt: sql`now()`
+      }).where(eq(services.id, input.id));
+      return { rows: [], rowCount: result.rowCount };
+    },
+    recordAudit(input: {
+      actor: string;
+      action: string;
+      resourceType: string;
+      resourceId: null | string;
+      details: unknown
+    }) {
+      return client ? client.query<RepositoryRows.RecordAuditRow>("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES ($1,$2,$3,$4,$5)", [input.actor, input.action, input.resourceType, input.resourceId, input.details]) : query<RepositoryRows.RecordAuditRow>("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES ($1,$2,$3,$4,$5)", [input.actor, input.action, input.resourceType, input.resourceId, input.details]);
+    },
+    lockActiveCredential(input: { id: string }) {
+      return client ? client.query<RepositoryRows.LockActiveCredentialRow>("SELECT c.service_id FROM service_credentials c JOIN services s ON s.id=c.service_id WHERE c.id=$1 AND c.status='active' AND s.status='active' AND (c.valid_to IS NULL OR c.valid_to>now()) FOR UPDATE OF c,s", [input.id]) : query<RepositoryRows.LockActiveCredentialRow>("SELECT c.service_id FROM service_credentials c JOIN services s ON s.id=c.service_id WHERE c.id=$1 AND c.status='active' AND s.status='active' AND (c.valid_to IS NULL OR c.valid_to>now()) FOR UPDATE OF c,s", [input.id]);
+    },
+    limitCredentialOverlap(input: { id: string }) {
+      return client ? client.query<RepositoryRows.LimitCredentialOverlapRow>("UPDATE service_credentials SET valid_to=LEAST(COALESCE(valid_to,now()+interval '24 hours'),now()+interval '24 hours') WHERE id=$1 RETURNING valid_to", [input.id]) : query<RepositoryRows.LimitCredentialOverlapRow>("UPDATE service_credentials SET valid_to=LEAST(COALESCE(valid_to,now()+interval '24 hours'),now()+interval '24 hours') WHERE id=$1 RETURNING valid_to", [input.id]);
+    },
+    insertRotatedCredential(input: { id: string; serviceId: string; keyPrefix: string; keyHash: string }) {
+      return client ? client.query<RepositoryRows.InsertRotatedCredentialRow>("INSERT INTO service_credentials(id,service_id,key_prefix,key_hash) VALUES($1,$2,$3,$4)", [input.id, input.serviceId, input.keyPrefix, input.keyHash]) : query<RepositoryRows.InsertRotatedCredentialRow>("INSERT INTO service_credentials(id,service_id,key_prefix,key_hash) VALUES($1,$2,$3,$4)", [input.id, input.serviceId, input.keyPrefix, input.keyHash]);
+    },
+    recordCredentialRotation(input: { actor: string; resourceId: string; details: unknown }) {
+      return client ? client.query<RepositoryRows.RecordCredentialRotationRow>("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES($1,'service_credential.rotate','service_credential',$2,$3)", [input.actor, input.resourceId, input.details]) : query<RepositoryRows.RecordCredentialRotationRow>("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES($1,'service_credential.rotate','service_credential',$2,$3)", [input.actor, input.resourceId, input.details]);
+    },
+    async revokeCredential(input: { id: string }) {
+      const result = await database(client).update(serviceCredentials).set({
+        status: "revoked",
+        validTo: sql`now()`
+      }).where(eq(serviceCredentials.id, input.id));
+      return { rows: [], rowCount: result.rowCount };
+    },
+    findRegisteredDomains(input: { selectedIds: string[] }) {
+      const sql = "SELECT id FROM sending_domains WHERE id=ANY($1::text[])";
+      return client ? client.query<RepositoryRows.FindRegisteredDomainsRow>(sql, [input.selectedIds]) : query<RepositoryRows.FindRegisteredDomainsRow>(sql, [input.selectedIds]);
+    },
+    findProviderIdentities(input: { identityIds: string[] }) {
+      const sql = "SELECT id,sending_domain_id FROM provider_identities WHERE id=ANY($1::text[])";
+      return client ? client.query<RepositoryRows.FindProviderIdentityRow>(sql, [input.identityIds]) : query<RepositoryRows.FindProviderIdentityRow>(sql, [input.identityIds]);
+    },
+    deleteServiceBindings(input: { serviceId: string }) {
+      const sql = "DELETE FROM service_domain_bindings WHERE service_id=$1";
+      return client ? client.query<never>(sql, [input.serviceId]) : query<never>(sql, [input.serviceId]);
+    },
+    insertServiceBinding(input: {
+      id: string;
+      serviceId: string;
+      domainId: string;
+      receive: boolean;
+      outboundIdentityId: string | null
+    }) {
+      const sql = "INSERT INTO service_domain_bindings(id,service_id,sending_domain_id,receive_enabled,outbound_provider_identity_id) VALUES($1,$2,$3,$4,$5)";
+      const args = [input.id, input.serviceId, input.domainId, input.receive, input.outboundIdentityId];
+      return client ? client.query<never>(sql, args) : query<never>(sql, args);
+    },
+    lockServiceCallback(input: { serviceId: string }) {
+      return client ? client.query<RepositoryRows.LockServiceCallbackRow>("SELECT id,url,status FROM callback_endpoints WHERE service_id=$1 FOR UPDATE", [input.serviceId]) : query<RepositoryRows.LockServiceCallbackRow>("SELECT id,url,status FROM callback_endpoints WHERE service_id=$1 FOR UPDATE", [input.serviceId]);
+    },
+    saveServiceCallback(input: { id: string; name: string; url: null | string; status: string }) {
+      return client ? client.query<RepositoryRows.SaveServiceCallbackRow>("UPDATE callback_endpoints SET name=$2,url=$3,status=$4,updated_at=now() WHERE id=$1", [input.id, input.name, input.url, input.status]) : query<RepositoryRows.SaveServiceCallbackRow>("UPDATE callback_endpoints SET name=$2,url=$3,status=$4,updated_at=now() WHERE id=$1", [input.id, input.name, input.url, input.status]);
+    },
+    stopPendingCallbackDeliveries(input: { endpointId: string }) {
+      return client ? client.query<RepositoryRows.StopPendingCallbackDeliveriesRow>("UPDATE callback_deliveries SET status='dead_letter',last_error='Event callback URL removed from service configuration',updated_at=now() WHERE endpoint_id=$1 AND status IN ('pending','retrying')", [input.endpointId]) : query<RepositoryRows.StopPendingCallbackDeliveriesRow>("UPDATE callback_deliveries SET status='dead_letter',last_error='Event callback URL removed from service configuration',updated_at=now() WHERE endpoint_id=$1 AND status IN ('pending','retrying')", [input.endpointId]);
+    },
+    insertServiceCallback(input: {
+      id: string;
+      serviceId: string;
+      name: string;
+      url: string;
+      secretCiphertext: string;
+      encryptedDek: string;
+      keyVersion: string;
+      subscribedEvents: string[]
+    }) {
+      return client ? client.query<RepositoryRows.InsertServiceCallbackRow>("INSERT INTO callback_endpoints(id,service_id,name,url,secret_ciphertext,encrypted_dek,key_version,subscribed_events) VALUES($1,$2,$3,$4,$5,$6,$7,$8)", [input.id, input.serviceId, input.name, input.url, input.secretCiphertext, input.encryptedDek, input.keyVersion, input.subscribedEvents]) : query<RepositoryRows.InsertServiceCallbackRow>("INSERT INTO callback_endpoints(id,service_id,name,url,secret_ciphertext,encrypted_dek,key_version,subscribed_events) VALUES($1,$2,$3,$4,$5,$6,$7,$8)", [input.id, input.serviceId, input.name, input.url, input.secretCiphertext, input.encryptedDek, input.keyVersion, input.subscribedEvents]);
+    },
+    insertServiceCredential(input: { id: string; serviceId: string; keyPrefix: string; keyHash: string }) {
+      return client ? client.query<RepositoryRows.InsertServiceCredentialRow>("INSERT INTO service_credentials(id,service_id,key_prefix,key_hash) VALUES($1,$2,$3,$4)", [input.id, input.serviceId, input.keyPrefix, input.keyHash]) : query<RepositoryRows.InsertServiceCredentialRow>("INSERT INTO service_credentials(id,service_id,key_prefix,key_hash) VALUES($1,$2,$3,$4)", [input.id, input.serviceId, input.keyPrefix, input.keyHash]);
+    },
+    recordCredentialIssue(input: { actor: string; resourceId: string; details: unknown }) {
+      return client ? client.query<RepositoryRows.RecordCredentialIssueRow>("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES($1,'service_credential.issue','service_credential',$2,$3)", [input.actor, input.resourceId, input.details]) : query<RepositoryRows.RecordCredentialIssueRow>("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES($1,'service_credential.issue','service_credential',$2,$3)", [input.actor, input.resourceId, input.details]);
+    },
+    insertService(input: { id: string; name: string; suppressionManagementAllowed: boolean }) {
+      return client ? client.query<RepositoryRows.InsertServiceRow>("INSERT INTO services(id,name,suppression_management_allowed) VALUES($1,$2,$3)", [input.id, input.name, input.suppressionManagementAllowed]) : query<RepositoryRows.InsertServiceRow>("INSERT INTO services(id,name,suppression_management_allowed) VALUES($1,$2,$3)", [input.id, input.name, input.suppressionManagementAllowed]);
+    },
+    recordServiceCreation(input: { actor: string; resourceId: string; details: unknown }) {
+      return client ? client.query<RepositoryRows.RecordServiceCreationRow>("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES($1,'service.create','service',$2,$3)", [input.actor, input.resourceId, input.details]) : query<RepositoryRows.RecordServiceCreationRow>("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES($1,'service.create','service',$2,$3)", [input.actor, input.resourceId, input.details]);
+    },
+    lockServiceConfiguration(input: { id: string }) {
+      return client ? client.query<RepositoryRows.LockServiceConfigurationRow>("SELECT s.* FROM services s WHERE s.id=$1 FOR UPDATE OF s", [input.id]) : query<RepositoryRows.LockServiceConfigurationRow>("SELECT s.* FROM services s WHERE s.id=$1 FOR UPDATE OF s", [input.id]);
+    },
+    findServiceBindings(input: { serviceId: string }) {
+      const sql = "SELECT sending_domain_id,receive_enabled,outbound_provider_identity_id FROM service_domain_bindings WHERE service_id=$1 ORDER BY sending_domain_id";
+      return client ? client.query<RepositoryRows.FindServiceBindingRow>(sql, [input.serviceId]) : query<RepositoryRows.FindServiceBindingRow>(sql, [input.serviceId]);
+    },
+    findServiceCallback(input: { serviceId: string }) {
+      return client ? client.query<RepositoryRows.FindServiceCallbackRow>("SELECT url,status FROM callback_endpoints WHERE service_id=$1", [input.serviceId]) : query<RepositoryRows.FindServiceCallbackRow>("SELECT url,status FROM callback_endpoints WHERE service_id=$1", [input.serviceId]);
+    },
+    updateServiceConfiguration(input: { id: string; name: string; suppressionManagementAllowed: boolean }) {
+      return client ? client.query<RepositoryRows.UpdateServiceConfigurationRow>("UPDATE services SET name=$2,suppression_management_allowed=$3,configuration_revision=configuration_revision+1,updated_at=now() WHERE id=$1", [input.id, input.name, input.suppressionManagementAllowed]) : query<RepositoryRows.UpdateServiceConfigurationRow>("UPDATE services SET name=$2,suppression_management_allowed=$3,configuration_revision=configuration_revision+1,updated_at=now() WHERE id=$1", [input.id, input.name, input.suppressionManagementAllowed]);
+    },
+    recordServiceUpdate(input: { actor: string; resourceId: string; details: unknown }) {
+      return client ? client.query<RepositoryRows.RecordServiceUpdateRow>("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES($1,'service.update','service',$2,$3)", [input.actor, input.resourceId, input.details]) : query<RepositoryRows.RecordServiceUpdateRow>("INSERT INTO audit_logs(actor,action,resource_type,resource_id,details) VALUES($1,'service.update','service',$2,$3)", [input.actor, input.resourceId, input.details]);
+    },
+    lockActiveService(input: { id: string }) {
+      return client ? client.query<RepositoryRows.LockActiveServiceRow>("SELECT s.id FROM services s WHERE s.id=$1 AND s.status='active' FOR SHARE OF s", [input.id]) : query<RepositoryRows.LockActiveServiceRow>("SELECT s.id FROM services s WHERE s.id=$1 AND s.status='active' FOR SHARE OF s", [input.id]);
+    },
+    async queuePermissionsChanged(serviceId: string) {
+      if (!client) throw new Error('Permissions notification requires a transaction');
+      await queuePermissionsChanged(client, serviceId);
+    }
+  };
+}
+
+export const managementRepository = createManagementRepository();
+export const managementUnitOfWork: ManagementUnitOfWork = { run: work => transaction(client => work(createManagementRepository(client))) };
