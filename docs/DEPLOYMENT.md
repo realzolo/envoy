@@ -1,8 +1,10 @@
 # Production Deployment
 
 This guide deploys Envoy from a server-side Git checkout using Docker Compose. Commands assume the repository is
-installed at `/data/envoy` and the current user can run Docker commands.
-Run Git as the checkout owner. If Docker requires elevation, use `sudo docker ...` for Docker commands only.
+installed at `/data/envoy` and run as its owner, with `sudo` available for Docker commands.
+The examples put `sudo` on each Docker command. Do not prefix `cd`, Git, the source check, or an entire `&&` chain
+with `sudo`: `cd` is a shell built-in, so `sudo cd` fails. If your user already has Docker access, you may omit
+`sudo` from the Docker commands only.
 
 The Compose configuration runs three services from the same application image:
 
@@ -29,8 +31,8 @@ Check the server tools:
 
 ```bash
 git --version
-docker version
-docker compose version
+sudo docker version
+sudo docker compose version
 ```
 
 ## 1. Check Out the Repository
@@ -119,17 +121,17 @@ Validate the configuration first:
 
 ```bash
 sh scripts/check-deployment-source.sh &&
-docker compose config --quiet
+sudo docker compose config --quiet
 ```
 
 After validation succeeds, build and start the services:
 
 ```bash
 sh scripts/check-deployment-source.sh &&
-docker compose config --quiet &&
-docker compose build web &&
-docker compose run --rm --no-deps migrate &&
-docker compose up -d --no-deps --force-recreate web worker
+sudo docker compose config --quiet &&
+sudo docker compose build web &&
+sudo docker compose run --rm --no-deps migrate &&
+sudo docker compose up -d --no-deps --force-recreate web worker
 ```
 
 Compose builds the shared `envoy:production` image once, runs `migrate`, and starts Web and Worker only after migration
@@ -151,8 +153,8 @@ configured separately.
 ## 4. Verify the Deployment
 
 ```bash
-docker compose ps -a
-docker compose logs --tail=100 web worker migrate
+sudo docker compose ps -a
+sudo docker compose logs --tail=100 web worker migrate
 curl --fail http://127.0.0.1:6178/api/health
 ```
 
@@ -205,10 +207,10 @@ Apply any required configuration changes, then run:
 
 ```bash
 sh scripts/check-deployment-source.sh &&
-docker compose config --quiet &&
-docker compose build web &&
-docker compose run --rm --no-deps migrate &&
-docker compose up -d --no-deps --force-recreate web worker
+sudo docker compose config --quiet &&
+sudo docker compose build web &&
+sudo docker compose run --rm --no-deps migrate &&
+sudo docker compose up -d --no-deps --force-recreate web worker
 ```
 
 The commands are chained so a failure stops the remaining steps. The new image is built once, migration must succeed
@@ -222,26 +224,26 @@ stop procedure in [Operations](OPERATIONS.md#attachment-safety-operations) befor
 
 ```bash
 # Inspect all service states, including the completed migration task.
-docker compose ps -a
+sudo docker compose ps -a
 
 # Follow application logs.
-docker compose logs -f web worker
+sudo docker compose logs -f web worker
 
 # Restart existing application containers.
-docker compose restart web worker
+sudo docker compose restart web worker
 
 # Stop application containers while retaining them.
-docker compose stop web worker
+sudo docker compose stop web worker
 
 # Remove the deployment's containers.
-docker compose down
+sudo docker compose down
 ```
 
 After changing `.env.production`, recreate the application containers to load the new values:
 
 ```bash
-docker compose config --quiet &&
-docker compose up -d --no-deps --force-recreate web worker
+sudo docker compose config --quiet &&
+sudo docker compose up -d --no-deps --force-recreate web worker
 ```
 
 `docker compose restart` keeps the existing container environment. Shutting down Compose does not delete data stored
@@ -263,7 +265,7 @@ in PostgreSQL or object storage.
 To inspect a failed migration container:
 
 ```bash
-docker compose logs --tail=200 migrate
+sudo docker compose logs --tail=200 migrate
 ```
 
 When a migration was run with `docker compose run --rm`, inspect its terminal output because the temporary container

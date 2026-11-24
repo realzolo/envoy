@@ -2,7 +2,9 @@
 
 生产服务器直接拉取源码，通过 Docker Compose 构建并运行。生产环境包含 Web、Worker 和一次性数据库迁移三个容器任务，统一加入
 `envoy-network` bridge 网络；PostgreSQL 和 R2 使用外部服务。
-Git 命令以源码目录所有者执行；Docker 需要管理员权限时，仅将 Docker 命令写成 `sudo docker ...`。
+以下命令以源码目录所有者执行，示例已为每条 Docker 命令加上 `sudo`。
+`cd`、Git、源码检查脚本以及整段 `&&` 命令链前都不要加 `sudo`；`cd` 是 Shell 内置命令，`sudo cd` 会报错。
+如果当前用户已具有 Docker 权限，可以只省略 Docker 命令前的 `sudo`。
 
 ## 1. 环境要求
 
@@ -16,8 +18,8 @@ Git 命令以源码目录所有者执行；Docker 需要管理员权限时，仅
 
 ```bash
 git --version
-docker --version
-docker compose version
+sudo docker --version
+sudo docker compose version
 ```
 
 ## 2. 拉取源码
@@ -82,10 +84,10 @@ openssl rand -hex 32
 
 ```bash
 sh scripts/check-deployment-source.sh &&
-docker compose config --quiet &&
-docker compose build web &&
-docker compose run --rm --no-deps migrate &&
-docker compose up -d --no-deps --force-recreate web worker
+sudo docker compose config --quiet &&
+sudo docker compose build web &&
+sudo docker compose run --rm --no-deps migrate &&
+sudo docker compose up -d --no-deps --force-recreate web worker
 ```
 
 此全新项目的 `db/migrations/001_initial.sql` 已包含完整应用结构和出站变更流。后续结构变更追加连续版本 SQL，并在 `db/migrations/checksums.json` 登记 SHA-256。
@@ -110,7 +112,7 @@ HTTPS。
 查看状态和健康检查：
 
 ```bash
-docker compose ps
+sudo docker compose ps
 curl --fail http://127.0.0.1:6178/api/health
 ```
 
@@ -121,10 +123,10 @@ cd /data/envoy &&
 git switch main &&
 git pull --ff-only &&
 sh scripts/check-deployment-source.sh &&
-docker compose config --quiet &&
-docker compose build web &&
-docker compose run --rm --no-deps migrate &&
-docker compose up -d --no-deps --force-recreate web worker
+sudo docker compose config --quiet &&
+sudo docker compose build web &&
+sudo docker compose run --rm --no-deps migrate &&
+sudo docker compose up -d --no-deps --force-recreate web worker
 ```
 
 命令用 `&&` 串联，源码检查、配置检查、构建或迁移失败就停止，不会继续替换容器。
@@ -148,24 +150,24 @@ Docker 的 `COPY . .` 会将未被 `.dockerignore` 排除的旧源码一并加�
 
 ```bash
 # 查看容器
-docker compose ps
+sudo docker compose ps
 
 # 查看日志
-docker compose logs -f web
-docker compose logs -f worker
+sudo docker compose logs -f web
+sudo docker compose logs -f worker
 
 # 重启
-docker compose restart web worker
+sudo docker compose restart web worker
 
 # 停止
-docker compose down
+sudo docker compose down
 ```
 
 修改 `.env.production` 后，重新创建容器：
 
 ```bash
-docker compose config --quiet &&
-docker compose up -d --no-deps --force-recreate web worker
+sudo docker compose config --quiet &&
+sudo docker compose up -d --no-deps --force-recreate web worker
 ```
 
 ## 7. 回滚
@@ -175,10 +177,10 @@ cd /data/envoy &&
 git checkout REPLACE_WITH_PREVIOUS_COMMIT &&
 source_status=$(git status --porcelain=v1 --untracked-files=all) &&
 test -z "$source_status" &&
-docker compose config --quiet &&
-docker compose build web &&
-docker compose run --rm --no-deps migrate &&
-docker compose up -d --no-deps --force-recreate web worker
+sudo docker compose config --quiet &&
+sudo docker compose build web &&
+sudo docker compose run --rm --no-deps migrate &&
+sudo docker compose up -d --no-deps --force-recreate web worker
 ```
 
 回滚只替换兼容当前数据库结构的应用代码，不会自动恢复数据库；如需恢复数据，请使用经过验证的备份恢复流程。
